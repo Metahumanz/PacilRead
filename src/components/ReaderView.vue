@@ -300,11 +300,12 @@ watch(autoPageSpeed, () => {
 declare class Highlight { constructor(...ranges: Range[]); }
 let isPlayingTts = false
 let ttsAudio: HTMLAudioElement | null = null
+let ttsGeneration = 0
 
 const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[]) => {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.nodeValue || ''
-    const regex = /[^ \n\t。！？！？.!?]+[。！？！？.!?]*/g
+    const regex = /[^ \n\t。！？！？.!?,，:：;；、]+[。！？！？.!?,，:：;；、]*/g
     let match
     while ((match = regex.exec(text)) !== null) {
       if (match[0].trim().length > 0) {
@@ -421,14 +422,18 @@ const playNextSentence = async () => {
 
   highlightRange(item.range)
   
+  const myGen = ++ttsGeneration
+
   if (ttsEngine.value === 'system') {
     await playSystemTTS(item.text)
   } else {
     await playEdgeTTS(item.text)
   }
   
-  currentSentenceIndex++
-  playNextSentence()
+  if (myGen === ttsGeneration && isPlayingTts) {
+    currentSentenceIndex++
+    playNextSentence()
+  }
 }
 
 const startTts = () => {
@@ -797,6 +802,28 @@ const handleClick = (e: MouseEvent) => {
   if (showMenu.value) { closeAll(); return }
   
   const x = e.clientX, y = e.clientY
+
+  if (ttsActive.value) {
+    let found = -1
+    for (let i = 0; i < activeSentences.length; i++) {
+        const rects = activeSentences[i].range.getClientRects()
+        for (let r = 0; r < rects.length; r++) {
+            const rect = rects[r]
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                found = i; break;
+            }
+        }
+        if (found >= 0) break
+    }
+    if (found >= 0) {
+        currentSentenceIndex = found
+        if (ttsAudio) { ttsAudio.pause(); ttsAudio = null; }
+        if (window.speechSynthesis) window.speechSynthesis.cancel()
+        playNextSentence()
+        return
+    }
+  }
+
   const w = window.innerWidth, h = window.innerHeight
   const isCenterCol = x > w / 3 && x < (w / 3) * 2
   const isCenterRow = y > h / 3 && y < (h / 3) * 2

@@ -45,18 +45,23 @@ export async function synthesizeEdgeTTS(
         ws.send(ssmlMsg)
       })
 
-      ws.on('message', (data: WebSocket.Data) => {
-        if (typeof data === 'string') {
-          if (data.includes('Path:turn.end')) {
+      ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+        if (!isBinary) {
+          const str = data.toString()
+          if (str.includes('Path:turn.end')) {
             ws.close()
             resolve(Buffer.concat(audioData))
           }
         } else if (Buffer.isBuffer(data)) {
           // Parse binary payload
           const buf = Buffer.from(data)
-          const headerLen = buf.readUInt16BE(0)
-          const payload = buf.subarray(2 + headerLen)
-          audioData.push(payload)
+          if (buf.length >= 2) {
+            const headerLen = buf.readUInt16BE(0)
+            if (buf.length > 2 + headerLen) {
+              const payload = buf.subarray(2 + headerLen)
+              audioData.push(payload)
+            }
+          }
         }
       })
 

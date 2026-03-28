@@ -96,6 +96,7 @@ function createWindow(): void {
       symbolColor: '#ffffff',
       height: 38
     },
+    icon: join(app.getAppPath(), 'public/icon.png'),
     backgroundMaterial: process.platform === 'win32' ? 'mica' : 'none',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
