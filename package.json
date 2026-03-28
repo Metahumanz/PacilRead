@@ -9,12 +9,12 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build && electron-builder",
+    "build": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
     "electron:dev": "vite && electron .",
-    "electron:build": "vue-tsc && vite build && electron-builder --win",
-    "electron:build:mac": "vue-tsc && vite build && electron-builder --mac",
-    "electron:build:linux": "vue-tsc && vite build && electron-builder --linux"
+    "electron:build": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --win",
+    "electron:build:mac": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --mac",
+    "electron:build:linux": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
@@ -35,6 +35,7 @@
     "electron": "^35.7.5",
     "electron-builder": "^26.8.1",
     "postcss": "^8.5.1",
+    "rimraf": "^6.1.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",

@@ -301,11 +301,14 @@ declare class Highlight { constructor(...ranges: Range[]); }
 let isPlayingTts = false
 let ttsAudio: HTMLAudioElement | null = null
 let ttsGeneration = 0
+// Audio prefetch cache: index -> Promise<string> (blob URL)
+const ttsPrefetchCache = new Map<number, Promise<string | null>>()
 
 const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[]) => {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.nodeValue || ''
-    const regex = /[^ \n\t。！？！？.!?,，:：;；、]+[。！？！？.!?,，:：;；、]*/g
+    // Split only on major sentence-ending punctuation
+    const regex = /[^ \n\t。！？.!?]+[。！？.!?]*/g
     let match
     while ((match = regex.exec(text)) !== null) {
       if (match[0].trim().length > 0) {
@@ -319,7 +322,6 @@ const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[
     }
   } else {
     for (let i = 0; i < node.childNodes.length; i++) {
-        // Skip tags that shouldn't be read like ruby annotations if present
         if ((node.childNodes[i] as HTMLElement).tagName?.toLowerCase() === 'rt') continue
         getSentencesFromNode(node.childNodes[i], sentences)
     }
@@ -359,36 +361,63 @@ const playSystemTTS = (text: string) => {
   })
 }
 
-const playEdgeTTS = async (text: string) => {
-  if (!text.trim()) return
+// Convert IPC buffer response to a Uint8Array regardless of deserialization format
+const ipcBufferToUint8Array = (buf: any): Uint8Array | null => {
+  if (buf instanceof Uint8Array || buf instanceof ArrayBuffer) {
+    return new Uint8Array(buf)
+  } else if (buf && typeof buf === 'object') {
+    return new Uint8Array(Object.values(buf) as number[])
+  }
+  return null
+}
+
+// Synthesize text and return a blob URL (or null on failure)
+const synthesizeToUrl = async (text: string): Promise<string | null> => {
+  if (!text.trim()) return null
   try {
     const res = await (window as any).electronAPI.tts.synthesize(text, ttsVoice.value || undefined, ttsRate.value)
     if (res.success && res.audioBuffer) {
-      // IPC may deserialize Uint8Array as plain object — ensure it's a proper typed array
-      let audioData: Uint8Array
-      if (res.audioBuffer instanceof Uint8Array || res.audioBuffer instanceof ArrayBuffer) {
-        audioData = new Uint8Array(res.audioBuffer)
-      } else if (res.audioBuffer && typeof res.audioBuffer === 'object') {
-        // Plain object with numeric keys from IPC deserialization {0: xx, 1: xx, ...}
-        const values = Object.values(res.audioBuffer) as number[]
-        audioData = new Uint8Array(values)
-      } else {
-        console.error('Edge TTS: unexpected audioBuffer type', typeof res.audioBuffer)
-        return
-      }
-      console.log(`[EdgeTTS Renderer] Audio bytes: ${audioData.length}`)
-      if (audioData.length === 0) return
+      const audioData = ipcBufferToUint8Array(res.audioBuffer)
+      if (!audioData || audioData.length === 0) return null
       const blob = new Blob([audioData.buffer.slice(audioData.byteOffset, audioData.byteOffset + audioData.byteLength) as ArrayBuffer], { type: 'audio/mpeg' })
-      const url = URL.createObjectURL(blob)
-      ttsAudio = new Audio(url)
-      return new Promise<void>((resolve) => {
-        ttsAudio!.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-        ttsAudio!.onerror = (e) => { console.error('Audio play error', e); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-        ttsAudio!.play().catch((e)=>{ console.error('Audio play() rejected:', e); resolve() })
-      })
-    } else {
-      console.error('Edge TTS: synthesis failed', res.error)
+      return URL.createObjectURL(blob)
     }
+  } catch (e) {
+    console.error('Edge TTS synthesis error', e)
+  }
+  return null
+}
+
+// Start prefetching next N sentences
+const prefetchAhead = (fromIndex: number, count: number = 2) => {
+  if (ttsEngine.value !== 'edge') return
+  for (let i = fromIndex; i < Math.min(fromIndex + count, activeSentences.length); i++) {
+    if (!ttsPrefetchCache.has(i)) {
+      ttsPrefetchCache.set(i, synthesizeToUrl(activeSentences[i].text))
+    }
+  }
+}
+
+const playEdgeTTS = async (text: string, sentenceIdx: number) => {
+  if (!text.trim()) return
+  try {
+    // Check prefetch cache first 
+    let url: string | null = null
+    const cached = ttsPrefetchCache.get(sentenceIdx)
+    if (cached) {
+      url = await cached
+      ttsPrefetchCache.delete(sentenceIdx)
+    } else {
+      url = await synthesizeToUrl(text)
+    }
+    if (!url) return
+
+    ttsAudio = new Audio(url)
+    return new Promise<void>((resolve) => {
+      ttsAudio!.onended = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
+      ttsAudio!.onerror = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
+      ttsAudio!.play().catch(() => resolve())
+    })
   } catch (e) {
     console.error('Edge TTS ERR', e)
   }
@@ -397,13 +426,13 @@ const playEdgeTTS = async (text: string) => {
 const buildSentences = () => {
   activeSentences = []
   currentSentenceIndex = 0
+  ttsPrefetchCache.clear()
   if (contentRef.value) getSentencesFromNode(contentRef.value, activeSentences)
   
   if (activeSentences.length > 0) {
     // Fast forward to the visually current page
     for (let i = 0; i < activeSentences.length; i++) {
       const rect = activeSentences[i].range.getBoundingClientRect()
-      // Note: in double page mode, left page has positive right. Just check if it's > 0 or in view.
       if (rect.right > 20 && rect.width > 0) {
         currentSentenceIndex = i
         break
@@ -419,9 +448,12 @@ const playNextSentence = async () => {
     setTimeout(() => {
       buildSentences()
       playNextSentence()
-    }, 1200) // Wait for transition and layout
+    }, 1200)
     return
   }
+
+  // Prefetch the next 2 sentences while we play the current one
+  prefetchAhead(currentSentenceIndex + 1, 2)
 
   const item = activeSentences[currentSentenceIndex]
   const rect = item.range.getBoundingClientRect()
@@ -430,10 +462,9 @@ const playNextSentence = async () => {
   const w = containerWidth.value || window.innerWidth
   if (rect.left > w - 20) {
     nextPage()
-    await new Promise(res => setTimeout(res, 600)) // give animation time
+    await new Promise(res => setTimeout(res, 600))
   }
   
-  // verify we are not stopped during navigation
   if (!isPlayingTts) return
 
   highlightRange(item.range)
@@ -443,7 +474,7 @@ const playNextSentence = async () => {
   if (ttsEngine.value === 'system') {
     await playSystemTTS(item.text)
   } else {
-    await playEdgeTTS(item.text)
+    await playEdgeTTS(item.text, currentSentenceIndex)
   }
   
   if (myGen === ttsGeneration && isPlayingTts) {
@@ -458,6 +489,8 @@ const startTts = () => {
   ttsActive.value = true
   isPlayingTts = true
   buildSentences()
+  // Prefetch the first 2 sentences immediately
+  prefetchAhead(currentSentenceIndex, 2)
   playNextSentence()
 }
 
@@ -467,6 +500,11 @@ const stopTts = () => {
   if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
   if (window.speechSynthesis) window.speechSynthesis.cancel()
   clearHighlight()
+  // Clean up prefetch cache
+  for (const [, p] of ttsPrefetchCache) {
+    p.then(url => { if (url) URL.revokeObjectURL(url) })
+  }
+  ttsPrefetchCache.clear()
 }
 
 // Ensure TTS stops if menu is opened or other disruption? No, users might want to change settings while playing.
