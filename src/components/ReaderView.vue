@@ -52,9 +52,15 @@ const fontColor = ref('#e2e8f0')
 const coverColor = ref('#0f172a')
 const systemFonts = ref<string[]>([])
 
-// Flip mode: 'slide', 'cover', or 'curl'
 const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
 const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
+
+const flipDurationMap = computed(() => {
+  if (flipSpeed.value === 'fast') return { slide: '0.2s', cover: '0.25s', curl: '0.35s', ms: 300 }
+  if (flipSpeed.value === 'slow') return { slide: '0.6s', cover: '0.8s', curl: '1.0s', ms: 800 }
+  // medium
+  return { slide: '0.38s', cover: '0.45s', curl: '0.55s', ms: 500 }
+})
 
 // Auto Page Settings
 const autoPageSpeed = ref(10) // seconds per page
@@ -307,8 +313,8 @@ const ttsPrefetchCache = new Map<number, Promise<string | null>>()
 const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[]) => {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.nodeValue || ''
-    // Split only on major sentence-ending punctuation
-    const regex = /[^ \n\t。！？.!?]+[。！？.!?]*/g
+    // Split on sentence-ending and clause-ending punctuation
+    const regex = /[^ \n\t。！？.!?,，;；、]+[。！？.!?,，;；、]*/g
     let match
     while ((match = regex.exec(text)) !== null) {
       if (match[0].trim().length > 0) {
@@ -389,7 +395,7 @@ const synthesizeToUrl = async (text: string): Promise<string | null> => {
 }
 
 // Start prefetching next N sentences
-const prefetchAhead = (fromIndex: number, count: number = 2) => {
+const prefetchAhead = (fromIndex: number, count: number = 1) => {
   if (ttsEngine.value !== 'edge') return
   for (let i = fromIndex; i < Math.min(fromIndex + count, activeSentences.length); i++) {
     if (!ttsPrefetchCache.has(i)) {
@@ -448,12 +454,12 @@ const playNextSentence = async () => {
     setTimeout(() => {
       buildSentences()
       playNextSentence()
-    }, 1200)
+    }, flipDurationMap.value.ms * 2)
     return
   }
 
-  // Prefetch the next 2 sentences while we play the current one
-  prefetchAhead(currentSentenceIndex + 1, 2)
+  // Prefetch the next sentence while we play the current one
+  prefetchAhead(currentSentenceIndex + 1, 1)
 
   const item = activeSentences[currentSentenceIndex]
   const rect = item.range.getBoundingClientRect()
@@ -462,7 +468,7 @@ const playNextSentence = async () => {
   const w = containerWidth.value || window.innerWidth
   if (rect.left > w - 20) {
     nextPage()
-    await new Promise(res => setTimeout(res, 600))
+    await new Promise(res => setTimeout(res, flipDurationMap.value.ms + 50))
   }
   
   if (!isPlayingTts) return
@@ -489,8 +495,8 @@ const startTts = () => {
   ttsActive.value = true
   isPlayingTts = true
   buildSentences()
-  // Prefetch the first 2 sentences immediately
-  prefetchAhead(currentSentenceIndex, 2)
+  // Prefetch the first sentence immediately
+  prefetchAhead(currentSentenceIndex, 1)
   playNextSentence()
 }
 
@@ -1082,7 +1088,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="reader-root" :style="{ touchAction: showMenu ? 'auto' : 'none' }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
+  <div class="reader-root" :style="{ 
+    touchAction: showMenu ? 'auto' : 'none',
+    '--dur-slide': flipDurationMap.slide,
+    '--dur-cover': flipDurationMap.cover,
+    '--dur-curl': flipDurationMap.curl
+  }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <!-- Separate background layer to allow blurring without blurring text -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
          :style="[readerBgStyle, { filter: blurAmount > 0 ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 ? 'scale(1.1)' : 'none' }]"
@@ -1484,8 +1495,8 @@ onUnmounted(() => {
 /* Reveal Transition Overlay */
 .snapshot-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
 /* Cover mode animations */
-.snapshot-layer.left:not(.is-curl) { animation: clipLeft 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.snapshot-layer.right:not(.is-curl) { animation: clipRight 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.snapshot-layer.left:not(.is-curl) { animation: clipLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.snapshot-layer.right:not(.is-curl) { animation: clipRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 @keyframes clipLeft {
   from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
   to { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); }
@@ -1497,8 +1508,8 @@ onUnmounted(() => {
 
 .sweep-line { position: absolute; top: 0; bottom: 0; width: 40px; z-index: 21; pointer-events: none; background: linear-gradient(to right, transparent, rgba(0,0,0,0.15), rgba(0,0,0,0.4), transparent); }
 .theme-n .sweep-line { background: linear-gradient(to right, transparent, rgba(255,255,255,0.05), rgba(255,255,255,0.15), transparent); }
-.sweep-line.left:not(.is-curl) { animation: sweepLeft 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.sweep-line.right:not(.is-curl) { animation: sweepRight 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.sweep-line.left:not(.is-curl) { animation: sweepLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.sweep-line.right:not(.is-curl) { animation: sweepRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 @keyframes sweepLeft { from { transform: translateX(100vw); } to { transform: translateX(-40px); } }
 @keyframes sweepRight { from { transform: translateX(-40px); } to { transform: translateX(100vw); } }
 
@@ -1512,26 +1523,26 @@ onUnmounted(() => {
   background: linear-gradient(to right, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 40%, transparent 100%);
 }
 
-.sweep-line.is-curl.left { animation: curlSweepLeft 0.55s ease-in-out forwards; }
+.sweep-line.is-curl.left { animation: curlSweepLeft var(--dur-curl) ease-in-out forwards; }
 @keyframes curlSweepLeft {
   0% { transform: translateX(100vw) rotate(15deg) scaleX(1); opacity: 1; }
   100% { transform: translateX(-50vw) rotate(15deg) scaleX(2.5); opacity: 0; }
 }
 
-.sweep-line.is-curl.right { animation: curlSweepRight 0.55s ease-in-out forwards; background: linear-gradient(to left, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); }
+.sweep-line.is-curl.right { animation: curlSweepRight var(--dur-curl) ease-in-out forwards; background: linear-gradient(to left, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); }
 .theme-n .sweep-line.is-curl.right { background: linear-gradient(to left, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 40%, transparent 100%); }
 @keyframes curlSweepRight {
   0% { transform: translateX(-50vw) rotate(-15deg) scaleX(1); opacity: 1; }
   100% { transform: translateX(100vw) rotate(-15deg) scaleX(2.5); opacity: 0; }
 }
 
-.snapshot-layer.is-curl.left { animation: curlClipLeft 0.55s ease-in-out forwards; }
+.snapshot-layer.is-curl.left { animation: curlClipLeft var(--dur-curl) ease-in-out forwards; }
 @keyframes curlClipLeft {
   0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
   100% { clip-path: polygon(0 0, -20% 0, -50% 100%, 0 100%); }
 }
 
-.snapshot-layer.is-curl.right { animation: curlClipRight 0.55s ease-in-out forwards; }
+.snapshot-layer.is-curl.right { animation: curlClipRight var(--dur-curl) ease-in-out forwards; }
 @keyframes curlClipRight {
   0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
   100% { clip-path: polygon(100% 0, 120% 0, 150% 100%, 100% 100%); }
@@ -1539,12 +1550,12 @@ onUnmounted(() => {
 
 /* Carousel */
 .carousel { display:flex; width:300vw; height:100%; transform:translateX(-100vw); z-index:1; }
-.carousel.sliding { transition: transform 0.38s cubic-bezier(0.25,0.46,0.45,0.94); }
+.carousel.sliding { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .slide { width:100vw; height:100%; flex-shrink:0; overflow:hidden; }
 
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
 .pg-ct { height:100%; column-fill:auto; }
-.pg-ct.pg-anim { transition: transform 0.35s cubic-bezier(0.25,0.46,0.45,0.94); }
+.pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 
 .ch-title { font-weight:700; margin-bottom:1.5em; opacity:0.85; }
 .ch-body { height:100%; }
