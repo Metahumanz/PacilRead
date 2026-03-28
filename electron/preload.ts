@@ -35,5 +35,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   webdav: {
     request: (opts: any) => ipcRenderer.invoke('webdav:request', opts)
+  },
+  tts: {
+    getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
+    synthesize: (text: string, voice?: string, rate?: number) => ipcRenderer.invoke('tts:synthesize', { text, voice, rate })
   }
 })

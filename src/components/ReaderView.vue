@@ -24,6 +24,11 @@ const showStyling = ref(false)
 const showToc = ref(false)
 const showSearch = ref(false)
 const showRules = ref(false)
+const showAutoPage = ref(false)
+const showTts = ref(false)
+const autoPageActive = ref(false)
+const ttsActive = ref(false)
+
 const isImmersive = ref(false)
 const bgImage = ref('')
 const blurAmount = ref(0)
@@ -49,6 +54,18 @@ const systemFonts = ref<string[]>([])
 
 // Flip mode: 'slide', 'cover', or 'curl'
 const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
+const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
+
+// Auto Page Settings
+const autoPageSpeed = ref(10) // seconds per page
+
+// TTS Settings
+const ttsEngine = ref<'system' | 'edge'>('edge')
+const ttsVoice = ref('')
+const ttsRate = ref(1.0)
+const highlightColor = ref('#3b82f6')
+const edgeVoices = ref<any[]>([])
+const systemVoices = ref<SpeechSynthesisVoice[]>([])
 
 // Pagination
 const currentPage = ref(0)
@@ -152,6 +169,13 @@ const loadSettings = async () => {
           else if (s.value === 'cover') flipMode.value = 'cover'
           else flipMode.value = 'slide'
         }
+        if (s.key === 'reader_flipSpeed') flipSpeed.value = s.value as any || 'medium'
+        if (s.key === 'reader_autoPageSpeed') autoPageSpeed.value = parseInt(s.value) || 10
+        if (s.key === 'reader_ttsEngine') ttsEngine.value = s.value as any || 'edge'
+        if (s.key === 'reader_ttsVoice') ttsVoice.value = s.value || ''
+        if (s.key === 'reader_ttsRate') ttsRate.value = parseFloat(s.value) || 1.0
+        if (s.key === 'reader_highlightColor') highlightColor.value = s.value || '#3b82f6'
+        
         if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
         if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
         if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
@@ -198,6 +222,17 @@ const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => {
   flipMode.value = mode
   saveSetting('reader_flipMode', mode)
 }
+const setFlipSpeed = (speed: 'fast' | 'medium' | 'slow') => {
+  flipSpeed.value = speed
+  saveSetting('reader_flipSpeed', speed)
+}
+const saveTtsSettings = () => {
+  saveSetting('reader_autoPageSpeed', autoPageSpeed.value)
+  saveSetting('reader_ttsEngine', ttsEngine.value)
+  saveSetting('reader_ttsVoice', ttsVoice.value)
+  saveSetting('reader_ttsRate', ttsRate.value)
+  saveSetting('reader_highlightColor', highlightColor.value)
+}
 
 const applyThemeConfig = (t: Partial<CustomTheme>) => {
   if (t.bgImage !== undefined) bgImage.value = t.bgImage
@@ -236,6 +271,195 @@ const deleteTheme = async (id: number) => {
   customThemes.value = customThemes.value.filter(t => t.id !== id)
   await window.electronAPI.db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_themes', ?)", [JSON.stringify(customThemes.value)])
 }
+
+// ---- Auto Page ----
+let autoPageTimer: number | null = null
+const startAutoPage = () => {
+  if (autoPageTimer) clearInterval(autoPageTimer)
+  autoPageActive.value = true
+  // We use setInterval. If flip happens, it has its own logic.
+  autoPageTimer = window.setInterval(() => {
+    if (showMenu.value) return // pause when menu open
+    nextPage()
+  }, autoPageSpeed.value * 1000)
+}
+const stopAutoPage = () => {
+  if (autoPageTimer) clearInterval(autoPageTimer)
+  autoPageTimer = null
+  autoPageActive.value = false
+}
+const toggleAutoPage = () => {
+  if (autoPageActive.value) stopAutoPage()
+  else startAutoPage()
+}
+watch(autoPageSpeed, () => {
+  if (autoPageActive.value) startAutoPage()
+})
+
+// ---- TTS ----
+declare class Highlight { constructor(...ranges: Range[]); }
+let isPlayingTts = false
+let ttsAudio: HTMLAudioElement | null = null
+
+const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[]) => {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.nodeValue || ''
+    const regex = /[^ \n\t。！？！？.!?]+[。！？！？.!?]*/g
+    let match
+    while ((match = regex.exec(text)) !== null) {
+      if (match[0].trim().length > 0) {
+        const r = new Range()
+        try {
+          r.setStart(node, match.index)
+          r.setEnd(node, match.index + match[0].length)
+          sentences.push({ text: match[0], range: r })
+        } catch (_) {}
+      }
+    }
+  } else {
+    for (let i = 0; i < node.childNodes.length; i++) {
+        // Skip tags that shouldn't be read like ruby annotations if present
+        if ((node.childNodes[i] as HTMLElement).tagName?.toLowerCase() === 'rt') continue
+        getSentencesFromNode(node.childNodes[i], sentences)
+    }
+  }
+}
+
+let activeSentences: {text:string, range:Range}[] = []
+let currentSentenceIndex = 0
+
+const clearHighlight = () => {
+  if ('highlights' in CSS) {
+    // @ts-ignore
+    CSS.highlights.delete('tts-highlight')
+  }
+}
+
+const highlightRange = (r: Range) => {
+  if ('highlights' in CSS) {
+    const highlight = new Highlight(r)
+    // @ts-ignore
+    CSS.highlights.set('tts-highlight', highlight)
+  }
+}
+
+const playSystemTTS = (text: string) => {
+  return new Promise<void>((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return }
+    const u = new SpeechSynthesisUtterance(text)
+    if (ttsVoice.value && ttsEngine.value === 'system') {
+      const v = systemVoices.value.find(x => x.name === ttsVoice.value)
+      if (v) u.voice = v
+    }
+    u.rate = ttsRate.value
+    u.onend = () => resolve()
+    u.onerror = () => resolve()
+    window.speechSynthesis.speak(u)
+  })
+}
+
+const playEdgeTTS = async (text: string) => {
+  if (!text.trim()) return
+  try {
+    const res = await (window as any).electronAPI.tts.synthesize(text, ttsVoice.value || undefined, ttsRate.value)
+    if (res.success && res.audioBuffer) {
+      const blob = new Blob([res.audioBuffer], { type: 'audio/mp3' })
+      const url = URL.createObjectURL(blob)
+      ttsAudio = new Audio(url)
+      return new Promise<void>((resolve) => {
+        ttsAudio!.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+        ttsAudio!.onerror = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+        ttsAudio!.play().catch(()=>resolve())
+      })
+    }
+  } catch (e) {
+    console.error('Edge TTS ERR', e)
+  }
+}
+
+const buildSentences = () => {
+  activeSentences = []
+  currentSentenceIndex = 0
+  if (contentRef.value) getSentencesFromNode(contentRef.value, activeSentences)
+  
+  if (activeSentences.length > 0) {
+    // Fast forward to the visually current page
+    for (let i = 0; i < activeSentences.length; i++) {
+      const rect = activeSentences[i].range.getBoundingClientRect()
+      // Note: in double page mode, left page has positive right. Just check if it's > 0 or in view.
+      if (rect.right > 20 && rect.width > 0) {
+        currentSentenceIndex = i
+        break
+      }
+    }
+  }
+}
+
+const playNextSentence = async () => {
+  if (!isPlayingTts) return
+  if (activeSentences.length === 0 || currentSentenceIndex >= activeSentences.length) {
+    slideToNextChapter()
+    setTimeout(() => {
+      buildSentences()
+      playNextSentence()
+    }, 1200) // Wait for transition and layout
+    return
+  }
+
+  const item = activeSentences[currentSentenceIndex]
+  const rect = item.range.getBoundingClientRect()
+  
+  // if sentence is outside bounds on the right, flip page
+  const w = containerWidth.value || window.innerWidth
+  if (rect.left > w - 20) {
+    nextPage()
+    await new Promise(res => setTimeout(res, 600)) // give animation time
+  }
+  
+  // verify we are not stopped during navigation
+  if (!isPlayingTts) return
+
+  highlightRange(item.range)
+  
+  if (ttsEngine.value === 'system') {
+    await playSystemTTS(item.text)
+  } else {
+    await playEdgeTTS(item.text)
+  }
+  
+  currentSentenceIndex++
+  playNextSentence()
+}
+
+const startTts = () => {
+  if (ttsActive.value) { stopTts(); return }
+  saveTtsSettings()
+  ttsActive.value = true
+  isPlayingTts = true
+  buildSentences()
+  playNextSentence()
+}
+
+const stopTts = () => {
+  ttsActive.value = false
+  isPlayingTts = false
+  if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
+  if (window.speechSynthesis) window.speechSynthesis.cancel()
+  clearHighlight()
+}
+
+// Ensure TTS stops if menu is opened or other disruption? No, users might want to change settings while playing.
+// Maybe just update CSS Highlight style so custom color applies
+const injectHighlightStyles = () => {
+  let styleEl = document.getElementById('tts-style') as HTMLStyleElement
+  if (!styleEl) {
+    styleEl = document.createElement('style')
+    styleEl.id = 'tts-style'
+    document.head.appendChild(styleEl)
+  }
+  styleEl.innerHTML = `::highlight(tts-highlight) { background-color: ${highlightColor.value}40; color: ${highlightColor.value}; border-radius: 4px; }`
+}
+watch(highlightColor, injectHighlightStyles)
 
 // ---- Replacement rules ----
 const fetchRules = async () => {
@@ -513,12 +737,18 @@ const doPageFlip = (dir: 'left' | 'right', action: () => void) => {
     showingCover.value = true
     flipLock = true
     suppressAnim.value = true
+    
+    // adjust timing based on flipSpeed
+    let duration = 450
+    if (flipSpeed.value === 'fast') duration = 250
+    else if (flipSpeed.value === 'slow') duration = 700
+
     requestAnimationFrame(() => { action() })
     setTimeout(() => {
       showingCover.value = false
       suppressAnim.value = false
       flipLock = false
-    }, 450)
+    }, duration)
   } else {
     // Slide mode: CSS transition handles it
     action()
@@ -558,7 +788,7 @@ const prevPage = () => {
 }
 
 // ---- Interaction ----
-const closeAll = () => { showMenu.value = false; showStyling.value = false; showToc.value = false; showSearch.value = false; showRules.value = false }
+const closeAll = () => { showMenu.value = false; showStyling.value = false; showToc.value = false; showSearch.value = false; showRules.value = false; showAutoPage.value = false; showTts.value = false }
 
 const handleClick = (e: MouseEvent) => {
   const t = e.target as HTMLElement
@@ -631,6 +861,8 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.stopImmediatePropagation()
     if (isImmersive.value) { toggleImmersiveMode(); return }
     if (showMenu.value) { closeAll(); return }
+    if (ttsActive.value) { stopTts(); return } // Esc stops TTS too
+    if (autoPageActive.value) { stopAutoPage(); return }
     handleGoBack()
     return
   }
@@ -676,11 +908,13 @@ const textStyle = computed(() => ({
 
 const carouselTransform = computed(() => `translateX(${-100 + carouselPos.value * -100}vw)`)
 
-const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules') => {
+const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 'tts') => {
   showToc.value = panel === 'toc' ? !showToc.value : false
   showStyling.value = panel === 'styling' ? !showStyling.value : false
   showSearch.value = panel === 'search' ? !showSearch.value : false
   showRules.value = panel === 'rules' ? !showRules.value : false
+  showAutoPage.value = panel === 'autopage' ? !showAutoPage.value : false
+  showTts.value = panel === 'tts' ? !showTts.value : false
 }
 
 watch(showToc, (v) => {
@@ -735,6 +969,16 @@ const downloadProgressFromWebdav = async () => {
 
 
 
+const loadInitialVoices = async () => {
+  try { edgeVoices.value = await (window as any).electronAPI.tts.getEdgeVoices() } catch (e) {}
+  
+  const setSysVoices = () => { systemVoices.value = window.speechSynthesis.getVoices() }
+  if (window.speechSynthesis) {
+    systemVoices.value = window.speechSynthesis.getVoices()
+    window.speechSynthesis.onvoiceschanged = setSysVoices
+  }
+}
+
 onMounted(async () => {
   window.electronAPI.win.setControlsVisible(false)
   await loadSettings(); await fetchBook(); await fetchChapters(); await fetchRules()
@@ -743,8 +987,12 @@ onMounted(async () => {
   setTimeout(calculatePages, 300)
   window.addEventListener('resize', recalc)
   window.addEventListener('keydown', handleKeydown)
+  loadInitialVoices()
+  injectHighlightStyles()
 })
 onUnmounted(() => {
+  stopTts()
+  stopAutoPage()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
   window.removeEventListener('resize', recalc)
@@ -880,6 +1128,8 @@ onUnmounted(() => {
               <button @click="openPanel('search')" class="m-btn" :class="{active:showSearch}">🔍 搜索</button>
               <button @click="openPanel('rules')" class="m-btn" :class="{active:showRules}">📝 替换</button>
               <button @click="openPanel('styling')" class="m-btn" :class="{active:showStyling}">Aa 排版</button>
+              <button @click="openPanel('autopage')" class="m-btn shadow-sm" :class="showAutoPage || autoPageActive ? 'bg-indigo-600/80 border-indigo-500 text-white' : ''">⏱ 翻页</button>
+              <button @click="openPanel('tts')" class="m-btn shadow-sm" :class="showTts || ttsActive ? 'bg-violet-600/80 border-violet-500 text-white' : ''">🎧 听书</button>
             </div>
           </div>
           <div class="m-bot" @click.stop>
@@ -1051,6 +1301,76 @@ onUnmounted(() => {
               </div>
             </div>
           </Transition>
+
+          <!-- Auto-Page panel -->
+          <Transition name="sf">
+            <div v-if="showAutoPage" class="sty-p" @click.stop @wheel.stop>
+              <div class="ph"><span class="pt">自动翻页</span><button @click="showAutoPage=false" class="px">✕</button></div>
+              <div class="sr">
+                <label>翻页速度</label>
+                <input type="range" min="1" max="30" step="1" v-model.number="autoPageSpeed" @change="saveTtsSettings" class="sl">
+                <input type="number" v-model.number="autoPageSpeed" @change="saveTtsSettings" class="sn"><span class="su">秒</span>
+              </div>
+              <div class="sr">
+                <label>动画耗时</label>
+                <div class="btn-group">
+                  <button @click="setFlipSpeed('fast')" :class="{active: flipSpeed==='fast'}">偏快</button>
+                  <button @click="setFlipSpeed('medium')" :class="{active: flipSpeed==='medium'}">默认</button>
+                  <button @click="setFlipSpeed('slow')" :class="{active: flipSpeed==='slow'}">偏慢</button>
+                </div>
+              </div>
+              <div class="sp-divider"></div>
+              <div class="flex justify-center mt-4 mb-2">
+                <button @click="toggleAutoPage" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg" :class="autoPageActive ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 hover:text-indigo-300 border border-indigo-500/30'">
+                  {{ autoPageActive ? '⏹ 停止自动翻页' : '▶ 开始自动翻页' }}
+                </button>
+              </div>
+            </div>
+          </Transition>
+
+          <!-- TTS panel -->
+          <Transition name="sf">
+            <div v-if="showTts" class="sty-p" @click.stop @wheel.stop>
+              <div class="ph"><span class="pt">听书设置</span><button @click="showTts=false" class="px">✕</button></div>
+              <div class="sr">
+                <label>选择引擎</label>
+                <div class="btn-group">
+                  <button @click="ttsEngine='edge'; saveTtsSettings()" :class="{active: ttsEngine==='edge'}">Edge 云端</button>
+                  <button @click="ttsEngine='system'; saveTtsSettings()" :class="{active: ttsEngine==='system'}">本地系统</button>
+                </div>
+              </div>
+              <div class="sr">
+                <label>发音人</label>
+                <select v-if="ttsEngine==='edge'" v-model="ttsVoice" @change="saveTtsSettings" class="ss">
+                  <option value="">随机/默认 (Xiaoxiao)</option>
+                  <option v-for="v in edgeVoices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
+                </select>
+                <select v-else v-model="ttsVoice" @change="saveTtsSettings" class="ss">
+                  <option value="">跟随系统默认</option>
+                  <option v-for="v in systemVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
+                </select>
+              </div>
+              <div class="sr">
+                <label>语速</label>
+                <input type="range" min="0.5" max="2.0" step="0.1" v-model.number="ttsRate" @change="saveTtsSettings" class="sl">
+                <input type="number" v-model.number="ttsRate" step="0.1" @change="saveTtsSettings" class="sn"><span class="su">x</span>
+              </div>
+              <div class="sr">
+                <label>高亮颜色</label>
+                <input type="color" v-model="highlightColor" @change="saveTtsSettings" class="sc"><input type="text" v-model="highlightColor" @change="saveTtsSettings" class="sn w72">
+              </div>
+              <div class="sp-divider"></div>
+              <div class="flex justify-center mt-4 mb-2">
+                <button @click="startTts" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 hover:text-violet-300 border border-violet-500/30" v-if="!ttsActive">
+                  ▶ 开始听书
+                </button>
+                <button @click="stopTts" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-red-500/20 text-red-500 hover:bg-red-500/30" v-else>
+                  ⏹ 停止听书
+                </button>
+              </div>
+            </div>
+          </Transition>
+
         </div>
       </Transition>
 

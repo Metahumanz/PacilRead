@@ -1,6 +1,6 @@
 {
   "name": "ele-win-reader",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "A modern desktop reader application built with Electron and Vue",
   "main": "dist-electron/main.js",
   "engines": {
@@ -22,7 +22,8 @@
     "iconv-lite": "^0.6.3",
     "jschardet": "^3.1.4",
     "sql.js": "^1.11.0",
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",

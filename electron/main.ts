@@ -4,6 +4,7 @@ import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { parseTxt, parseEpub } from './parsers'
+import { synthesizeEdgeTTS, EDGE_VOICES } from './tts'
 import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
@@ -412,5 +413,19 @@ ipcMain.handle('webdav:request', async (_, opts: { url: string; method: string; 
     return { status: res.status, data: text }
   } catch (error: any) {
     return { error: error.message || String(error) }
+  }
+})
+
+ipcMain.handle('tts:getEdgeVoices', async () => {
+  return EDGE_VOICES
+})
+
+ipcMain.handle('tts:synthesize', async (_, args: { text: string; voice?: string; rate?: number }) => {
+  try {
+    const buffer = await synthesizeEdgeTTS(args.text, args.voice, args.rate)
+    return { success: true, audioBuffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) }
+  } catch (err: any) {
+    console.error('TTS error:', err)
+    return { success: false, error: String(err) }
   }
 })
