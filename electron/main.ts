@@ -424,7 +424,9 @@ ipcMain.handle('tts:getEdgeVoices', async () => {
 ipcMain.handle('tts:synthesize', async (_, args: { text: string; voice?: string; rate?: number }) => {
   try {
     const buffer = await synthesizeEdgeTTS(args.text, args.voice, args.rate)
-    return { success: true, audioBuffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) }
+    console.log(`[TTS IPC] Synthesized ${buffer.length} bytes for: "${args.text.substring(0, 30)}..."`)
+    // Return as Uint8Array — Electron IPC serializes this correctly
+    return { success: true, audioBuffer: new Uint8Array(buffer) }
   } catch (err: any) {
     console.error('TTS error:', err)
     return { success: false, error: String(err) }

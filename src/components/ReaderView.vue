@@ -364,14 +364,30 @@ const playEdgeTTS = async (text: string) => {
   try {
     const res = await (window as any).electronAPI.tts.synthesize(text, ttsVoice.value || undefined, ttsRate.value)
     if (res.success && res.audioBuffer) {
-      const blob = new Blob([res.audioBuffer], { type: 'audio/mp3' })
+      // IPC may deserialize Uint8Array as plain object — ensure it's a proper typed array
+      let audioData: Uint8Array
+      if (res.audioBuffer instanceof Uint8Array || res.audioBuffer instanceof ArrayBuffer) {
+        audioData = new Uint8Array(res.audioBuffer)
+      } else if (res.audioBuffer && typeof res.audioBuffer === 'object') {
+        // Plain object with numeric keys from IPC deserialization {0: xx, 1: xx, ...}
+        const values = Object.values(res.audioBuffer) as number[]
+        audioData = new Uint8Array(values)
+      } else {
+        console.error('Edge TTS: unexpected audioBuffer type', typeof res.audioBuffer)
+        return
+      }
+      console.log(`[EdgeTTS Renderer] Audio bytes: ${audioData.length}`)
+      if (audioData.length === 0) return
+      const blob = new Blob([audioData.buffer.slice(audioData.byteOffset, audioData.byteOffset + audioData.byteLength) as ArrayBuffer], { type: 'audio/mpeg' })
       const url = URL.createObjectURL(blob)
       ttsAudio = new Audio(url)
       return new Promise<void>((resolve) => {
         ttsAudio!.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-        ttsAudio!.onerror = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-        ttsAudio!.play().catch(()=>resolve())
+        ttsAudio!.onerror = (e) => { console.error('Audio play error', e); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+        ttsAudio!.play().catch((e)=>{ console.error('Audio play() rejected:', e); resolve() })
       })
+    } else {
+      console.error('Edge TTS: synthesis failed', res.error)
     }
   } catch (e) {
     console.error('Edge TTS ERR', e)
