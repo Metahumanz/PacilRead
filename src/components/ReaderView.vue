@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed, onUnmounted, nextTick } from 'vue'
-import darkThemeBg from '../assets/themes/dark.jpg'
-import paperThemeBg from '../assets/themes/paper.jpg'
-import greenThemeBg from '../assets/themes/green.jpg'
+import { useSettings, saveSetting } from '../composables/useSettings'
+import { useTheme } from '../composables/useTheme'
+import { useTTS } from '../composables/useTTS'
+import { usePagination } from '../composables/usePagination'
 
 interface Chapter { id: number; title: string; body: string; order_index: number }
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string }
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   (e: 'go-back'): void
 }>()
 
+// ---- Core data ----
 const book = ref<Book | null>(null)
 const chapters = ref<Chapter[]>([])
 const currentChapterIndex = ref(0)
@@ -27,12 +29,30 @@ const showRules = ref(false)
 const showAutoPage = ref(false)
 const showTts = ref(false)
 const autoPageActive = ref(false)
-const ttsActive = ref(false)
-
 const isImmersive = ref(false)
-const bgImage = ref('')
-const blurAmount = ref(0)
-const isAlwaysOnTop = ref(false)
+const showCopyModal = ref(false)
+const selectedText = ref('')
+const tocListRef = ref<HTMLElement | null>(null)
+
+// DOM refs
+const contentRef = ref<HTMLElement | null>(null)
+const containerRef = ref<HTMLElement | null>(null)
+const prevContentRef = ref<HTMLElement | null>(null)
+const prevContainerRef = ref<HTMLElement | null>(null)
+
+// ---- Settings (composable) ----
+const settings = useSettings()
+const {
+  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
+  fontFamily, fontColor, coverColor, bgImage, blurAmount,
+  textAlign, alignBottom, pageMode, doublePageStep,
+  flipMode, flipSpeed, autoPageSpeed,
+  ttsEngine, ttsVoice, ttsRate, highlightColor,
+  nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
+  webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
+  customThemes, systemFonts,
+  loadAllSettings, saveAllStyling, saveTtsSettings,
+} = settings
 
 const toggleAlwaysOnTop = () => {
   isAlwaysOnTop.value = !isAlwaysOnTop.value
@@ -40,82 +60,13 @@ const toggleAlwaysOnTop = () => {
   saveSetting('reader_alwaysOnTop', isAlwaysOnTop.value ? 'true' : 'false')
 }
 
-// Styling
-const fontSize = ref(20)
-const lineHeight = ref(1.8)
-const letterSpacing = ref(0)
-const fontWeight = ref(400)
-const marginX = ref(60)
-const marginY = ref(40)
-const fontFamily = ref('system-ui')
-const fontColor = ref('#e2e8f0')
-const coverColor = ref('#0f172a')
-const systemFonts = ref<string[]>([])
-
-const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
-const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
-
-const flipDurationMap = computed(() => {
-  if (flipSpeed.value === 'fast') return { slide: '0.2s', cover: '0.25s', curl: '0.35s', ms: 300 }
-  if (flipSpeed.value === 'slow') return { slide: '0.6s', cover: '0.8s', curl: '1.0s', ms: 800 }
-  // medium
-  return { slide: '0.38s', cover: '0.45s', curl: '0.55s', ms: 500 }
-})
-
-// Auto Page Settings
-const autoPageSpeed = ref(10) // seconds per page
-
-// TTS Settings
-const ttsEngine = ref<'system' | 'edge'>('edge')
-const ttsVoice = ref('')
-const ttsRate = ref(1.0)
-const highlightColor = ref('#3b82f6')
-const edgeVoices = ref<any[]>([])
-const systemVoices = ref<SpeechSynthesisVoice[]>([])
-
-// Pagination
-const currentPage = ref(0)
-const totalPages = ref(1)
-const pendingWebdavPos = ref(-1)
-const pageMode = ref<'single' | 'double'>('single')
-const doublePageStep = ref<1 | 2>(2)
-const contentRef = ref<HTMLElement | null>(null)
-const containerRef = ref<HTMLElement | null>(null)
-const containerWidth = ref(0)
-
-// Three-container carousel
-const prevContentRef = ref<HTMLElement | null>(null)
-const prevContainerRef = ref<HTMLElement | null>(null)
-const carouselSliding = ref(false)
-const carouselPos = ref(0)
-const prevPageCount = ref(1)
-const tocListRef = ref<HTMLElement | null>(null)
-const suppressAnim = ref(false) // suppress translateX transition during chapter switch
-
-
-let flipLock = false
-let lastFlipTime = 0
-
-// Search
-const searchQuery = ref('')
-const searchResults = ref<SearchResult[]>([])
-const searching = ref(false)
-
-// Replacement rules
-const rules = ref<ReplacementRule[]>([])
-const newPattern = ref('')
-const newReplacement = ref('')
-const newScope = ref<'book' | 'global'>('book')
-const newIsRegex = ref(false)
-
-// ---- Data ----
+// ---- Data fetch ----
 const fetchBook = async () => {
   try {
     const r = await window.electronAPI.db.query('SELECT * FROM books WHERE id = ?', [props.bookId])
     if (Array.isArray(r) && r.length > 0) {
       book.value = r[0] as Book
       currentChapterIndex.value = book.value.progress_index || 0
-      currentPage.value = book.value.progress_offset || 0
     }
   } catch (e) { console.error(e) }
 }
@@ -125,408 +76,14 @@ const fetchChapters = async () => {
     chapters.value = r as Chapter[]
   } catch (e) { console.error(e) }
 }
-// Themes & Settings
-interface CustomTheme {
-  id: number; name: string; bgImage: string; coverColor: string; fontColor: string; 
-  fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number; 
-  fontWeight: number; marginX: number; marginY: number; pageMode: string; doublePageStep: number
-}
-const customThemes = ref<CustomTheme[]>([])
-const newThemeName = ref('')
-const showKeyHints = ref(true)
-
-const nextKeys = ref<string[]>(['ArrowRight', 'PageDown', ' '])
-const prevKeys = ref<string[]>(['ArrowLeft', 'PageUp'])
-const showingCover = ref(false)
-const sweepDir = ref('left')
-const snapshotHtml = ref('')
-
-const textAlign = ref('left')
-const alignBottom = ref(false)
-const showCopyModal = ref(false)
-const selectedText = ref('')
-
-const webdavUrl = ref('')
-const webdavDir = ref('Books')
-const webdavUser = ref('')
-const webdavPass = ref('')
-const webdavSync = ref(false)
-
-const closeKeyHints = () => { showKeyHints.value = false }
-const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
-
-const loadSettings = async () => {
-  try {
-    const r = await window.electronAPI.db.query('SELECT * FROM settings')
-    if (Array.isArray(r)) {
-      r.forEach((s: any) => {
-        if (s.key === 'reader_fontSize') fontSize.value = parseInt(s.value) || 20
-        if (s.key === 'reader_lineHeight') lineHeight.value = parseFloat(s.value) || 1.8
-        if (s.key === 'reader_letterSpacing') letterSpacing.value = parseFloat(s.value) || 0
-        if (s.key === 'reader_fontWeight') fontWeight.value = parseInt(s.value) || 400
-        if (s.key === 'reader_marginX') marginX.value = parseInt(s.value) || 60
-        if (s.key === 'reader_marginY') marginY.value = parseInt(s.value) || 40
-        if (s.key === 'reader_fontFamily') fontFamily.value = s.value || 'system-ui'
-        if (s.key === 'reader_fontColor') fontColor.value = s.value || '#e2e8f0'
-        if (s.key === 'reader_coverColor') coverColor.value = s.value || '#0f172a'
-        if (s.key === 'bgImage') bgImage.value = s.value || ''
-        if (s.key === 'reader_flipMode') {
-          if (s.value === 'curl') flipMode.value = 'curl'
-          else if (s.value === 'cover') flipMode.value = 'cover'
-          else flipMode.value = 'slide'
-        }
-        if (s.key === 'reader_flipSpeed') flipSpeed.value = s.value as any || 'medium'
-        if (s.key === 'reader_autoPageSpeed') autoPageSpeed.value = parseInt(s.value) || 10
-        if (s.key === 'reader_ttsEngine') ttsEngine.value = s.value as any || 'edge'
-        if (s.key === 'reader_ttsVoice') ttsVoice.value = s.value || ''
-        if (s.key === 'reader_ttsRate') ttsRate.value = parseFloat(s.value) || 1.0
-        if (s.key === 'reader_highlightColor') highlightColor.value = s.value || '#3b82f6'
-        
-        if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
-        if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
-        if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
-        if (s.key === 'reader_alwaysOnTop') {
-          isAlwaysOnTop.value = (s.value === 'true')
-          window.electronAPI.win.setAlwaysOnTop(isAlwaysOnTop.value)
-        }
-        if (s.key === 'reader_nextKeys') { try { nextKeys.value = JSON.parse(s.value) } catch (_) {} }
-        if (s.key === 'reader_prevKeys') { try { prevKeys.value = JSON.parse(s.value) } catch (_) {} }
-        if (s.key === 'reader_blurAmount') blurAmount.value = parseInt(s.value) || 0
-        if (s.key === 'reader_textAlign') textAlign.value = s.value === 'justify' ? 'justify' : 'left'
-        if (s.key === 'reader_alignBottom') alignBottom.value = s.value === 'true'
-        if (s.key === 'webdavUrl') webdavUrl.value = s.value
-        if (s.key === 'webdavDir') webdavDir.value = s.value
-        if (s.key === 'webdavUser') webdavUser.value = s.value
-        if (s.key === 'webdavPass') webdavPass.value = s.value
-        if (s.key === 'webdavSync') webdavSync.value = s.value === 'true'
-        if (s.key === 'custom_themes') {
-          try { customThemes.value = JSON.parse(s.value) || [] } catch (_) {}
-        }
-      })
-    }
-    try { systemFonts.value = await window.electronAPI.font.getSystemFonts() } catch (_) { systemFonts.value = [] }
-  } catch (e) { console.error(e) }
-}
-
-const saveSetting = async (k: string, v: any) => {
-  await window.electronAPI.db.query('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [k, String(v)])
-}
-const updateStyling = () => {
-  saveSetting('reader_fontSize', fontSize.value); saveSetting('reader_lineHeight', lineHeight.value)
-  saveSetting('reader_letterSpacing', letterSpacing.value); saveSetting('reader_fontWeight', fontWeight.value)
-  saveSetting('reader_marginX', marginX.value); saveSetting('reader_marginY', marginY.value)
-  saveSetting('reader_fontFamily', fontFamily.value); saveSetting('reader_fontColor', fontColor.value)
-  saveSetting('reader_coverColor', coverColor.value)
-  saveSetting('reader_pageMode', pageMode.value)
-  saveSetting('reader_doublePageStep', doublePageStep.value)
-  saveSetting('reader_blurAmount', blurAmount.value)
-  saveSetting('reader_textAlign', textAlign.value)
-  saveSetting('reader_alignBottom', alignBottom.value ? 'true' : 'false')
-  recalc()
-}
-const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => {
-  flipMode.value = mode
-  saveSetting('reader_flipMode', mode)
-}
-const setFlipSpeed = (speed: 'fast' | 'medium' | 'slow') => {
-  flipSpeed.value = speed
-  saveSetting('reader_flipSpeed', speed)
-}
-const saveTtsSettings = () => {
-  saveSetting('reader_autoPageSpeed', autoPageSpeed.value)
-  saveSetting('reader_ttsEngine', ttsEngine.value)
-  saveSetting('reader_ttsVoice', ttsVoice.value)
-  saveSetting('reader_ttsRate', ttsRate.value)
-  saveSetting('reader_highlightColor', highlightColor.value)
-}
-
-const applyThemeConfig = (t: Partial<CustomTheme>) => {
-  if (t.bgImage !== undefined) bgImage.value = t.bgImage
-  if (t.coverColor !== undefined) coverColor.value = t.coverColor
-  if (t.fontColor !== undefined) fontColor.value = t.fontColor
-  if (t.fontFamily !== undefined) fontFamily.value = t.fontFamily
-  if (t.fontSize !== undefined) fontSize.value = t.fontSize
-  if (t.lineHeight !== undefined) lineHeight.value = t.lineHeight
-  if (t.letterSpacing !== undefined) letterSpacing.value = t.letterSpacing
-  if (t.fontWeight !== undefined) fontWeight.value = t.fontWeight
-  if (t.marginX !== undefined) marginX.value = t.marginX
-  if (t.marginY !== undefined) marginY.value = t.marginY
-  if (t.pageMode !== undefined) pageMode.value = t.pageMode as 'single' | 'double'
-  if (t.doublePageStep !== undefined) doublePageStep.value = t.doublePageStep as 1 | 2
-  updateStyling()
-}
-
-const applyTheme = (type: string) => {
-  if (type === 'dark') { applyThemeConfig({ bgImage: darkThemeBg, coverColor: '#0f172a', fontColor: '#e2e8f0' }) }
-  else if (type === 'paper') { applyThemeConfig({ bgImage: paperThemeBg, coverColor: '#f4ecd8', fontColor: '#5c4b37' }) }
-  else if (type === 'green') { applyThemeConfig({ bgImage: greenThemeBg, coverColor: '#cce8cf', fontColor: '#2a4b2a' }) }
-}
-
-const saveTheme = async () => {
-  if (!newThemeName.value.trim()) return
-  customThemes.value.push({
-    id: Date.now(), name: newThemeName.value.trim(), bgImage: bgImage.value, coverColor: coverColor.value,
-    fontColor: fontColor.value, fontFamily: fontFamily.value, fontSize: fontSize.value, lineHeight: lineHeight.value,
-    letterSpacing: letterSpacing.value, fontWeight: fontWeight.value, marginX: marginX.value, marginY: marginY.value,
-    pageMode: pageMode.value, doublePageStep: doublePageStep.value
-  })
-  await window.electronAPI.db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_themes', ?)", [JSON.stringify(customThemes.value)])
-  newThemeName.value = ''
-}
-const deleteTheme = async (id: number) => {
-  customThemes.value = customThemes.value.filter(t => t.id !== id)
-  await window.electronAPI.db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_themes', ?)", [JSON.stringify(customThemes.value)])
-}
-
-// ---- Auto Page ----
-let autoPageTimer: number | null = null
-const startAutoPage = () => {
-  if (autoPageTimer) clearInterval(autoPageTimer)
-  autoPageActive.value = true
-  // We use setInterval. If flip happens, it has its own logic.
-  autoPageTimer = window.setInterval(() => {
-    if (showMenu.value) return // pause when menu open
-    nextPage()
-  }, autoPageSpeed.value * 1000)
-}
-const stopAutoPage = () => {
-  if (autoPageTimer) clearInterval(autoPageTimer)
-  autoPageTimer = null
-  autoPageActive.value = false
-}
-const toggleAutoPage = () => {
-  if (autoPageActive.value) stopAutoPage()
-  else startAutoPage()
-}
-watch(autoPageSpeed, () => {
-  if (autoPageActive.value) startAutoPage()
-})
-
-// ---- TTS ----
-declare class Highlight { constructor(...ranges: Range[]); }
-let isPlayingTts = false
-let ttsAudio: HTMLAudioElement | null = null
-let ttsGeneration = 0
-// Audio prefetch cache: index -> Promise<string> (blob URL)
-const ttsPrefetchCache = new Map<number, Promise<string | null>>()
-
-const getSentencesFromNode = (node: Node, sentences: {text:string, range:Range}[]) => {
-  if (node.nodeType === Node.TEXT_NODE) {
-    const text = node.nodeValue || ''
-    // Split on sentence-ending and clause-ending punctuation
-    const regex = /[^ \n\t。！？.!?,，;；、]+[。！？.!?,，;；、]*/g
-    let match
-    while ((match = regex.exec(text)) !== null) {
-      if (match[0].trim().length > 0) {
-        const r = new Range()
-        try {
-          r.setStart(node, match.index)
-          r.setEnd(node, match.index + match[0].length)
-          sentences.push({ text: match[0], range: r })
-        } catch (_) {}
-      }
-    }
-  } else {
-    for (let i = 0; i < node.childNodes.length; i++) {
-        if ((node.childNodes[i] as HTMLElement).tagName?.toLowerCase() === 'rt') continue
-        getSentencesFromNode(node.childNodes[i], sentences)
-    }
-  }
-}
-
-let activeSentences: {text:string, range:Range}[] = []
-let currentSentenceIndex = 0
-
-const clearHighlight = () => {
-  if ('highlights' in CSS) {
-    // @ts-ignore
-    CSS.highlights.delete('tts-highlight')
-  }
-}
-
-const highlightRange = (r: Range) => {
-  if ('highlights' in CSS) {
-    const highlight = new Highlight(r)
-    // @ts-ignore
-    CSS.highlights.set('tts-highlight', highlight)
-  }
-}
-
-const playSystemTTS = (text: string) => {
-  return new Promise<void>((resolve) => {
-    if (!window.speechSynthesis) { resolve(); return }
-    const u = new SpeechSynthesisUtterance(text)
-    if (ttsVoice.value && ttsEngine.value === 'system') {
-      const v = systemVoices.value.find(x => x.name === ttsVoice.value)
-      if (v) u.voice = v
-    }
-    u.rate = ttsRate.value
-    u.onend = () => resolve()
-    u.onerror = () => resolve()
-    window.speechSynthesis.speak(u)
-  })
-}
-
-// Convert IPC buffer response to a Uint8Array regardless of deserialization format
-const ipcBufferToUint8Array = (buf: any): Uint8Array | null => {
-  if (buf instanceof Uint8Array || buf instanceof ArrayBuffer) {
-    return new Uint8Array(buf)
-  } else if (buf && typeof buf === 'object') {
-    return new Uint8Array(Object.values(buf) as number[])
-  }
-  return null
-}
-
-// Synthesize text and return a blob URL (or null on failure)
-const synthesizeToUrl = async (text: string): Promise<string | null> => {
-  if (!text.trim()) return null
-  try {
-    const res = await (window as any).electronAPI.tts.synthesize(text, ttsVoice.value || undefined, ttsRate.value)
-    if (res.success && res.audioBuffer) {
-      const audioData = ipcBufferToUint8Array(res.audioBuffer)
-      if (!audioData || audioData.length === 0) return null
-      const blob = new Blob([audioData.buffer.slice(audioData.byteOffset, audioData.byteOffset + audioData.byteLength) as ArrayBuffer], { type: 'audio/mpeg' })
-      return URL.createObjectURL(blob)
-    }
-  } catch (e) {
-    console.error('Edge TTS synthesis error', e)
-  }
-  return null
-}
-
-// Start prefetching next N sentences
-const prefetchAhead = (fromIndex: number, count: number = 2) => {
-  if (ttsEngine.value !== 'edge') return
-  for (let i = fromIndex; i < Math.min(fromIndex + count, activeSentences.length); i++) {
-    if (!ttsPrefetchCache.has(i)) {
-      ttsPrefetchCache.set(i, synthesizeToUrl(activeSentences[i].text))
-    }
-  }
-}
-
-const playEdgeTTS = async (text: string, sentenceIdx: number) => {
-  if (!text.trim()) return
-  try {
-    // Check prefetch cache first 
-    let url: string | null = null
-    const cached = ttsPrefetchCache.get(sentenceIdx)
-    if (cached) {
-      url = await cached
-      ttsPrefetchCache.delete(sentenceIdx)
-    } else {
-      url = await synthesizeToUrl(text)
-    }
-    if (!url) return
-
-    ttsAudio = new Audio(url)
-    return new Promise<void>((resolve) => {
-      ttsAudio!.onended = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
-      ttsAudio!.onerror = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
-      ttsAudio!.play().catch(() => resolve())
-    })
-  } catch (e) {
-    console.error('Edge TTS ERR', e)
-  }
-}
-
-const buildSentences = () => {
-  activeSentences = []
-  currentSentenceIndex = 0
-  ttsPrefetchCache.clear()
-  if (contentRef.value) getSentencesFromNode(contentRef.value, activeSentences)
-  
-  if (activeSentences.length > 0) {
-    // Fast forward to the visually current page
-    for (let i = 0; i < activeSentences.length; i++) {
-      const rect = activeSentences[i].range.getBoundingClientRect()
-      if (rect.right > 20 && rect.width > 0) {
-        currentSentenceIndex = i
-        break
-      }
-    }
-  }
-}
-
-const playNextSentence = async () => {
-  if (!isPlayingTts) return
-  if (activeSentences.length === 0 || currentSentenceIndex >= activeSentences.length) {
-    slideToNextChapter()
-    setTimeout(() => {
-      buildSentences()
-      playNextSentence()
-    }, flipDurationMap.value.ms * 2)
-    return
-  }
-
-  // Prefetch the next sentences while we play the current one
-  prefetchAhead(currentSentenceIndex + 1, 2)
-
-  const item = activeSentences[currentSentenceIndex]
-  const rect = item.range.getBoundingClientRect()
-  
-  // if sentence is outside bounds on the right, flip page
-  const w = containerWidth.value || window.innerWidth
-  if (rect.left > w - 20) {
-    nextPage()
-    await new Promise(res => setTimeout(res, flipDurationMap.value.ms + 50))
-  }
-  
-  if (!isPlayingTts) return
-
-  highlightRange(item.range)
-  
-  const myGen = ++ttsGeneration
-
-  if (ttsEngine.value === 'system') {
-    await playSystemTTS(item.text)
-  } else {
-    await playEdgeTTS(item.text, currentSentenceIndex)
-  }
-  
-  if (myGen === ttsGeneration && isPlayingTts) {
-    currentSentenceIndex++
-    playNextSentence()
-  }
-}
-
-const startTts = () => {
-  if (ttsActive.value) { stopTts(); return }
-  saveTtsSettings()
-  ttsActive.value = true
-  isPlayingTts = true
-  buildSentences()
-  // Prefetch the first sentences immediately
-  prefetchAhead(currentSentenceIndex, 2)
-  playNextSentence()
-}
-
-const stopTts = () => {
-  ttsActive.value = false
-  isPlayingTts = false
-  if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
-  if (window.speechSynthesis) window.speechSynthesis.cancel()
-  clearHighlight()
-  // Clean up prefetch cache
-  for (const [, p] of ttsPrefetchCache) {
-    p.then(url => { if (url) URL.revokeObjectURL(url) })
-  }
-  ttsPrefetchCache.clear()
-}
-
-// Ensure TTS stops if menu is opened or other disruption? No, users might want to change settings while playing.
-// Maybe just update CSS Highlight style so custom color applies
-const injectHighlightStyles = () => {
-  let styleEl = document.getElementById('tts-style') as HTMLStyleElement
-  if (!styleEl) {
-    styleEl = document.createElement('style')
-    styleEl.id = 'tts-style'
-    document.head.appendChild(styleEl)
-  }
-  styleEl.innerHTML = `::highlight(tts-highlight) { background-color: ${highlightColor.value}40; color: ${highlightColor.value}; border-radius: 4px; }`
-}
-watch(highlightColor, injectHighlightStyles)
 
 // ---- Replacement rules ----
+const rules = ref<ReplacementRule[]>([])
+const newPattern = ref('')
+const newReplacement = ref('')
+const newScope = ref<'book' | 'global'>('book')
+const newIsRegex = ref(false)
+
 const fetchRules = async () => {
   try {
     const r = await window.electronAPI.db.query(
@@ -536,7 +93,6 @@ const fetchRules = async () => {
     rules.value = r as ReplacementRule[]
   } catch (e) { console.error(e) }
 }
-
 const addRule = async () => {
   if (!newPattern.value.trim()) return
   try {
@@ -544,447 +100,90 @@ const addRule = async () => {
       'INSERT INTO replacement_rules (pattern, replacement, scope, book_id, is_regex, active) VALUES (?, ?, ?, ?, ?, 1)',
       [newPattern.value, newReplacement.value, newScope.value, newScope.value === 'book' ? props.bookId : null, newIsRegex.value ? 1 : 0]
     )
-    newPattern.value = ''
-    newReplacement.value = ''
-    newIsRegex.value = false
-    await fetchRules()
-    recalc()
+    newPattern.value = ''; newReplacement.value = ''; newIsRegex.value = false
+    await fetchRules(); recalc()
   } catch (e) { console.error(e) }
 }
-
 const deleteRule = async (id: number) => {
-  try {
-    await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE id = ?', [id])
-    await fetchRules()
-    recalc()
-  } catch (e) { console.error(e) }
+  try { await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE id = ?', [id]); await fetchRules(); recalc() } catch (e) { console.error(e) }
 }
-
 const toggleRuleActive = async (rule: ReplacementRule) => {
-  try {
-    await window.electronAPI.db.query('UPDATE replacement_rules SET active = ? WHERE id = ?', [rule.active ? 0 : 1, rule.id])
-    await fetchRules()
-    recalc()
-  } catch (e) { console.error(e) }
+  try { await window.electronAPI.db.query('UPDATE replacement_rules SET active = ? WHERE id = ?', [rule.active ? 0 : 1, rule.id]); await fetchRules(); recalc() } catch (e) { console.error(e) }
 }
-
 const applyReplacements = (html: string): string => {
   if (!html) return html
   let result = html
   for (const rule of rules.value) {
     if (!rule.active) continue
     try {
-      if (rule.is_regex) {
-        const re = new RegExp(rule.pattern, 'g')
-        result = result.replace(re, rule.replacement)
-      } else {
-        // Plain text replacement — escape for safety and replace all
-        const escaped = rule.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        result = result.replace(new RegExp(escaped, 'g'), rule.replacement)
-      }
-    } catch (_) { /* skip broken regex */ }
+      if (rule.is_regex) { result = result.replace(new RegExp(rule.pattern, 'g'), rule.replacement) }
+      else { result = result.replace(new RegExp(rule.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), rule.replacement) }
+    } catch (_) {}
   }
   return result
 }
 
-// ---- Search ----
-const doSearch = async () => {
-  const q = searchQuery.value.trim()
-  if (!q) { searchResults.value = []; return }
-  searching.value = true
-  try {
-    const results: SearchResult[] = []
-    for (let i = 0; i < chapters.value.length; i++) {
-      const ch = chapters.value[i]
-      // Strip HTML tags for plain text search
-      const plain = ch.body.replace(/<[^>]+>/g, '')
-      let startIndex = 0
-      while (startIndex < plain.length) {
-        const idx = plain.toLowerCase().indexOf(q.toLowerCase(), startIndex)
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 20)
-          const end = Math.min(plain.length, idx + q.length + 40)
-          const snippet = (start > 0 ? '...' : '') + plain.substring(start, end) + (end < plain.length ? '...' : '')
-          results.push({ chapterIndex: i, chapterTitle: ch.title, snippet })
-          startIndex = idx + q.length
-        } else {
-          break
-        }
-      }
-    }
-    searchResults.value = results
-  } catch (e) { console.error(e) }
-  searching.value = false
-}
-
-const jumpToSearchResult = (idx: number) => {
-  goToChapter(idx, true)
-}
-
-// ---- Pagination ----
-const recalc = () => { nextTick(() => { setTimeout(calculatePages, 60) }) }
-const calculatePages = () => {
-  if (!contentRef.value || !containerRef.value) return
-  const cw = containerRef.value.clientWidth
-  if (cw <= 0) return
-  containerWidth.value = cw
-  const pageWidth = pageMode.value === 'double' ? cw / 2 : cw
-  totalPages.value = Math.max(1, Math.ceil(contentRef.value.scrollWidth / pageWidth))
-  
-  if (pendingWebdavPos.value >= 0) {
-    const L = currentChapterData.value?.body?.length || 0
-    if (L > 0) {
-      currentPage.value = Math.floor((pendingWebdavPos.value / L) * totalPages.value)
-    } else {
-      currentPage.value = 0
-    }
-    pendingWebdavPos.value = -1
-  }
-
-  if (currentPage.value >= totalPages.value) currentPage.value = totalPages.value - 1
-  calcPrevPages()
-}
-const calcPrevPages = () => {
-  if (!prevContentRef.value || !prevContainerRef.value) return
-  const cw = prevContainerRef.value.clientWidth
-  if (cw <= 0) return
-  const pageWidth = pageMode.value === 'double' ? cw / 2 : cw
-  prevPageCount.value = Math.max(1, Math.ceil(prevContentRef.value.scrollWidth / pageWidth))
-}
-
-const pageOffset = computed(() => {
-  const cw = containerWidth.value || 0
-  const pageWidth = pageMode.value === 'double' ? cw / 2 : cw
-  return `-${currentPage.value * pageWidth}px`
-})
-const prevPageOffset = computed(() => {
-  const cw = containerWidth.value || 0
-  if (cw <= 0) return '0px'
-  const pageWidth = pageMode.value === 'double' ? cw / 2 : cw
-  return `-${Math.max(0, prevPageCount.value - 1) * pageWidth}px`
-})
-
-let uploadTimer: any = null
-const uploadProgressToWebdav = async () => {
-  if (!webdavSync.value || !webdavUrl.value || !book.value) return
-  if (pendingWebdavPos.value >= 0) return // Skip upload if we're evaluating cloud jump
-  
-  if (uploadTimer) clearTimeout(uploadTimer)
-  uploadTimer = setTimeout(async () => {
-    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let author = book.value?.author || '未知'
-    if (!author.trim()) author = '未知'
-    let safeName = book.value?.title.replace(/[\\/:"*?<>|]/g, '_') || 'Unknown'
-    let safeAuthor = author.replace(/[\\/:"*?<>|]/g, '_')
-    const filename = `${safeName}_${safeAuthor}.json`
-    
-    const L = currentChapterData.value?.body?.length || 0
-    const charPos = totalPages.value > 0 ? Math.floor(L * (currentPage.value / totalPages.value)) : 0
-
-    const data = {
-      author: author,
-      durChapterIndex: currentChapterIndex.value,
-      durChapterPos: charPos,
-      durChapterTime: Date.now(),
-      durChapterTitle: currentChapterData.value?.title || '',
-      name: book.value?.title || 'Unknown'
-    }
-    let baseURL = webdavUrl.value
-    if (webdavDir.value) baseURL += webdavDir.value
-    window.electronAPI.webdav.request({
-      url: baseURL + 'bookProgress/' + encodeURIComponent(filename),
-      method: 'PUT',
-      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(data, null, 2)
-    }).catch(e => console.error('WebDAV upload err:', e))
-  }, 2000)
-}
-
-const saveProgress = async () => {
-  if (!book.value) return
-  try {
-    await window.electronAPI.db.query('UPDATE books SET progress_index = ?, progress_offset = ?, last_read = ? WHERE id = ?',
-      [currentChapterIndex.value, currentPage.value, new Date().toISOString(), props.bookId])
-    uploadProgressToWebdav()
-  } catch (e) { console.error(e) }
-}
-
-// Chapter data with replacements applied
+// ---- Chapter data (computed) ----
 const currentChapterData = computed(() => chapters.value[currentChapterIndex.value] || null)
 const prevChapterData = computed(() => { const i = currentChapterIndex.value - 1; return i >= 0 ? chapters.value[i] : null })
 const nextChapterData = computed(() => { const i = currentChapterIndex.value + 1; return i < chapters.value.length ? chapters.value[i] : null })
-
 const currentBody = computed(() => currentChapterData.value ? applyReplacements(currentChapterData.value.body) : '')
 const prevBody = computed(() => prevChapterData.value ? applyReplacements(prevChapterData.value.body) : '')
 const nextBody = computed(() => nextChapterData.value ? applyReplacements(nextChapterData.value.body) : '')
 
-// ---- Carousel chapter transition ----
-const slideToNextChapter = () => {
-  if (flipLock || currentChapterIndex.value >= chapters.value.length - 1) return
-  flipLock = true
-  suppressAnim.value = true
-  
-  if (flipMode.value === 'cover' || flipMode.value === 'curl') {
-    if (containerRef.value) snapshotHtml.value = containerRef.value.outerHTML
-    sweepDir.value = 'left'
-    showingCover.value = true
-    requestAnimationFrame(() => {
-      currentChapterIndex.value++
-      currentPage.value = 0
-      saveProgress()
-    })
-    setTimeout(() => {
-      nextTick(() => { calculatePages(); suppressAnim.value = false; showingCover.value = false; flipLock = false })
-    }, 450)
-  } else {
-    carouselSliding.value = true
-    carouselPos.value = 1
-    setTimeout(() => {
-      carouselSliding.value = false
-      currentChapterIndex.value++
-      currentPage.value = 0
-      carouselPos.value = 0
-      saveProgress()
-      nextTick(() => { requestAnimationFrame(() => { calculatePages(); requestAnimationFrame(() => { suppressAnim.value = false; flipLock = false }) }) })
-    }, 380)
-  }
+// ---- Progress ----
+let uploadTimer: any = null
+const saveProgress = async () => {
+  if (!book.value) return
+  try {
+    await window.electronAPI.db.query('UPDATE books SET progress_index = ?, progress_offset = ?, last_read = ? WHERE id = ?',
+      [currentChapterIndex.value, pagination.currentPage.value, new Date().toISOString(), props.bookId])
+    uploadProgressToWebdav()
+  } catch (e) { console.error(e) }
+}
+const uploadProgressToWebdav = async () => {
+  if (!webdavSync.value || !webdavUrl.value || !book.value) return
+  if (pagination.pendingWebdavPos.value >= 0) return
+  if (uploadTimer) clearTimeout(uploadTimer)
+  uploadTimer = setTimeout(async () => {
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let author = book.value?.author || '未知'; if (!author.trim()) author = '未知'
+    let safeName = book.value?.title.replace(/[\\/:\"*?<>|]/g, '_') || 'Unknown'
+    let safeAuthor = author.replace(/[\\/:\"*?<>|]/g, '_')
+    const filename = `${safeName}_${safeAuthor}.json`
+    const L = currentChapterData.value?.body?.length || 0
+    const charPos = pagination.totalPages.value > 0 ? Math.floor(L * (pagination.currentPage.value / pagination.totalPages.value)) : 0
+    const data = { author, durChapterIndex: currentChapterIndex.value, durChapterPos: charPos, durChapterTime: Date.now(), durChapterTitle: currentChapterData.value?.title || '', name: book.value?.title || 'Unknown' }
+    let baseURL = webdavUrl.value; if (webdavDir.value) baseURL += webdavDir.value
+    window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/' + encodeURIComponent(filename), method: 'PUT', headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 2) }).catch(e => console.error('WebDAV upload err:', e))
+  }, 2000)
 }
 
-const slideToPrevChapter = () => {
-  if (flipLock || currentChapterIndex.value <= 0) return
-  flipLock = true
-  suppressAnim.value = true
-
-  const setLastPage = () => {
-    calculatePages()
-    const step = (pageMode.value === 'double' && doublePageStep.value === 2) ? 2 : 1
-    currentPage.value = Math.max(0, Math.floor((totalPages.value - 1) / step) * step)
-    saveProgress()
-  }
-
-  if (flipMode.value === 'cover' || flipMode.value === 'curl') {
-    if (containerRef.value) snapshotHtml.value = containerRef.value.outerHTML
-    sweepDir.value = 'right'
-    showingCover.value = true
-    requestAnimationFrame(() => {
-      currentChapterIndex.value--
-      nextTick(setLastPage)
-    })
-    setTimeout(() => { suppressAnim.value = false; showingCover.value = false; flipLock = false }, 450)
-  } else {
-    carouselSliding.value = true
-    carouselPos.value = -1
-    setTimeout(() => {
-      carouselSliding.value = false
-      currentChapterIndex.value--
-      carouselPos.value = 0
-      nextTick(() => { requestAnimationFrame(() => { setLastPage(); requestAnimationFrame(() => { suppressAnim.value = false; flipLock = false }) }) })
-    }, 380)
-  }
-}
-
-const goToChapter = (idx: number, keepMenu = false) => {
-  if (idx >= 0 && idx < chapters.value.length && idx !== currentChapterIndex.value) {
-    suppressAnim.value = true
-    currentChapterIndex.value = idx
-    currentPage.value = 0
-    saveProgress()
-    nextTick(() => { requestAnimationFrame(() => { calculatePages(); requestAnimationFrame(() => { suppressAnim.value = false }) }) })
-  }
-  if (!keepMenu) closeAll()
-}
-
-// ---- Page navigation ----
-const doPageFlip = (dir: 'left' | 'right', action: () => void) => {
-  if (flipMode.value === 'cover' || flipMode.value === 'curl') {
-    if (containerRef.value) snapshotHtml.value = containerRef.value.outerHTML
-    sweepDir.value = dir === 'left' ? 'left' : 'right'
-    showingCover.value = true
-    flipLock = true
-    suppressAnim.value = true
-    
-    // adjust timing based on flipSpeed
-    let duration = 450
-    if (flipSpeed.value === 'fast') duration = 250
-    else if (flipSpeed.value === 'slow') duration = 700
-
-    requestAnimationFrame(() => { action() })
-    setTimeout(() => {
-      showingCover.value = false
-      suppressAnim.value = false
-      flipLock = false
-    }, duration)
-  } else {
-    // Slide mode: CSS transition handles it
-    action()
-  }
-}
-
-const nextPage = () => {
-  const now = Date.now()
-  if (flipLock) {
-    if (now - lastFlipTime < 150) return
-    flipLock = false
-  }
-  lastFlipTime = now
-  const step = (pageMode.value === 'double' && doublePageStep.value === 2) ? 2 : 1
-  if (currentPage.value < totalPages.value - step) {
-    doPageFlip('left', () => { currentPage.value += step })
-  } else {
-    slideToNextChapter()
-  }
-}
-
-const prevPage = () => {
-  const now = Date.now()
-  if (flipLock) {
-    if (now - lastFlipTime < 150) return
-    flipLock = false
-  }
-  lastFlipTime = now
-  const step = (pageMode.value === 'double' && doublePageStep.value === 2) ? 2 : 1
-  if (currentPage.value >= step) {
-    doPageFlip('right', () => { currentPage.value -= step })
-  } else if (currentPage.value > 0) {
-    doPageFlip('right', () => { currentPage.value = 0 })
-  } else {
-    slideToPrevChapter()
-  }
-}
-
-// ---- Interaction ----
-const closeAll = () => { showMenu.value = false; showStyling.value = false; showToc.value = false; showSearch.value = false; showRules.value = false; showAutoPage.value = false; showTts.value = false }
-
-const handleClick = (e: MouseEvent) => {
-  const t = e.target as HTMLElement
-  if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') ||
-      t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal')) return
-  if (showMenu.value) { closeAll(); return }
-  
-  const x = e.clientX, y = e.clientY
-
-  if (ttsActive.value) {
-    let found = -1
-    for (let i = 0; i < activeSentences.length; i++) {
-        const rects = activeSentences[i].range.getClientRects()
-        for (let r = 0; r < rects.length; r++) {
-            const rect = rects[r]
-            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-                found = i; break;
-            }
-        }
-        if (found >= 0) break
-    }
-    if (found >= 0) {
-        currentSentenceIndex = found
-        if (ttsAudio) { ttsAudio.pause(); ttsAudio = null; }
-        if (window.speechSynthesis) window.speechSynthesis.cancel()
-        playNextSentence()
-        return
-    }
-  }
-
-  const w = window.innerWidth, h = window.innerHeight
-  const isCenterCol = x > w / 3 && x < (w / 3) * 2
-  const isCenterRow = y > h / 3 && y < (h / 3) * 2
-
-  if (isCenterCol && isCenterRow) {
-    showMenu.value = true
-  } else if (x < w / 3 || (isCenterCol && y < h / 3)) {
-    prevPage()
-  } else {
-    nextPage()
-  }
-}
-
-let touchStartX = 0
-let touchStartY = 0
-const handleTouchStart = (e: TouchEvent) => {
-  if (showMenu.value) return
-  touchStartX = e.changedTouches[0].screenX
-  touchStartY = e.changedTouches[0].screenY
-}
-
-const handleTouchEnd = (e: TouchEvent) => {
-  if (showMenu.value) return
-  const endX = e.changedTouches[0].screenX
-  const endY = e.changedTouches[0].screenY
-  
-  if (Math.abs(endX - touchStartX) > Math.abs(endY - touchStartY) * 1.5) {
-    const diff = endX - touchStartX
-    if (diff < -50) nextPage()
-    else if (diff > 50) prevPage()
-  }
-}
-
-const handleContextMenu = (e: MouseEvent) => {
-  if (showMenu.value) return
-  const t = e.target as HTMLElement
-  const p = t.closest('p, h2, h3, div.ch-body')
-  if (p && p.textContent && p.textContent.trim().length > 0) {
-    selectedText.value = p.textContent.trim()
-    showCopyModal.value = true
-  }
-}
-
-const copyToClipboard = () => {
-  navigator.clipboard.writeText(selectedText.value)
-  showCopyModal.value = false
-}
-
-const handleWheel = (e: WheelEvent) => {
-  if (showMenu.value) return
-  if (Math.abs(e.deltaY) < 10) return
-  e.preventDefault()
-  if (e.deltaY > 0) nextPage()
-  else prevPage()
-}
-
-const handleKeydown = (e: KeyboardEvent) => {
-  const k = e.key, c = e.code
-  // ESC: exit fullscreen or close menu
-  if (k === 'Escape') {
-    e.stopPropagation()
-    e.stopImmediatePropagation()
-    if (isImmersive.value) { toggleImmersiveMode(); return }
-    if (showMenu.value) { closeAll(); return }
-    if (ttsActive.value) { stopTts(); return } // Esc stops TTS too
-    if (autoPageActive.value) { stopAutoPage(); return }
-    handleGoBack()
-    return
-  }
-  if (showMenu.value) return
-  if (nextKeys.value.includes(k) || nextKeys.value.includes(c)) { e.preventDefault(); nextPage() }
-  else if (prevKeys.value.includes(k) || prevKeys.value.includes(c)) { e.preventDefault(); prevPage() }
-}
-
-const toggleImmersiveMode = () => {
-  isImmersive.value = !isImmersive.value
-  emit('toggle-immersive', isImmersive.value)
-  if (!isImmersive.value) {
-    // Delay recalc after exiting fullscreen to ensure DOM layout has settled
-    setTimeout(recalc, 400)
-    setTimeout(recalc, 800)
-  }
-}
-const handleGoBack = () => { saveProgress(); closeAll(); emit('go-back') }
-
-const progressPercent = computed(() => {
-  if (chapters.value.length === 0) return 0
-  const cw = 100 / chapters.value.length
-  const inC = totalPages.value > 0 ? ((currentPage.value + 1) / totalPages.value) * cw : cw
-  return Math.min(100, Math.round(currentChapterIndex.value * cw + inC))
+// ---- Pagination (composable) ----
+const pagination = usePagination({
+  contentRef, containerRef, prevContentRef, prevContainerRef,
+  pageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor,
+  chapters, currentChapterIndex, saveProgress,
 })
+const {
+  currentPage, totalPages, containerWidth, pendingWebdavPos,
+  carouselSliding, suppressAnim, showingCover, sweepDir, snapshotHtml,
+  flipDurationMap, pageOffset, prevPageOffset, carouselTransform, progressPercent,
+  recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
+} = pagination
 
-const handleProgressSlider = (e: Event) => {
-  const p = parseInt((e.target as HTMLInputElement).value)
-  goToChapter(Math.min(Math.floor((p / 100) * chapters.value.length), chapters.value.length - 1), true)
-}
-
-const readerBgStyle = computed(() => {
-  if (!bgImage.value) return {}
-  return { backgroundImage: `url('${bgImage.value}')`, backgroundSize: 'cover', backgroundPosition: 'center' }
+// ---- Theme (composable) ----
+const theme = useTheme({
+  bgImage, coverColor, fontColor, fontFamily, fontSize, lineHeight,
+  letterSpacing, fontWeight, marginX, marginY, pageMode, doublePageStep,
+  customThemes, blurAmount,
+  onStyleChanged: () => { saveAllStyling(); recalc() },
 })
+const { newThemeName, applyThemeConfig, applyTheme, saveTheme, deleteTheme, readerBgStyle } = theme
+
+const updateStyling = () => { saveAllStyling(); recalc() }
+const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => { flipMode.value = mode; saveSetting('reader_flipMode', mode) }
+const setFlipSpeed = (speed: 'fast' | 'medium' | 'slow') => { flipSpeed.value = speed; saveSetting('reader_flipSpeed', speed) }
 
 const textStyle = computed(() => ({
   fontFamily: fontFamily.value, fontSize: fontSize.value + 'px',
@@ -993,8 +192,137 @@ const textStyle = computed(() => ({
   textAlign: textAlign.value as any,
 }))
 
-const carouselTransform = computed(() => `translateX(${-100 + carouselPos.value * -100}vw)`)
+// ---- TTS (composable) ----
+const tts = useTTS({
+  contentRef, containerWidth,
+  ttsEngine, ttsVoice, ttsRate, highlightColor,
+  flipDurationMs: computed(() => flipDurationMap.value.ms),
+  nextPage, slideToNextChapter,
+})
+const { ttsActive, edgeVoices, systemVoices, startTts, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts
 
+// ---- Auto Page ----
+let autoPageTimer: number | null = null
+const startAutoPage = () => {
+  if (autoPageTimer) clearInterval(autoPageTimer)
+  autoPageActive.value = true
+  autoPageTimer = window.setInterval(() => { if (!showMenu.value) nextPage() }, autoPageSpeed.value * 1000)
+}
+const stopAutoPage = () => { if (autoPageTimer) clearInterval(autoPageTimer); autoPageTimer = null; autoPageActive.value = false }
+const toggleAutoPage = () => { if (autoPageActive.value) stopAutoPage(); else startAutoPage() }
+watch(autoPageSpeed, () => { if (autoPageActive.value) startAutoPage() })
+
+// ---- Search (in-book) ----
+const searchQuery = ref('')
+const searchResults = ref<SearchResult[]>([])
+const searching = ref(false)
+const doSearch = async () => {
+  const q = searchQuery.value.trim(); if (!q) { searchResults.value = []; return }
+  searching.value = true
+  try {
+    const results: SearchResult[] = []
+    for (let i = 0; i < chapters.value.length; i++) {
+      const plain = chapters.value[i].body.replace(/<[^>]+>/g, '')
+      let startIndex = 0
+      while (startIndex < plain.length) {
+        const idx = plain.toLowerCase().indexOf(q.toLowerCase(), startIndex)
+        if (idx >= 0) {
+          const start = Math.max(0, idx - 20), end = Math.min(plain.length, idx + q.length + 40)
+          results.push({ chapterIndex: i, chapterTitle: chapters.value[i].title, snippet: (start > 0 ? '...' : '') + plain.substring(start, end) + (end < plain.length ? '...' : '') })
+          startIndex = idx + q.length
+        } else break
+      }
+    }
+    searchResults.value = results
+  } catch (e) { console.error(e) }
+  searching.value = false
+}
+const jumpToSearchResult = (idx: number) => { goToChapter(idx, true) }
+
+// ---- WebDAV download ----
+const downloadProgressFromWebdav = async () => {
+  if (!webdavSync.value || !webdavUrl.value || !book.value) return
+  const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+  let author = book.value.author || '未知'; if (!author.trim()) author = '未知'
+  let safeName = book.value.title.replace(/[\\/:\"*?<>|]/g, '_')
+  let safeAuthor = author.replace(/[\\/:\"*?<>|]/g, '_')
+  const filename = `${safeName}_${safeAuthor}.json`
+  let baseURL = webdavUrl.value; if (webdavDir.value) baseURL += webdavDir.value
+  try {
+    const res = await window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/' + encodeURIComponent(filename), method: 'GET', headers: { 'Authorization': `Basic ${auth}` } })
+    if (res.status === 200 && res.data) {
+      const remote = JSON.parse(res.data)
+      const localTime = book.value.last_read ? new Date(book.value.last_read).getTime() : 0
+      const isLocalFresh = currentChapterIndex.value === 0 && currentPage.value === 0
+      if (remote.durChapterTime && (remote.durChapterTime > localTime + 5000 || isLocalFresh)) {
+        if (remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
+          pendingWebdavPos.value = remote.durChapterPos || 0
+          if (remote.durChapterIndex !== currentChapterIndex.value) goToChapter(remote.durChapterIndex, true)
+          else recalc()
+        }
+      }
+    }
+  } catch (e) { console.error('WebDAV download err:', e) }
+}
+
+// ---- Interaction ----
+const closeAll = () => { showMenu.value = false; showStyling.value = false; showToc.value = false; showSearch.value = false; showRules.value = false; showAutoPage.value = false; showTts.value = false }
+const closeKeyHints = () => { showKeyHints.value = false }
+const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
+
+const handleClick = (e: MouseEvent) => {
+  const t = e.target as HTMLElement
+  if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') || t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal')) return
+  if (showMenu.value) { closeAll(); return }
+  const x = e.clientX, y = e.clientY
+  if (handleTtsClick(x, y)) return
+  const w = window.innerWidth, h = window.innerHeight
+  const isCenterCol = x > w / 3 && x < (w / 3) * 2
+  const isCenterRow = y > h / 3 && y < (h / 3) * 2
+  if (isCenterCol && isCenterRow) showMenu.value = true
+  else if (x < w / 3 || (isCenterCol && y < h / 3)) prevPage()
+  else nextPage()
+}
+let touchStartX = 0, touchStartY = 0
+const handleTouchStart = (e: TouchEvent) => { if (!showMenu.value) { touchStartX = e.changedTouches[0].screenX; touchStartY = e.changedTouches[0].screenY } }
+const handleTouchEnd = (e: TouchEvent) => {
+  if (showMenu.value) return
+  const endX = e.changedTouches[0].screenX, endY = e.changedTouches[0].screenY
+  if (Math.abs(endX - touchStartX) > Math.abs(endY - touchStartY) * 1.5) {
+    const diff = endX - touchStartX
+    if (diff < -50) nextPage(); else if (diff > 50) prevPage()
+  }
+}
+const handleContextMenu = (e: MouseEvent) => {
+  if (showMenu.value) return
+  const t = e.target as HTMLElement; const p = t.closest('p, h2, h3, div.ch-body')
+  if (p && p.textContent && p.textContent.trim().length > 0) { selectedText.value = p.textContent.trim(); showCopyModal.value = true }
+}
+const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false }
+const handleWheel = (e: WheelEvent) => { if (showMenu.value) return; if (Math.abs(e.deltaY) < 10) return; e.preventDefault(); if (e.deltaY > 0) nextPage(); else prevPage() }
+const handleKeydown = (e: KeyboardEvent) => {
+  const k = e.key, c = e.code
+  if (k === 'Escape') {
+    e.stopPropagation(); e.stopImmediatePropagation()
+    if (isImmersive.value) { toggleImmersiveMode(); return }
+    if (showMenu.value) { closeAll(); return }
+    if (ttsActive.value) { stopTts(); return }
+    if (autoPageActive.value) { stopAutoPage(); return }
+    handleGoBack(); return
+  }
+  if (showMenu.value) return
+  if (nextKeys.value.includes(k) || nextKeys.value.includes(c)) { e.preventDefault(); nextPage() }
+  else if (prevKeys.value.includes(k) || prevKeys.value.includes(c)) { e.preventDefault(); prevPage() }
+}
+const toggleImmersiveMode = () => {
+  isImmersive.value = !isImmersive.value; emit('toggle-immersive', isImmersive.value)
+  if (!isImmersive.value) { setTimeout(recalc, 400); setTimeout(recalc, 800) }
+}
+const handleGoBack = () => { saveProgress(); closeAll(); emit('go-back') }
+const handleProgressSlider = (e: Event) => {
+  const p = parseInt((e.target as HTMLInputElement).value)
+  goToChapter(Math.min(Math.floor((p / 100) * chapters.value.length), chapters.value.length - 1), true)
+}
 const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 'tts') => {
   showToc.value = panel === 'toc' ? !showToc.value : false
   showStyling.value = panel === 'styling' ? !showStyling.value : false
@@ -1003,89 +331,35 @@ const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 
   showAutoPage.value = panel === 'autopage' ? !showAutoPage.value : false
   showTts.value = panel === 'tts' ? !showTts.value : false
 }
-
 watch(showToc, (v) => {
-  if (v) nextTick(() => {
-    const el = tocListRef.value?.querySelector('.toc-active') as HTMLElement
-    if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior })
-  })
+  if (v) nextTick(() => { const el = tocListRef.value?.querySelector('.toc-active') as HTMLElement; if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }) })
 })
-
 watch(currentChapterIndex, () => recalc())
 watch([fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight], () => recalc())
-
-// Save progress periodically
 watch(currentPage, () => saveProgress())
 
-const downloadProgressFromWebdav = async () => {
-  if (!webdavSync.value || !webdavUrl.value || !book.value) return
-  const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-  let author = book.value.author || '未知'
-  if (!author.trim()) author = '未知'
-  let safeName = book.value.title.replace(/[\\/:"*?<>|]/g, '_')
-  let safeAuthor = author.replace(/[\\/:"*?<>|]/g, '_')
-  const filename = `${safeName}_${safeAuthor}.json`
-  
-  let baseURL = webdavUrl.value
-  if (webdavDir.value) baseURL += webdavDir.value
-
-  try {
-    const res = await window.electronAPI.webdav.request({
-      url: baseURL + 'bookProgress/' + encodeURIComponent(filename),
-      method: 'GET',
-      headers: { 'Authorization': `Basic ${auth}` }
-    })
-    if (res.status === 200 && res.data) {
-      const remote = JSON.parse(res.data)
-      const localTime = book.value.last_read ? new Date(book.value.last_read).getTime() : 0
-      const isLocalFresh = currentChapterIndex.value === 0 && currentPage.value === 0
-      if (remote.durChapterTime && (remote.durChapterTime > localTime + 5000 || isLocalFresh)) {
-        if (remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
-          pendingWebdavPos.value = remote.durChapterPos || 0
-          if (remote.durChapterIndex !== currentChapterIndex.value) {
-            goToChapter(remote.durChapterIndex, true)
-          } else {
-            recalc()
-          }
-        }
-      }
-    }
-  } catch (e) { console.error('WebDAV download err:', e) }
-}
-
-
-
-
-const loadInitialVoices = async () => {
-  try { edgeVoices.value = await (window as any).electronAPI.tts.getEdgeVoices() } catch (e) {}
-  
-  const setSysVoices = () => { systemVoices.value = window.speechSynthesis.getVoices() }
-  if (window.speechSynthesis) {
-    systemVoices.value = window.speechSynthesis.getVoices()
-    window.speechSynthesis.onvoiceschanged = setSysVoices
-  }
-}
-
+// ---- Lifecycle ----
 onMounted(async () => {
   window.electronAPI.win.setControlsVisible(false)
-  await loadSettings(); await fetchBook(); await fetchChapters(); await fetchRules()
+  await loadAllSettings(); await fetchBook(); await fetchChapters(); await fetchRules()
+  if (book.value) currentPage.value = book.value.progress_offset || 0
   await downloadProgressFromWebdav()
   loading.value = false
   setTimeout(calculatePages, 300)
   window.addEventListener('resize', recalc)
   window.addEventListener('keydown', handleKeydown)
-  loadInitialVoices()
+  loadVoices()
   injectHighlightStyles()
 })
 onUnmounted(() => {
-  stopTts()
-  stopAutoPage()
+  stopTts(); stopAutoPage()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
   window.removeEventListener('resize', recalc)
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>
+
 
 <template>
   <div class="reader-root" :style="{ 
