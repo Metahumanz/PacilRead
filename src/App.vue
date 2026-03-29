@@ -103,7 +103,7 @@ onUnmounted(() => {
       <div v-if="showQuitConfirm" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center" @click.self="cancelQuit">
         <div class="bg-white dark:bg-[#2d2d2d] p-6 rounded-xl max-w-sm w-full shadow-2xl border border-black/5 dark:border-white/5 text-center">
           <h3 class="text-xl font-bold mb-2 text-slate-800 dark:text-white">退出阅读器</h3>
-          <p class="text-sm text-slate-500 dark:text-slate-300 mb-6">确定要退出 EleWinReader 吗？</p>
+          <p class="text-sm text-slate-500 dark:text-slate-300 mb-6">确定要退出 PacilRead 吗？</p>
           <div class="flex gap-3">
             <button @click="cancelQuit" class="flex-1 py-2 rounded-lg bg-black/5 hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10 transition-colors font-semibold border border-black/5 dark:border-white/5 text-slate-700 dark:text-white">取消</button>
             <button @click="confirmQuit" class="flex-1 py-2 rounded-lg bg-red-500 hover:bg-red-600 transition-colors font-semibold text-white">退出 (ESC/Enter)</button>
@@ -130,8 +130,8 @@ onUnmounted(() => {
               ☰
             </button>
             <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="isSidebarCollapsed ? 'opacity-0' : 'opacity-100'">
-              <div class="w-8 h-8 rounded-md bg-[#005fb8] flex items-center justify-center font-bold text-lg shadow-sm font-italic text-white">E</div>
-              <h1 class="text-[15px] font-semibold tracking-wide text-slate-800 dark:text-white/90">EleWinReader</h1>
+              <div class="w-8 h-8 rounded-md bg-[#005fb8] flex items-center justify-center font-bold text-lg shadow-sm font-italic text-white">P</div>
+              <h1 class="text-[15px] font-semibold tracking-wide text-slate-800 dark:text-white/90">PacilRead</h1>
             </div>
           </div>
           

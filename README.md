@@ -1,8 +1,8 @@
-# EleWinReader 📚
+# PacilRead 📚
 
 > 一款基于 Windows 11 Fluent Design（云母质感）打造的本地电子书阅读器。
 
-一开始做这个阅读器的初衷很简单：想在 Windows 电脑上好好看会儿电子书，但市面上的软件要么太老旧、界面丑陋，要么功能花里胡哨，甚至夹带一堆广告，要么很贵。于是做出了 EleWinReader。
+一开始做这个阅读器的初衷很简单：想在 Windows 电脑上好好看会儿电子书，但市面上的软件要么太老旧、界面丑陋，要么功能花里胡哨，甚至夹带一堆广告，要么很贵。于是做出了 PacilRead。
 
 它主打**纯净、美观、顺手**，并且在底层对接了安卓端“阅读 (Legado)”的 WebDAV 进度同步协议（仅支持本地txt、epub文件，不支持书源），让你可以直接在电脑和手机之间无缝衔接阅读进度。
 
@@ -17,10 +17,10 @@
 
 ## 🚀 立即下载 (快速开启阅读)
 
-目前 EleWinReader **仅支持 Windows 系统终端 (推荐 Windows 10 / 11)**。
+目前 PacilRead **仅支持 Windows 系统终端 (推荐 Windows 10 / 11)**。
 如果你只是想简单看本小说，不需要配置什么复杂的环境，只需点点鼠标即可开始：
 
-1. 前往本仓库右侧的 [Releases 页面](https://github.com/Metahumanz/EleReaderWin/releases)（发布页）。
+1. 前往本仓库右侧的 [Releases 页面](https://github.com/Metahumanz/PacilRead/releases)（发布页）。
 2. 在最新版本下，找到并下载后缀为 **`.exe`** 的应用程序安装包。
 3. 双击直接安装，马上就能开始点开你心爱的本地 `.txt` 电子书啦！
 
@@ -28,7 +28,7 @@
 
 > **🛠️ 致二次开发的小伙伴们 (开发者指引)：**
 > 如果你想拉取源码自己魔改：
-> `git clone https://github.com/Metahumanz/EleReaderWin.git` -> `npm install` -> `npm run dev` 即可在本地跑起来。
+> `git clone https://github.com/Metahumanz/PacilRead.git` -> `npm install` -> `npm run dev` 即可在本地跑起来。
 > 本项目主要技术栈为：`Vue 3` + `Vite` + `Electron` + `SQLite3` 高性能本地数据库。
 
 ## 📜 许可证

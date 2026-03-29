@@ -277,7 +277,7 @@ app.whenReady().then(async () => {
   // Clean up old updater files
   try {
     const { rmSync } = require('fs')
-    const updaterCacheDir = join(app.getPath('userData'), '../ele-win-reader-updater')
+    const updaterCacheDir = join(app.getPath('userData'), '../pacil-read-updater')
     if (existsSync(updaterCacheDir)) {
       rmSync(updaterCacheDir, { recursive: true, force: true })
       console.log('Cleaned up old updater cache:', updaterCacheDir)

@@ -1,6 +1,6 @@
 {
-  "appId": "com.elewinreader.app",
-  "productName": "EleWinReader",
+  "appId": "com.metahumanz.pacilread",
+  "productName": "PacilRead",
   "directories": {
     "output": "release"
   },
@@ -18,7 +18,7 @@
   "publish": {
     "provider": "github",
     "owner": "Metahumanz",
-    "repo": "EleReaderWin",
+    "repo": "PacilRead",
     "releaseType": "release"
   },
   "artifactName": "${productName}-${version}-Setup.${ext}",
