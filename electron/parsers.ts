@@ -3,6 +3,7 @@ import * as iconv from 'iconv-lite'
 import * as jschardet from 'jschardet'
 import AdmZip from 'adm-zip'
 import { dirname, resolve } from 'path'
+import { PDFParse } from 'pdf-parse'
 
 export interface Chapter {
   title: string
@@ -18,19 +19,7 @@ function linesToHtml(text: string): string {
     .join('\n')
 }
 
-export function parseTxt(filePath: string): Chapter[] {
-  const buffer = fs.readFileSync(filePath)
-
-  const detected = jschardet.detect(buffer)
-  const encoding = detected.encoding || 'UTF-8'
-
-  let content: string
-  try {
-    content = iconv.decode(buffer, encoding)
-  } catch {
-    content = iconv.decode(buffer, 'GB18030')
-  }
-
+export function splitTextIntoChapters(content: string): Chapter[] {
   const rules = [
     /^[ \t　]{0,8}(?:序章|楔子|引子|番外|第\s{0,4}[0-9一二三四五六七八九十百千万零两]+?\s{0,4}(?:章|节(?!课)|卷|回|部|篇|季)|卷\s{0,4}[0-9一二三四五六七八九十百千万零两]+?).{0,30}$/gm,
     /^[ \t　]{0,4}\d{1,5}[:：,.， 、_—\-].{1,30}$/gm,
@@ -90,17 +79,34 @@ export function parseTxt(filePath: string): Chapter[] {
     lastIndex = index
   }
 
-  if (lastIndex < content.length) {
-    const remaining = content.slice(lastIndex).trim()
-    if (remaining.length > 0) {
-      const lastTitle = bestMatches[bestMatches.length - 1]?.title || '未完待续'
-      // If it's literally after the last match, we don't have another title to use. Just append to the last chapter instead of making a new one??
-      // Wait, the previous loop handled up to `content.length` for the last iteration!
-      // So `lastIndex < content.length` is actually handled by the loop.
-    }
+  return chapters
+}
+
+export function parseTxt(filePath: string): Chapter[] {
+  const buffer = fs.readFileSync(filePath)
+
+  const detected = jschardet.detect(buffer)
+  const encoding = detected.encoding || 'UTF-8'
+
+  let content: string
+  try {
+    content = iconv.decode(buffer, encoding)
+  } catch {
+    content = iconv.decode(buffer, 'GB18030')
   }
 
-  return chapters
+  return splitTextIntoChapters(content)
+}
+
+export async function parsePdf(filePath: string): Promise<Chapter[]> {
+  const dataBuffer = fs.readFileSync(filePath)
+  const parser = new PDFParse(new Uint8Array(dataBuffer))
+  const data = await parser.getText()
+  
+  // pdf-parse text is often messy, clean redundant spaces
+  const cleanContent = data.text.replace(/\r/g, '').replace(/([^\n])\n([^\n])/g, '$1$2')
+  
+  return splitTextIntoChapters(cleanContent)
 }
 
 // ---- EPUB parser using adm-zip (no browser deps) ----

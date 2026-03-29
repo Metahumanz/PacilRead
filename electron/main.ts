@@ -3,7 +3,7 @@ import { join, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import { parseTxt, parseEpub } from './parsers'
+import { parseTxt, parseEpub, parsePdf } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES } from './tts'
 import { autoUpdater } from 'electron-updater'
 
@@ -328,6 +328,7 @@ ipcMain.handle('db:importBook', async (_, filePath: string) => {
     let chapters: { title: string; body: string; orderIndex: number }[]
     if (ext === '.txt') chapters = parseTxt(filePath)
     else if (ext === '.epub') chapters = await parseEpub(filePath)
+    else if (ext === '.pdf') chapters = await parsePdf(filePath)
     else throw new Error(`Unsupported: ${ext}`)
     for (const ch of chapters) {
       db.run('INSERT INTO chapters (book_id, title, body, order_index) VALUES (?, ?, ?, ?)', [bookId, ch.title, ch.body, ch.orderIndex])
@@ -338,7 +339,7 @@ ipcMain.handle('db:importBook', async (_, filePath: string) => {
 })
 
 ipcMain.handle('dialog:openFile', async () => {
-  const r = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'E-books', extensions: ['txt', 'epub'] }, { name: 'All Files', extensions: ['*'] }] })
+  const r = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'E-books', extensions: ['txt', 'epub', 'pdf'] }, { name: 'All Files', extensions: ['*'] }] })
   return r.canceled ? null : r.filePaths[0]
 })
 
