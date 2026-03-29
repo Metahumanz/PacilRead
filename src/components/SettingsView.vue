@@ -482,13 +482,25 @@ onMounted(async () => {
           <div class="p-4">
             <div class="flex items-center gap-2 mb-2">
               <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.9</span>
+              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+            </div>
+            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+              <li>全新自定义窗口控制按钮：移除 Windows 原生色块，采用简约个性化图标</li>
+              <li>优化关闭逻辑：界面按钮直接退出，Esc 键保留确认弹窗</li>
+              <li>修复拖拽区域层级导致的按钮点击失效问题</li>
+            </ul>
+          </div>
+
+          <div class="p-4">
+            <div class="flex items-center gap-2 mb-2">
               <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.8</span>
               <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
             </div>
             <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
               <li>重构阅读器核心架构，将 TTS、分页、主题、设置拆分为独立 Composable 模块</li>
-              <li>代码行数从 1722 行优化至约 1000 行，大幅提升可维护性</li>
-              <li>新增设置页更新日志展示</li>
+              <li>精简冗余代码，大幅提升可维护性</li>
+              <li>针对 Windows 系统深度优化的分屏与多显支持</li>
             </ul>
           </div>
 
