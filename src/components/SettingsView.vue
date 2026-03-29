@@ -507,6 +507,20 @@ onMounted(async () => {
             <div class="pb-4 pt-2">
               <div class="flex items-center gap-2 mb-2">
                 <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.1</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+                <li>优化窗口最大化/还原动效，实现平滑圆角与边距过渡</li>
+                <li>菜单栏自适应优化：支持窄窗口下的自动换行排列，防止按钮被遮挡</li>
+                <li>修复阅读界面全屏按钮失效的问题</li>
+                <li>同步原生全屏状态（F11）至 UI 界面</li>
+                <li>更新开发环境 TypeScript 类型定义</li>
+              </ul>
+            </div>
+
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
                 <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.0</span>
                 <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
               </div>
