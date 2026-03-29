@@ -20,19 +20,18 @@
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
     "adm-zip": "^0.5.16",
-    "app-builder-bin": "^5.0.0-alpha.12",
     "electron-updater": "^6.8.3",
     "iconv-lite": "^0.6.3",
     "jschardet": "^3.1.4",
     "pdf-parse": "^2.4.5",
     "sql.js": "^1.11.0",
-    "vue": "^3.5.13",
     "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-vue": "^5.2.1",
+    "app-builder-bin": "^5.0.0-alpha.12",
     "autoprefixer": "^10.4.20",
     "electron": "^35.7.5",
     "electron-builder": "^26.8.1",
@@ -44,6 +43,7 @@
     "vite": "^6.0.7",
     "vite-plugin-electron": "^0.28.8",
     "vite-plugin-electron-renderer": "^0.14.6",
+    "vue": "^3.5.13",
     "vue-tsc": "^2.2.0"
   }
 }
