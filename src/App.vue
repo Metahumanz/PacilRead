@@ -101,6 +101,9 @@ onMounted(async () => {
     window.electronAPI.win.onMaximized((val: boolean) => {
       isWindowMaximized.value = val
     })
+    window.electronAPI.win.onFullScreen((val: boolean) => {
+      isImmersive.value = val
+    })
   } catch {}
 })
 
@@ -132,6 +135,7 @@ onUnmounted(() => {
       <ReaderView
         v-if="currentView === 'reader' && selectedBookId"
         :book-id="selectedBookId"
+        :is-immersive="isImmersive"
         @toggle-immersive="toggleImmersive"
         @go-back="goBack"
       />
@@ -188,7 +192,7 @@ onUnmounted(() => {
         </aside>
         
         <!-- Content Pane -->
-        <main class="flex-1 bg-transparent rounded-tl-lg relative z-0 flex flex-col mt-1 transition-all duration-300">
+        <main :class="[isWindowMaximized ? 'rounded-none mt-0' : 'rounded-tl-lg mt-1']" class="flex-1 bg-transparent relative z-0 flex flex-col maximize-ease">
           <!-- Draggable Top Bar Area with Controls -->
           <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative pr-0">
             <div class="flex items-center h-10 no-drag">
@@ -196,8 +200,10 @@ onUnmounted(() => {
                 <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
               </button>
               <button @click="toggleMaximize" class="w-12 h-10 flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-colors group cursor-pointer">
-                <span v-if="!isWindowMaximized" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
-                <span v-else class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
+                <Transition name="icon-fade" mode="out-in">
+                  <span v-if="!isWindowMaximized" key="max" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
+                  <span v-else key="restore" class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
+                </Transition>
               </button>
               <button @click="closeWindow" class="w-12 h-10 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors group cursor-pointer">
                 <span class="text-[16px] opacity-70 group-hover:opacity-100">✕</span>

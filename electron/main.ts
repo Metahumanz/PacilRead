@@ -149,6 +149,8 @@ function createWindow(): void {
   mainWindow.on('maximize', () => mainWindow?.webContents.send('win:isMaximized', true))
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('win:isMaximized', false))
   mainWindow.on('restore', () => mainWindow?.webContents.send('win:isMaximized', false))
+  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('win:isFullScreen', true))
+  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('win:isFullScreen', false))
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }

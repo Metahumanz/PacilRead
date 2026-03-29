@@ -28,6 +28,7 @@ export interface ElectronAPI {
     close: () => Promise<void>
     getIsMaximized: () => Promise<boolean>
     onMaximized: (cb: (val: boolean) => void) => void
+    onFullScreen: (cb: (val: boolean) => void) => void
   }
   font: {
     getSystemFonts: () => Promise<string[]>
@@ -45,6 +46,15 @@ export interface ElectronAPI {
   }
   webdav: {
     request: (opts: { url: string; method: string; headers?: Record<string, string>; body?: string }) => Promise<{ status?: number; data?: string; error?: string }>
+  }
+  tts: {
+    getEdgeVoices: () => Promise<any[]>
+    synthesize: (text: string, voice?: string, rate?: number) => Promise<{ success: boolean; audioBuffer?: Uint8Array; error?: string }>
+    startMimo: (text: string, apiKey: string) => Promise<void>
+    stopMimo: () => Promise<void>
+    onMimoChunk: (cb: (chunk: Uint8Array) => void) => () => void
+    onMimoDone: (cb: () => void) => () => void
+    onMimoError: (cb: (err: string) => void) => () => void
   }
 }
 

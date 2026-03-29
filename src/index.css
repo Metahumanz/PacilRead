@@ -88,6 +88,22 @@ body {
   opacity: 0;
 }
 
+/* Maximize / Icon Animations */
+.icon-fade-enter-active,
+.icon-fade-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.icon-fade-enter-from,
+.icon-fade-leave-to {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+.maximize-ease {
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

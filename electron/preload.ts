@@ -16,12 +16,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAspectRatio: (ratio: number) => ipcRenderer.invoke('win:setAspectRatio', ratio),
     setControlsVisible: (visible: boolean) => ipcRenderer.invoke('win:setControlsVisible', visible),
     setAlwaysOnTop: (isTop: boolean) => ipcRenderer.invoke('win:setAlwaysOnTop', isTop),
+    setFullScreen: (isFull: boolean) => ipcRenderer.invoke('win:setFullScreen', isFull),
     minimize: () => ipcRenderer.invoke('win:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('win:toggleMaximize'),
     close: () => ipcRenderer.invoke('win:close'),
     getIsMaximized: () => ipcRenderer.invoke('win:getIsMaximized'),
     onMaximized: (cb: (val: boolean) => void) => {
       ipcRenderer.on('win:isMaximized', (_, val) => cb(val))
+    },
+    onFullScreen: (cb: (val: boolean) => void) => {
+      ipcRenderer.on('win:isFullScreen', (_, val) => cb(val))
     }
   },
   font: {
