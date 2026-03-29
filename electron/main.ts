@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } from 
 import { join, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync } from 'fs'
 import { parseTxt, parseEpub, parsePdf } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES } from './tts'
 import { autoUpdater } from 'electron-updater'
@@ -23,6 +23,46 @@ function saveBounds(): void {
     const b = mainWindow.isMaximized() ? mainWindow.getNormalBounds() : mainWindow.getBounds()
     writeFileSync(boundsFile, JSON.stringify(b))
   } catch {}
+}
+
+// ---- Migrate data from old EleWinReader installation ----
+function migrateOldData(): void {
+  const newUserData = app.getPath('userData')
+  const newDbPath = join(newUserData, 'reader.db')
+  // If the new location already has a database, skip migration
+  if (existsSync(newDbPath)) return
+
+  // Possible old userData directories (production: EleWinReader, dev: ele-win-reader)
+  const parentDir = join(newUserData, '..')
+  const oldNames = ['EleWinReader', 'ele-win-reader']
+  let oldUserData: string | null = null
+  for (const name of oldNames) {
+    const candidate = join(parentDir, name)
+    if (existsSync(join(candidate, 'reader.db'))) {
+      oldUserData = candidate
+      break
+    }
+  }
+  if (!oldUserData) return
+
+  console.log(`[Migration] Found old data at: ${oldUserData}`)
+  try {
+    // Ensure new directory exists
+    if (!existsSync(newUserData)) mkdirSync(newUserData, { recursive: true })
+    // Copy key files
+    const filesToMigrate = ['reader.db', 'window-bounds.json']
+    for (const file of filesToMigrate) {
+      const src = join(oldUserData, file)
+      const dst = join(newUserData, file)
+      if (existsSync(src) && !existsSync(dst)) {
+        copyFileSync(src, dst)
+        console.log(`[Migration] Copied: ${file}`)
+      }
+    }
+    console.log('[Migration] Data migration completed successfully')
+  } catch (e) {
+    console.error('[Migration] Failed to migrate old data:', e)
+  }
 }
 
 // ---- Auto updater setup ----
@@ -264,6 +304,7 @@ if (!gotTheLock) {
 }
 
 app.whenReady().then(async () => {
+  migrateOldData()
   createWindow()
   try {
     await initDatabase()
@@ -277,10 +318,15 @@ app.whenReady().then(async () => {
   // Clean up old updater files
   try {
     const { rmSync } = require('fs')
-    const updaterCacheDir = join(app.getPath('userData'), '../pacil-read-updater')
-    if (existsSync(updaterCacheDir)) {
-      rmSync(updaterCacheDir, { recursive: true, force: true })
-      console.log('Cleaned up old updater cache:', updaterCacheDir)
+    const updaterCacheDirs = [
+      join(app.getPath('userData'), '../pacil-read-updater'),
+      join(app.getPath('userData'), '../ele-win-reader-updater')
+    ]
+    for (const dir of updaterCacheDirs) {
+      if (existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true })
+        console.log('Cleaned up old updater cache:', dir)
+      }
     }
   } catch (e) { console.error('Failed to clean updater cache:', e) }
 
