@@ -44,7 +44,7 @@ export function useTTS(opts: {
             r.setStart(node, match.index)
             r.setEnd(node, match.index + match[0].length)
             sentences.push({ text: match[0], range: r })
-          } catch (_) {}
+          } catch (_) { }
         }
       }
     } else {
@@ -159,63 +159,87 @@ export function useTTS(opts: {
     }
   }
 
-  const playMimoTTS = async (text: string) => {
-    if (!text.trim()) return
-    if (!opts.ttsMiMoApiKey.value) return // Handled in startTts
+  const playMimoTTS = async (sentences: SentenceItem[]) => {
+    if (sentences.length === 0) return
+    const originalText = sentences.map(s => s.text).join('')
+    if (!originalText.trim()) return
+    if (!opts.ttsMiMoApiKey.value) return 
 
     return new Promise<void>((resolve, reject) => {
       if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
       if (audioCtx.state === 'suspended') audioCtx.resume()
-      
+
+      let playbackStartedAt = 0
       nextChunkTime = audioCtx.currentTime
-      
+
       let offChunk: () => void
       let offDone: () => void
       let offError: () => void
+      const highlightTimers: any[] = []
 
       const cleanup = () => {
         if (offChunk) offChunk()
         if (offDone) offDone()
         if (offError) offError()
+        highlightTimers.forEach(t => clearTimeout(t))
       }
-      
+
       offChunk = (window as any).electronAPI.tts.onMimoChunk((uint8: Uint8Array) => {
         if (!isPlayingTts || !audioCtx) return
-        
-        // PCM16LE to Float32
+
         const pcm16 = new Int16Array(uint8.buffer, uint8.byteOffset, uint8.byteLength / 2)
         const float32 = new Float32Array(pcm16.length)
         for (let i = 0; i < pcm16.length; i++) {
           float32[i] = pcm16[i] / 32768
         }
-        
+
         const audioBuffer = audioCtx.createBuffer(1, float32.length, 24000)
         audioBuffer.copyToChannel(float32, 0)
-        
+
         const source = audioCtx.createBufferSource()
         source.buffer = audioBuffer
+        source.playbackRate.value = opts.ttsRate.value
         source.connect(audioCtx.destination)
-        
+
         const startTime = Math.max(audioCtx.currentTime, nextChunkTime)
+        if (playbackStartedAt === 0) playbackStartedAt = startTime
         source.start(startTime)
-        nextChunkTime = startTime + audioBuffer.duration
+        nextChunkTime = startTime + (audioBuffer.duration / opts.ttsRate.value)
       })
-      
+
       offDone = (window as any).electronAPI.tts.onMimoDone(() => {
         if (!audioCtx) { cleanup(); resolve(); return }
+        const totalDuration = nextChunkTime - playbackStartedAt
+        if (totalDuration > 0) {
+          const totalLength = originalText.length
+          let cumulativeLength = 0
+          
+          for (let i = 1; i < sentences.length; i++) {
+            cumulativeLength += sentences[i - 1].text.length
+            const delay = (cumulativeLength / totalLength) * totalDuration * 1000
+            const timer = setTimeout(() => {
+              if (isPlayingTts) {
+                highlightRange(sentences[i].range)
+              }
+            }, delay)
+            highlightTimers.push(timer)
+          }
+        }
+
         const waitTime = (nextChunkTime - audioCtx.currentTime) * 1000
         setTimeout(() => {
           cleanup()
           resolve()
         }, Math.max(0, waitTime))
       })
-      
+
       offError = (window as any).electronAPI.tts.onMimoError((err: string) => {
         cleanup()
         reject(new Error(err))
       })
-      
-      ;(window as any).electronAPI.tts.startMimo(text, opts.ttsMiMoApiKey.value)
+
+      const cleanedText = originalText.replace(/[\(\)\[\]（））【】]/g, '"')
+      ;(window as any).electronAPI.tts.startMimo(cleanedText, opts.ttsMiMoApiKey.value)
     })
   }
 
@@ -224,7 +248,7 @@ export function useTTS(opts: {
     currentSentenceIndex = 0
     ttsPrefetchCache.clear()
     if (opts.contentRef.value) getSentencesFromNode(opts.contentRef.value, activeSentences)
-    
+
     if (activeSentences.length > 0) {
       for (let i = 0; i < activeSentences.length; i++) {
         const rect = activeSentences[i].range.getBoundingClientRect()
@@ -235,6 +259,8 @@ export function useTTS(opts: {
       }
     }
   }
+
+  const isFullSentenceEnd = (text: string) => /.*[。！？!?]$/.test(text.trim())
 
   const playNextSentence = async () => {
     if (!isPlayingTts) return
@@ -251,30 +277,46 @@ export function useTTS(opts: {
 
     const item = activeSentences[currentSentenceIndex]
     const rect = item.range.getBoundingClientRect()
-    
+
     const w = opts.containerWidth.value || window.innerWidth
     if (rect.left > w - 20) {
       opts.nextPage()
       await new Promise(res => setTimeout(res, opts.flipDurationMs.value + 50))
     }
-    
+
     if (!isPlayingTts) return
 
     highlightRange(item.range)
-    
+
     const myGen = ++ttsGeneration
 
     if (opts.ttsEngine.value === 'system') {
       await playSystemTTS(item.text)
+      if (myGen === ttsGeneration && isPlayingTts) {
+        currentSentenceIndex++
+        playNextSentence()
+      }
     } else if (opts.ttsEngine.value === 'edge') {
       await playEdgeTTS(item.text, currentSentenceIndex)
+      if (myGen === ttsGeneration && isPlayingTts) {
+        currentSentenceIndex++
+        playNextSentence()
+      }
     } else if (opts.ttsEngine.value === 'mimo') {
-      await playMimoTTS(item.text)
-    }
-    
-    if (myGen === ttsGeneration && isPlayingTts) {
-      currentSentenceIndex++
-      playNextSentence()
+      const group: SentenceItem[] = [activeSentences[currentSentenceIndex]]
+      let nextIdx = currentSentenceIndex + 1
+      while (nextIdx < activeSentences.length) {
+        if (isFullSentenceEnd(activeSentences[nextIdx - 1].text)) break
+        group.push(activeSentences[nextIdx])
+        nextIdx++
+      }
+      
+      await playMimoTTS(group)
+      
+      if (myGen === ttsGeneration && isPlayingTts) {
+        currentSentenceIndex += group.length
+        playNextSentence()
+      }
     }
   }
 
@@ -297,7 +339,7 @@ export function useTTS(opts: {
     if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
     if (window.speechSynthesis) window.speechSynthesis.cancel()
     if (opts.ttsEngine.value === 'mimo') {
-      ;(window as any).electronAPI.tts.stopMimo()
+      ; (window as any).electronAPI.tts.stopMimo()
     }
     clearHighlight()
     for (const [, p] of ttsPrefetchCache) {
@@ -330,8 +372,8 @@ export function useTTS(opts: {
   }
 
   const loadVoices = async () => {
-    try { edgeVoices.value = await (window as any).electronAPI.tts.getEdgeVoices() } catch (e) {}
-    
+    try { edgeVoices.value = await (window as any).electronAPI.tts.getEdgeVoices() } catch (e) { }
+
     const setSysVoices = () => { systemVoices.value = window.speechSynthesis.getVoices() }
     if (window.speechSynthesis) {
       systemVoices.value = window.speechSynthesis.getVoices()

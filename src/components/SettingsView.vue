@@ -507,6 +507,19 @@ onMounted(async () => {
             <div class="pb-4 pt-2">
               <div class="flex items-center gap-2 mb-2">
                 <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.2</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+                <li>MiMo 听书优化：支持全句合成以提升语感连贯性</li>
+                <li>实现“大句合成、小句高亮”：视觉高亮与音频进度精准同步</li>
+                <li>修复 MiMo 模式倍速无效问题，支持 0.5x - 2.5x 变速播放</li>
+                <li>自动括号转义：将半角/全角括号替换为引号，防止 MiMo 语气误判</li>
+              </ul>
+            </div>
+
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
                 <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.1</span>
                 <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
               </div>
