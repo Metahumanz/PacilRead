@@ -395,7 +395,7 @@ const synthesizeToUrl = async (text: string): Promise<string | null> => {
 }
 
 // Start prefetching next N sentences
-const prefetchAhead = (fromIndex: number, count: number = 1) => {
+const prefetchAhead = (fromIndex: number, count: number = 2) => {
   if (ttsEngine.value !== 'edge') return
   for (let i = fromIndex; i < Math.min(fromIndex + count, activeSentences.length); i++) {
     if (!ttsPrefetchCache.has(i)) {
@@ -458,8 +458,8 @@ const playNextSentence = async () => {
     return
   }
 
-  // Prefetch the next sentence while we play the current one
-  prefetchAhead(currentSentenceIndex + 1, 1)
+  // Prefetch the next sentences while we play the current one
+  prefetchAhead(currentSentenceIndex + 1, 2)
 
   const item = activeSentences[currentSentenceIndex]
   const rect = item.range.getBoundingClientRect()
@@ -495,8 +495,8 @@ const startTts = () => {
   ttsActive.value = true
   isPlayingTts = true
   buildSentences()
-  // Prefetch the first sentence immediately
-  prefetchAhead(currentSentenceIndex, 1)
+  // Prefetch the first sentences immediately
+  prefetchAhead(currentSentenceIndex, 2)
   playNextSentence()
 }
 
