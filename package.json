@@ -11,10 +11,11 @@
     "dev": "vite",
     "build": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
+    "clean": "taskkill /F /IM EleWinReader.exe /T /FI \"STATUS eq RUNNING\" 2>NUL & rimraf release dist dist-electron",
     "electron:dev": "vite && electron .",
-    "electron:build": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --win",
-    "electron:build:mac": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --mac",
-    "electron:build:linux": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder --linux"
+    "electron:build": "npm run clean && vue-tsc && vite build && electron-builder --win",
+    "electron:build:mac": "npm run clean && vue-tsc && vite build && electron-builder --mac",
+    "electron:build:linux": "npm run clean && vue-tsc && vite build && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
