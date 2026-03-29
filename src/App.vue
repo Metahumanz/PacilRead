@@ -12,6 +12,7 @@ const selectedBookId = ref<number | null>(null)
 const isImmersive = ref(false)
 const showQuitConfirm = ref(false)
 const isSidebarCollapsed = ref(false)
+const isWindowMaximized = ref(false)
 const toggleSidebar = async () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
   try { await window.electronAPI.db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('sidebarCollapsed', ?)", [isSidebarCollapsed.value ? 'true' : 'false']) } catch {}
@@ -35,6 +36,12 @@ const goBack = () => {
 const toggleImmersive = async (val: boolean) => {
   isImmersive.value = val
   await window.electronAPI.win.setFullScreen(val)
+}
+
+const minimizeWindow = () => window.electronAPI.win.minimize()
+const toggleMaximize = () => window.electronAPI.win.toggleMaximize()
+const closeWindow = () => {
+  window.electronAPI.app.quit()
 }
 
 const handleGlobalKeydown = (e: KeyboardEvent) => {
@@ -87,6 +94,14 @@ onMounted(async () => {
       }
     }
   } catch (e) {}
+
+  // Sync window maximized state
+  try {
+    isWindowMaximized.value = await window.electronAPI.win.getIsMaximized()
+    window.electronAPI.win.onMaximized((val: boolean) => {
+      isWindowMaximized.value = val
+    })
+  } catch {}
 })
 
 onUnmounted(() => {
@@ -123,6 +138,8 @@ onUnmounted(() => {
       
       <!-- PowerToys Style App Layout -->
       <div v-else class="flex h-screen w-full relative">
+        <!-- Custom Window Controls moved to Content Pane -->
+
         <!-- Sidebar -->
         <aside :class="['bg-slate-50 dark:bg-[#1e1e1e] flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-black/5 dark:border-white/5', isSidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
           <div class="px-4 mb-6 flex items-center window-drag relative min-h-[32px]">
@@ -172,8 +189,21 @@ onUnmounted(() => {
         
         <!-- Content Pane -->
         <main class="flex-1 bg-transparent rounded-tl-lg relative z-0 flex flex-col mt-1 transition-all duration-300">
-          <!-- Draggable Top Bar Area -->
-          <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg"></div>
+          <!-- Draggable Top Bar Area with Controls -->
+          <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative pr-0">
+            <div class="flex items-center h-10 no-drag">
+              <button @click="minimizeWindow" class="w-12 h-10 flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-colors group cursor-pointer">
+                <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
+              </button>
+              <button @click="toggleMaximize" class="w-12 h-10 flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-colors group cursor-pointer">
+                <span v-if="!isWindowMaximized" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
+                <span v-else class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
+              </button>
+              <button @click="closeWindow" class="w-12 h-10 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors group cursor-pointer">
+                <span class="text-[16px] opacity-70 group-hover:opacity-100">✕</span>
+              </button>
+            </div>
+          </div>
           
           <div class="flex-1 overflow-y-auto custom-scrollbar px-10 pb-10">
             <Transition name="fade" mode="out-in">

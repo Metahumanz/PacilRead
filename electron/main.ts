@@ -131,11 +131,6 @@ function createWindow(): void {
     show: true,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1e1e1e',
-      symbolColor: '#ffffff',
-      height: 38
-    },
     icon: join(app.getAppPath(), 'public/icon.png'),
     backgroundMaterial: process.platform === 'win32' ? 'mica' : 'none',
     webPreferences: {
@@ -148,6 +143,11 @@ function createWindow(): void {
   // mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('resize', saveBounds)
   mainWindow.on('move', saveBounds)
+  
+  // Send window state to renderer for custom window controls
+  mainWindow.on('maximize', () => mainWindow?.webContents.send('win:isMaximized', true))
+  mainWindow.on('unmaximize', () => mainWindow?.webContents.send('win:isMaximized', false))
+  mainWindow.on('restore', () => mainWindow?.webContents.send('win:isMaximized', false))
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -414,16 +414,19 @@ ipcMain.handle('win:setAlwaysOnTop', async (_, isTop: boolean) => {
   }
 })
 
-// Requirement 4: hide/show titlebar overlay via height
+// Requirement 4: hide/show titlebar (no-op since we use custom buttons now, but kept for compatibility)
 ipcMain.handle('win:setControlsVisible', async (_, visible: boolean) => {
-  if (mainWindow && process.platform === 'win32') {
-    if (visible) {
-      mainWindow.setTitleBarOverlay({ color: '#1e1e1e', symbolColor: '#ffffff', height: 38 })
-    } else {
-      mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: '#00000000', height: 0 })
-    }
-  }
+  // titleBarOverlay is disabled, so we only need to return if the frontend should hide buttons
+  return visible
 })
+
+ipcMain.handle('win:minimize', () => mainWindow?.minimize())
+ipcMain.handle('win:toggleMaximize', () => {
+  if (mainWindow?.isMaximized()) mainWindow.unmaximize()
+  else mainWindow?.maximize()
+})
+ipcMain.handle('win:close', () => mainWindow?.close())
+ipcMain.handle('win:getIsMaximized', () => mainWindow?.isMaximized() || false)
 
 ipcMain.handle('font:getSystemFonts', async () => {
   if (process.platform !== 'win32') return []

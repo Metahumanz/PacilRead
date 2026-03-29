@@ -23,6 +23,11 @@ export interface ElectronAPI {
     setFullScreen: (isFull: boolean) => Promise<void>
     setControlsVisible: (visible: boolean) => Promise<void>
     setAlwaysOnTop: (isTop: boolean) => Promise<void>
+    minimize: () => Promise<void>
+    toggleMaximize: () => Promise<void>
+    close: () => Promise<void>
+    getIsMaximized: () => Promise<boolean>
+    onMaximized: (cb: (val: boolean) => void) => void
   }
   font: {
     getSystemFonts: () => Promise<string[]>
