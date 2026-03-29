@@ -32,10 +32,11 @@ export function useSettings() {
   const autoPageSpeed = ref(10)
 
   // TTS
-  const ttsEngine = ref<'system' | 'edge'>('edge')
+  const ttsEngine = ref<'system' | 'edge' | 'mimo'>('edge')
   const ttsVoice = ref('')
   const ttsRate = ref(1.0)
   const highlightColor = ref('#3b82f6')
+  const ttsMiMoApiKey = ref('')
 
   // Navigation keys
   const nextKeys = ref<string[]>(['ArrowRight', 'PageDown', ' '])
@@ -91,6 +92,7 @@ export function useSettings() {
           if (s.key === 'reader_ttsVoice') ttsVoice.value = s.value || ''
           if (s.key === 'reader_ttsRate') ttsRate.value = parseFloat(s.value) || 1.0
           if (s.key === 'reader_highlightColor') highlightColor.value = s.value || '#3b82f6'
+          if (s.key === 'reader_ttsMiMoApiKey') ttsMiMoApiKey.value = s.value || ''
           if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
           if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
           if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
@@ -140,6 +142,7 @@ export function useSettings() {
     saveSetting('reader_ttsVoice', ttsVoice.value)
     saveSetting('reader_ttsRate', ttsRate.value)
     saveSetting('reader_highlightColor', highlightColor.value)
+    saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value)
   }
 
   return {
@@ -151,7 +154,7 @@ export function useSettings() {
     // Auto-page
     autoPageSpeed,
     // TTS
-    ttsEngine, ttsVoice, ttsRate, highlightColor,
+    ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
     // Keys
     nextKeys, prevKeys,
     // UI

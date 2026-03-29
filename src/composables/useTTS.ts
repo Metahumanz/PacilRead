@@ -7,11 +7,12 @@ interface SentenceItem { text: string; range: Range }
 export function useTTS(opts: {
   contentRef: Ref<HTMLElement | null>
   containerWidth: Ref<number>
-  ttsEngine: Ref<'system' | 'edge'>
+  ttsEngine: Ref<'system' | 'edge' | 'mimo'>
   ttsVoice: Ref<string>
   ttsRate: Ref<number>
   highlightColor: Ref<string>
   flipDurationMs: Ref<number>
+  ttsMiMoApiKey: Ref<string>
   nextPage: () => void
   slideToNextChapter: () => void
 }) {
@@ -23,6 +24,9 @@ export function useTTS(opts: {
 
   const edgeVoices = ref<any[]>([])
   const systemVoices = ref<SpeechSynthesisVoice[]>([])
+
+  let audioCtx: AudioContext | null = null
+  let nextChunkTime = 0
 
   let activeSentences: SentenceItem[] = []
   let currentSentenceIndex = 0
@@ -155,6 +159,66 @@ export function useTTS(opts: {
     }
   }
 
+  const playMimoTTS = async (text: string) => {
+    if (!text.trim()) return
+    if (!opts.ttsMiMoApiKey.value) return // Handled in startTts
+
+    return new Promise<void>((resolve, reject) => {
+      if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      if (audioCtx.state === 'suspended') audioCtx.resume()
+      
+      nextChunkTime = audioCtx.currentTime
+      
+      let offChunk: () => void
+      let offDone: () => void
+      let offError: () => void
+
+      const cleanup = () => {
+        if (offChunk) offChunk()
+        if (offDone) offDone()
+        if (offError) offError()
+      }
+      
+      offChunk = (window as any).electronAPI.tts.onMimoChunk((uint8: Uint8Array) => {
+        if (!isPlayingTts || !audioCtx) return
+        
+        // PCM16LE to Float32
+        const pcm16 = new Int16Array(uint8.buffer, uint8.byteOffset, uint8.byteLength / 2)
+        const float32 = new Float32Array(pcm16.length)
+        for (let i = 0; i < pcm16.length; i++) {
+          float32[i] = pcm16[i] / 32768
+        }
+        
+        const audioBuffer = audioCtx.createBuffer(1, float32.length, 24000)
+        audioBuffer.copyToChannel(float32, 0)
+        
+        const source = audioCtx.createBufferSource()
+        source.buffer = audioBuffer
+        source.connect(audioCtx.destination)
+        
+        const startTime = Math.max(audioCtx.currentTime, nextChunkTime)
+        source.start(startTime)
+        nextChunkTime = startTime + audioBuffer.duration
+      })
+      
+      offDone = (window as any).electronAPI.tts.onMimoDone(() => {
+        if (!audioCtx) { cleanup(); resolve(); return }
+        const waitTime = (nextChunkTime - audioCtx.currentTime) * 1000
+        setTimeout(() => {
+          cleanup()
+          resolve()
+        }, Math.max(0, waitTime))
+      })
+      
+      offError = (window as any).electronAPI.tts.onMimoError((err: string) => {
+        cleanup()
+        reject(new Error(err))
+      })
+      
+      ;(window as any).electronAPI.tts.startMimo(text, opts.ttsMiMoApiKey.value)
+    })
+  }
+
   const buildSentences = () => {
     activeSentences = []
     currentSentenceIndex = 0
@@ -202,8 +266,10 @@ export function useTTS(opts: {
 
     if (opts.ttsEngine.value === 'system') {
       await playSystemTTS(item.text)
-    } else {
+    } else if (opts.ttsEngine.value === 'edge') {
       await playEdgeTTS(item.text, currentSentenceIndex)
+    } else if (opts.ttsEngine.value === 'mimo') {
+      await playMimoTTS(item.text)
     }
     
     if (myGen === ttsGeneration && isPlayingTts) {
@@ -215,6 +281,9 @@ export function useTTS(opts: {
   // ---- Public API ----
   const startTts = () => {
     if (ttsActive.value) { stopTts(); return }
+    if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) {
+      return 'MIMO_KEY_MISSING'
+    }
     ttsActive.value = true
     isPlayingTts = true
     buildSentences()
@@ -227,6 +296,9 @@ export function useTTS(opts: {
     isPlayingTts = false
     if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
     if (window.speechSynthesis) window.speechSynthesis.cancel()
+    if (opts.ttsEngine.value === 'mimo') {
+      ;(window as any).electronAPI.tts.stopMimo()
+    }
     clearHighlight()
     for (const [, p] of ttsPrefetchCache) {
       p.then(url => { if (url) URL.revokeObjectURL(url) })

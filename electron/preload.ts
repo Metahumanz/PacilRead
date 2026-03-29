@@ -45,6 +45,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   tts: {
     getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
-    synthesize: (text: string, voice?: string, rate?: number) => ipcRenderer.invoke('tts:synthesize', { text, voice, rate })
+    synthesize: (text: string, voice?: string, rate?: number) => ipcRenderer.invoke('tts:synthesize', { text, voice, rate }),
+    startMimo: (text: string, apiKey: string) => ipcRenderer.invoke('tts:start-mimo', { text, apiKey }),
+    stopMimo: () => ipcRenderer.invoke('tts:stop-mimo'),
+    onMimoChunk: (cb: (chunk: Uint8Array) => void) => {
+      const listener = (_: any, chunk: Uint8Array) => cb(chunk)
+      ipcRenderer.on('tts:mimo-chunk', listener)
+      return () => ipcRenderer.removeListener('tts:mimo-chunk', listener)
+    },
+    onMimoDone: (cb: () => void) => {
+      const listener = () => cb()
+      ipcRenderer.on('tts:mimo-done', listener)
+      return () => ipcRenderer.removeListener('tts:mimo-done', listener)
+    },
+    onMimoError: (cb: (err: string) => void) => {
+      const listener = (_: any, err: string) => cb(err)
+      ipcRenderer.on('tts:mimo-error', listener)
+      return () => ipcRenderer.removeListener('tts:mimo-error', listener)
+    }
   }
 })

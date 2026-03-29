@@ -22,6 +22,7 @@ const updateReady = ref(false)
 const isDownloading = ref(false)
 const autoOpenLastRead = ref(false)
 const silentUpdate = ref(false)
+const ttsMiMoApiKey = ref('')
 
 const webdavUrl = ref('')
 const webdavDir = ref('Books')
@@ -51,6 +52,7 @@ const loadSettings = async () => {
       if (s.key === 'webdavSync') webdavSync.value = s.value === 'true'
       if (s.key === 'autoOpenLastRead') autoOpenLastRead.value = s.value === 'true'
       if (s.key === 'silentUpdate') silentUpdate.value = s.value === 'true'
+      if (s.key === 'reader_ttsMiMoApiKey') ttsMiMoApiKey.value = s.value || ''
       if (s.key === 'hideKeyHints') showKeyHints.value = s.value !== 'true'
     }
   } catch (e) { console.error(e) }
@@ -168,6 +170,10 @@ const installNow = () => {
 
 const toggleSilentUpdate = async () => {
   await saveSetting('silentUpdate', silentUpdate.value ? 'true' : 'false')
+}
+
+const saveMiMoKey = async () => {
+  await saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value.trim())
 }
 
 // Replacement rules management
@@ -379,7 +385,30 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 4. 正则清洗 -->
+    <!-- 4. 语音朗读 -->
+    <div class="mb-8">
+      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">语音朗读</h3>
+      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400 divide-y divide-white/[0.04]">
+        <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+          <div class="flex items-start gap-4">
+            <span class="text-xl opacity-80 mt-0.5">🎙️</span>
+            <div class="flex-1">
+              <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">小米 MiMo TTS 配置</div>
+              <div class="text-[12px] text-slate-500 dark:text-white/50 mt-0.5 mb-3">填写您的 API Key 以启用小米流式语音合成功能</div>
+              <div class="bg-black/10 p-4 rounded-lg border border-black/5 dark:border-white/5">
+                <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">API Key</label>
+                <div class="flex gap-2">
+                  <input type="password" v-model="ttsMiMoApiKey" @change="saveMiMoKey" placeholder="在此输入您的 API Key..." class="flex-1 bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                  <a href="https://platform.xiaomimimo.com/#/console/api-keys" target="_blank" class="px-3 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-white/20 text-white rounded-md text-[11px] transition-colors flex items-center border border-black/5 dark:border-white/5">获取 Key</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. 正则清洗 -->
     <div class="mb-8">
       <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">内容处理 (正则过滤)</h3>
       <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400 overflow-hidden">
@@ -423,11 +452,13 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 5. 关于 -->
-    <div class="mb-4">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">关于应用</h3>
+    <!-- 6. 关于与更新 -->
+    <div class="mb-8">
+      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">关于与更新</h3>
       <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400 divide-y divide-black/5 dark:divide-white/[0.04]">
-        <div class="flex items-center justify-between p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+        
+        <!-- 关于基础 -->
+        <div class="flex items-center justify-between p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors font-medium">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🔄</span>
             <div>
@@ -450,13 +481,8 @@ onMounted(async () => {
             </a>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- 6. 更新行为 -->
-    <div class="mb-4">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">更新行为</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400">
+        <!-- 行为控制 -->
         <div class="flex items-center justify-between p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🤫</span>
@@ -470,260 +496,84 @@ onMounted(async () => {
             <div class="w-10 h-5 bg-black/10 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-[20px] after:absolute after:top-1 after:left-1 after:bg-slate-600 dark:after:bg-white/80 peer-checked:after:bg-white after:rounded-full after:h-3 after:w-3 peer-checked:after:scale-125 after:transition-all peer-checked:bg-[#005fb8] border border-black/30 dark:border-white/30 peer-checked:border-[#005fb8]"></div>
           </label>
         </div>
-      </div>
-    </div>
 
-    <!-- 更新日志 -->
-    <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">更新日志</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm">
-        <div class="divide-y divide-black/5 dark:divide-white/[0.04] max-h-[500px] overflow-y-auto changelog-scroll">
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.9</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>全新自定义窗口控制按钮：移除 Windows 原生色块，采用简约个性化图标</li>
-              <li>优化关闭逻辑：界面按钮直接退出，Esc 键保留确认弹窗</li>
-              <li>修复拖拽区域层级导致的按钮点击失效问题</li>
-            </ul>
+        <!-- 日志 -->
+        <div class="p-4 bg-black/5 dark:bg-black/10">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xl opacity-80">📜</span>
+            <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">版本演进日志</div>
           </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.8</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+          <div class="divide-y divide-black/5 dark:divide-white/[0.04] max-h-[400px] overflow-y-auto changelog-scroll pr-2">
+            <div class="pb-4 pt-2">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.0</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+                <li>集成小米 MiMo V2 TTS，支持超低延迟流式语音合成</li>
+                <li>重整设置页面，整合关于、更新行为与日志板块</li>
+                <li>优化阅读界面所有弹出面板的自适应高度与滑动支持</li>
+                <li>增加 MiMo API Key 配置与引导</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>重构阅读器核心架构，将 TTS、分页、主题、设置拆分为独立 Composable 模块</li>
-              <li>精简冗余代码，大幅提升可维护性</li>
-              <li>针对 Windows 系统深度优化的分屏与多显支持</li>
-            </ul>
-          </div>
 
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.7</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.9</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+                <li>全新自定义窗口控制按钮：移除 Windows 原生色块，采用简约个性化图标</li>
+                <li>优化关闭逻辑：界面按钮直接退出，Esc 键保留确认弹窗</li>
+                <li>修复拖拽区域层级导致的按钮点击失效问题</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>TTS 预取缓冲增加至 2 句，大幅减少朗读停顿</li>
-              <li>重命名为 PacilRead，新增旧版 EleWinReader 数据自动迁移</li>
-              <li>精简依赖包，减小打包体积</li>
-            </ul>
-          </div>
 
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.6</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.8</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+                <li>重构阅读器核心架构，将 TTS、分页、主题、设置拆分为独立 Composable 模块</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复 Edge TTS 音频合成与播放</li>
-              <li>新增 TTS 预取机制，消除句间延迟</li>
-              <li>翻页动画速度三档可调（偏快 / 默认 / 偏慢）</li>
-            </ul>
-          </div>
 
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.5</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.7</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+                <li>TTS 预取缓冲增加至 2 句，大幅减少朗读停顿</li>
+                <li>重命名为 PacilRead，新增旧版 EleWinReader 数据自动迁移</li>
+                <li>精简依赖包，减小打包体积</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复 Edge TTS IPC 序列化与 WebSocket 二进制传输</li>
-              <li>修复 TTS 语音与句子同步、点击跳读功能</li>
-            </ul>
-          </div>
 
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.3</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.3</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+                <li>新增触摸操作支持，实现九宫格点击导航</li>
+                <li>添加 GPL-3.0 开源许可</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>新增触摸操作支持，实现九宫格点击导航</li>
-              <li>新增仿真翻页（卷曲）动画效果</li>
-              <li>添加 GPL-3.0 开源许可</li>
-            </ul>
-          </div>
 
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.2</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.1.0</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
+                <li>从 Tauri + React 迁移至 Electron + Vue 3</li>
+                <li>实现 TXT/EPUB 格式解析</li>
+              </ul>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复检查更新按钮在下载过程中重复出现的问题</li>
-            </ul>
           </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.1</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>阅读器菜单新增「置顶」胶囊切换按钮</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.3.0</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-28</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复启动时窗口不可见的问题</li>
-              <li>修复更新后残留僵尸进程阻止启动</li>
-              <li>自动翻页与 TTS 听书功能基础实现</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.20</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-27</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>隐藏阅读器标题栏</li>
-              <li>多显示器窗口位置校正</li>
-              <li>窗口大小响应式自适应</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.19</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复标题栏配色、屏幕边界检测</li>
-              <li>排版页面设置键同步、主题保存修复</li>
-              <li>全屏图标优化</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.18</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>单实例锁定、多屏检测、侧栏记忆</li>
-              <li>排版面板全参数控制、静默更新</li>
-              <li>配色交换与菜单布局优化</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.17</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>完整的浅色主题适配</li>
-              <li>阅读器标题栏悬浮动画</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.16</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>修复窗口拖拽与全屏覆盖层问题</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.13</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>TXT 解析规则对齐阅读 (Legado)，更精准的章节分割</li>
-              <li>新增自动打开上次阅读设置项</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.10 – v0.2.12</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>Legado 兼容 WebDAV 阅读进度云同步</li>
-              <li>修复 WebDAV 子文件夹支持与速率限制</li>
-              <li>修复同步 JSON 格式严格匹配</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.6 – v0.2.9</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>WebDAV 阅读进度云同步（兼容 Legado）</li>
-              <li>翻页覆盖模式与滑动揭示动画</li>
-              <li>自定义翻页快捷键</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.2.0 – v0.2.5</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>Windows 11 Fluent Design 全面改版</li>
-              <li>快捷键指南弹窗</li>
-              <li>全局 ESC 导航与退出确认</li>
-              <li>空格翻页、用户自定义主题</li>
-              <li>高斯模糊背景、离线资源打包</li>
-              <li>全新应用图标、书架与设置滑入动画</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.1.12 – v0.1.15</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>EPUB 解析器重写（adm-zip），修复非标准 EPUB</li>
-              <li>全文搜索与替换规则功能</li>
-              <li>书籍置顶/取消封面</li>
-              <li>双页布局、阅读预设主题</li>
-              <li>覆盖模式同步、章节滑动去重</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.1.5 – v0.1.11</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>目录面板、字色/背景仅阅读器生效</li>
-              <li>三容器滑动切章、字重/字体修复</li>
-              <li>无缝切章、键盘翻页、目录即时定位</li>
-              <li>页级进度条、自定义封面、自动更新</li>
-              <li>ESC 退出全屏、修复自动更新发布</li>
-              <li>覆盖翻页适配背景图、自定义底色</li>
-              <li>修复缩进/切章跳转/翻页模式切换</li>
-            </ul>
-          </div>
-
-          <div class="p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.1.0 – v0.1.4</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1 pl-4 list-disc">
-              <li>从 Tauri + React 迁移至 Electron + Vue 3</li>
-              <li>实现 TXT/EPUB 格式解析</li>
-              <li>sql.js 数据库集成</li>
-              <li>分页引擎与排版设置面板</li>
-              <li>沉浸模式、窗口位置记忆</li>
-              <li>隐藏阅读器顶部导航栏</li>
-            </ul>
-          </div>
-
         </div>
       </div>
     </div>

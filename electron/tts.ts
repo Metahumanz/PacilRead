@@ -140,3 +140,73 @@ export async function synthesizeEdgeTTS(
     }
   })
 }
+
+export async function synthesizeMimoStreaming(
+  text: string,
+  apiKey: string,
+  onChunk: (chunk: Buffer) => void,
+  onDone: () => void,
+  onError: (err: any) => void,
+  signal?: AbortSignal
+) {
+  try {
+    const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'mimo-v2-tts',
+        messages: [{ role: 'assistant', content: text }],
+        audio: { format: 'pcm16', voice: 'mimo_default' },
+        stream: true
+      }),
+      signal
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`MiMo API Error (${response.status}): ${errText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Response body is empty');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') continue;
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const json = JSON.parse(trimmed.substring(6));
+            const audioDataB64 = json.choices?.[0]?.delta?.audio?.data;
+            if (audioDataB64) {
+              const audioBuffer = Buffer.from(audioDataB64, 'base64');
+              onChunk(audioBuffer);
+            }
+          } catch (e) {
+            console.error('Error parsing MiMo SSE line:', e);
+          }
+        }
+      }
+    }
+    onDone();
+  } catch (err) {
+    if ((err as any).name === 'AbortError') {
+       console.log('[MiMo] Request aborted');
+    } else {
+       onError(err);
+    }
+  }
+}

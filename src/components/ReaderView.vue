@@ -47,7 +47,7 @@ const {
   fontFamily, fontColor, coverColor, bgImage, blurAmount,
   textAlign, alignBottom, pageMode, doublePageStep,
   flipMode, flipSpeed, autoPageSpeed,
-  ttsEngine, ttsVoice, ttsRate, highlightColor,
+  ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   customThemes, systemFonts,
@@ -197,9 +197,21 @@ const tts = useTTS({
   contentRef, containerWidth,
   ttsEngine, ttsVoice, ttsRate, highlightColor,
   flipDurationMs: computed(() => flipDurationMap.value.ms),
+  ttsMiMoApiKey,
   nextPage, slideToNextChapter,
 })
-const { ttsActive, edgeVoices, systemVoices, startTts, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts
+const { ttsActive, edgeVoices, systemVoices, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts
+
+const startTts = () => {
+  const res = tts.startTts()
+  if (res === 'MIMO_KEY_MISSING') {
+    if (confirm('尚未配置小米 MiMo API Key，是否立即前往设置？')) {
+      showMenu.value = true
+      openPanel('tts')
+      window.open('https://platform.xiaomimimo.com/#/console/api-keys', '_blank')
+    }
+  }
+}
 
 // ---- Auto Page ----
 let autoPageTimer: number | null = null
@@ -703,6 +715,7 @@ onUnmounted(() => {
                 <div class="btn-group">
                   <button @click="ttsEngine='edge'; saveTtsSettings()" :class="{active: ttsEngine==='edge'}">Edge 云端</button>
                   <button @click="ttsEngine='system'; saveTtsSettings()" :class="{active: ttsEngine==='system'}">本地系统</button>
+                  <button @click="ttsEngine='mimo'; saveTtsSettings()" :class="{active: ttsEngine==='mimo'}">小米 MiMo</button>
                 </div>
               </div>
               <div class="sr">
@@ -711,10 +724,11 @@ onUnmounted(() => {
                   <option value="">随机/默认 (Xiaoxiao)</option>
                   <option v-for="v in edgeVoices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
                 </select>
-                <select v-else v-model="ttsVoice" @change="saveTtsSettings" class="ss">
+                <select v-else-if="ttsEngine==='system'" v-model="ttsVoice" @change="saveTtsSettings" class="ss">
                   <option value="">跟随系统默认</option>
                   <option v-for="v in systemVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
                 </select>
+                <div v-else class="ss-info">固定 mimo-v2-tts / mimo_default</div>
               </div>
               <div class="sr">
                 <label>语速</label>
@@ -876,7 +890,7 @@ onUnmounted(() => {
 .ftActive { background:#3b82f6!important; border-color:#3b82f6!important; color:white!important; }
 
 /* Search panel */
-.search-p { position:absolute; left:20px; top:60px; bottom:120px; width:360px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
+.search-p { position:absolute; left:20px; top:60px; max-height: calc(100% - 180px); width:360px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; touch-action: pan-y; }
 .search-input-row { display:flex; gap:8px; margin-bottom:12px; }
 .search-input { flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:8px 14px; font-size:13px; color:white; outline:none; transition:border-color .2s; }
 .search-input:focus { border-color:#3b82f6; }
@@ -895,8 +909,8 @@ onUnmounted(() => {
 .sr-snip { font-size:11px; opacity:0.6; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* TOC */
-.toc-p { position:absolute; left:20px; top:60px; bottom:120px; width:300px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
-.toc-l { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:2px; }
+.toc-p { position:absolute; left:20px; top:60px; max-height: calc(100% - 180px); width:300px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; touch-action: pan-y; }
+.toc-l { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:2px; -webkit-overflow-scrolling: touch; }
 .toc-l::-webkit-scrollbar { width:4px; }
 .toc-l::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
 .toc-i { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; border:none; background:transparent; color:rgba(255,255,255,0.6); font-size:13px; cursor:pointer; text-align:left; transition:all .15s; }
@@ -906,8 +920,8 @@ onUnmounted(() => {
 .tn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* Replacement rules panel */
-.rules-p { position:absolute; right:20px; top:60px; bottom:120px; width:380px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; overflow:hidden; }
-.rule-form { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06); }
+.rules-p { position:absolute; right:20px; top:60px; max-height: calc(100% - 180px); width:380px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; overflow:hidden; touch-action: pan-y; }
+.rule-form { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
 .rule-input { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:8px 14px; font-size:13px; color:white; outline:none; transition:border-color .2s; }
 .rule-input:focus { border-color:#3b82f6; }
 .rule-input::placeholder { color:rgba(255,255,255,0.3); }
@@ -938,7 +952,7 @@ onUnmounted(() => {
 .rule-del:hover { color:#ef4444; }
 
 /* Styling */
-.sty-p { position:absolute; right:20px; top:60px; bottom:120px; width:340px; overflow-y:auto; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:20px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); }
+.sty-p { position:absolute; right:20px; top:60px; max-height: calc(100% - 180px); width:340px; overflow-y:auto; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:20px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 .sty-p::-webkit-scrollbar { width:4px; }
 .sty-p::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
 .ph { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
@@ -956,6 +970,7 @@ onUnmounted(() => {
 .ss { flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:8px 12px; font-size:13px; color:white; outline:none; cursor:pointer; }
 .ss option { background:#0f172a; color:white; }
 .sc { width:36px; height:30px; border:1px solid rgba(255,255,255,0.15); border-radius:8px; background:transparent; cursor:pointer; padding:2px; }
+.ss-info { flex:1; padding:8px 12px; font-size:12px; color:rgba(255,255,255,0.4); font-style:italic; }
 .sw-note { font-size:10px; color:rgba(255,255,255,0.3); margin-left:4px; }
 .sp-divider { height:1px; background:rgba(255,255,255,0.06); margin:20px 0; }
 .btn-group { display:flex; gap:6px; flex:1; }

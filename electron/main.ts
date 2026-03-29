@@ -4,12 +4,13 @@ import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync } from 'fs'
 import { parseTxt, parseEpub, parsePdf } from './parsers'
-import { synthesizeEdgeTTS, EDGE_VOICES } from './tts'
+import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database | null = null
 let dbPath: string = ''
+let mimoAbortController: AbortController | null = null
 
 // ---- Window bounds persistence ----
 const boundsFile = join(app.getPath('userData'), 'window-bounds.json')
@@ -480,5 +481,34 @@ ipcMain.handle('tts:synthesize', async (_, args: { text: string; voice?: string;
   } catch (err: any) {
     console.error('TTS error:', err)
     return { success: false, error: String(err) }
+  }
+})
+
+ipcMain.handle('tts:start-mimo', async (event, args: { text: string; apiKey: string }) => {
+  if (mimoAbortController) mimoAbortController.abort()
+  mimoAbortController = new AbortController()
+
+  synthesizeMimoStreaming(
+    args.text,
+    args.apiKey,
+    (chunk) => {
+      event.sender.send('tts:mimo-chunk', new Uint8Array(chunk))
+    },
+    () => {
+      event.sender.send('tts:mimo-done')
+      mimoAbortController = null
+    },
+    (err) => {
+      event.sender.send('tts:mimo-error', String(err))
+      mimoAbortController = null
+    },
+    mimoAbortController.signal
+  )
+})
+
+ipcMain.handle('tts:stop-mimo', async () => {
+  if (mimoAbortController) {
+    mimoAbortController.abort()
+    mimoAbortController = null
   }
 })
