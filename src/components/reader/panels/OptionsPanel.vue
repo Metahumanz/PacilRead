@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'close'): void
 }>()
 

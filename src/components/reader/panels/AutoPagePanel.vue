@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { useSettings } from '../../../composables/useSettings'
 
-const props = defineProps<{
+defineProps<{
   autoPageActive: boolean
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'close'): void
   (e: 'toggle'): void
 }>()

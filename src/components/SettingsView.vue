@@ -10,7 +10,7 @@ import SettingsTTS from './settings/SettingsTTS.vue'
 import SettingsRules from './settings/SettingsRules.vue'
 import SettingsAbout from './settings/SettingsAbout.vue'
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'back'): void
   (e: 'refresh-settings'): void
 }>()

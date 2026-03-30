@@ -7,7 +7,7 @@ defineProps<{
   systemVoices: any[]
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'close'): void
   (e: 'start'): void
   (e: 'stop'): void

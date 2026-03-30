@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { useSettings } from '../../composables/useSettings'
+
 
 const { setAspectRatio } = defineProps<{
   setAspectRatio: (ratio: number) => void
 }>()
-
-const settings = useSettings()
 </script>
 
 <template>
