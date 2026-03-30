@@ -507,6 +507,19 @@ onMounted(async () => {
             <div class="pb-4 pt-2">
               <div class="flex items-center gap-2 mb-2">
                 <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.4</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+                <li>WebDAV 全量同步：支持书架、书籍、设置、主题及背景的一键备份与恢复</li>
+                <li>同步颗粒化控制：新增“胶囊开关”，支持自定义同步内容，保护多端偏好一致性</li>
+                <li>导入增强：开启 PDF 拖放导入支持，实现基于路径的自动去重逻辑</li>
+                <li>底层架构升级：支持数据库二进制导出/导入，提升同步效率</li>
+              </ul>
+            </div>
+
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
                 <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.3</span>
                 <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
               </div>
