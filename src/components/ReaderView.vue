@@ -709,6 +709,14 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="sr">
+                <label>章节标题</label>
+                <div class="btn-group">
+                  <button @click="chapterTitleDisplay='left'; updateStyling()" :class="{active: chapterTitleDisplay==='left'}">靠左</button>
+                  <button @click="chapterTitleDisplay='center'; updateStyling()" :class="{active: chapterTitleDisplay==='center'}">居中</button>
+                  <button @click="chapterTitleDisplay='none'; updateStyling()" :class="{active: chapterTitleDisplay==='none'}">隐藏</button>
+                </div>
+              </div>
+              <div class="sr">
                 <label>垂直对齐</label>
                 <div class="btn-group">
                   <button @click="alignBottom=false; updateStyling()" :class="{active: !alignBottom}">常规（靠上）</button>

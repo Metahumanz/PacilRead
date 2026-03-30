@@ -21,6 +21,7 @@ const doublePageStep = ref<1 | 2>(2)
 const flipMode = ref<'slide' | 'cover'>('slide')
 const pIndent = ref(2)
 const pSpacing = ref(0.8)
+const chapterTitleDisplay = ref<'left' | 'center' | 'none'>('left')
 
 // Custom themes
 interface CustomTheme {
@@ -53,6 +54,7 @@ const saveAll = async () => {
   await saveSetting('reader_flipMode', flipMode.value)
   await saveSetting('reader_pIndent', pIndent.value.toString())
   await saveSetting('reader_pSpacing', pSpacing.value.toString())
+  await saveSetting('chapterTitleDisplay', chapterTitleDisplay.value)
 }
 
 const browseImage = async () => {
@@ -79,7 +81,7 @@ onMounted(async () => {
       'reader_marginX', 'reader_marginY', 'reader_fontFamily', 'reader_fontColor',
       'reader_coverColor', 'bgImage', 'reader_blurAmount', 'reader_textAlign',
       'reader_alignBottom', 'reader_pageMode', 'reader_doublePageStep', 'reader_flipMode',
-      'reader_pIndent', 'reader_pSpacing', 'custom_themes'
+      'reader_pIndent', 'reader_pSpacing', 'chapterTitleDisplay', 'custom_themes'
     ]
     const placeholders = allKeys.map(() => '?').join(',')
     const s = await window.electronAPI.db.query(`SELECT * FROM settings WHERE key IN (${placeholders})`, allKeys)
@@ -103,6 +105,7 @@ onMounted(async () => {
         case 'reader_flipMode': flipMode.value = row.value as any; break
         case 'reader_pIndent': pIndent.value = Number(row.value); break
         case 'reader_pSpacing': pSpacing.value = Number(row.value); break
+        case 'chapterTitleDisplay': chapterTitleDisplay.value = row.value as any; break
         case 'custom_themes': try { customThemes.value = JSON.parse(row.value) || [] } catch (_) {} break
       }
     }
@@ -170,7 +173,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 columnCount: pageMode === 'double' ? 2 : 1,
                 columnGap: pageMode === 'double' ? '3rem' : 'normal'
               }">
-            <h1 class="text-center font-bold mb-10 opacity-70" :style="{ fontSize: (fontSize * 1.4) + 'px', color: fontColor }">第一章 深渊的呼唤</h1>
+            <h1 v-if="chapterTitleDisplay !== 'none'" class="font-bold mb-10 opacity-70" :style="{ fontSize: (fontSize * 1.4) + 'px', color: fontColor, textAlign: chapterTitleDisplay }">第一章 深渊的呼唤</h1>
             <p :style="{ marginBottom: pSpacing + 'em' }">随着一阵白光闪过，这片死寂的空间里突然多出了几分鲜活的生气。他睁开眼睛，环顾四周，这不仅仅是单纯视觉的反馈，那股厚重潮湿的空气顺着鼻腔直达肺部。</p>
             <p :style="{ marginBottom: pSpacing + 'em' }">"就是这里了吗？"他低声喃喃自语，目光落在了远处那座隐约可见的轮廓上。那是一座高塔，直入云霄，仿佛要刺破这令人窒息的天穹。</p>
             <p :style="{ marginBottom: pSpacing + 'em' }">排版，是电子阅读体验的至高灵魂。优秀的字阶、充裕的行高以及恰到好处的缩进，能够最大程度地降低读者的视觉疲劳。</p>
@@ -361,6 +364,19 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <div class="flex gap-2">
               <button @click="textAlign='left'; saveAll()" :class="textAlign==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
               <button @click="textAlign='justify'; saveAll()" :class="textAlign==='justify' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">两端</button>
+            </div>
+          </div>
+         </div>
+
+         <!-- Chapter Title Align -->
+         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+          <div class="flex items-center gap-4">
+            <span class="text-xl opacity-80">🔖</span>
+            <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">章节标题</div>
+            <div class="flex gap-2">
+              <button @click="chapterTitleDisplay='left'; saveAll()" :class="chapterTitleDisplay==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
+              <button @click="chapterTitleDisplay='center'; saveAll()" :class="chapterTitleDisplay==='center' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">居中</button>
+              <button @click="chapterTitleDisplay='none'; saveAll()" :class="chapterTitleDisplay==='none' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">隐藏</button>
             </div>
           </div>
          </div>
