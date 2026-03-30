@@ -11,7 +11,7 @@ const {
   fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
   fontFamily, fontColor, coverColor, textAlign, alignBottom, 
   pageMode, doublePageStep, blurAmount, chapterTitleDisplay,
-  customThemes, systemFonts, saveAllStyling
+  customThemes, systemFonts, saveAllStyling, pIndent, pSpacing
 } = settings
 
 const theme = useTheme({
@@ -76,6 +76,18 @@ const updateStyling = () => {
       <label>左右边距</label>
       <input type="range" min="0" max="200" step="1" v-model.number="marginX" @input="updateStyling" class="sl">
       <input type="number" v-model.number="marginX" @change="updateStyling" class="sn"><span class="su">px</span>
+    </div>
+
+    <div class="sr">
+      <label>首行缩进</label>
+      <input type="range" min="0" max="4" step="0.5" v-model.number="pIndent" @input="updateStyling" class="sl">
+      <input type="number" v-model.number="pIndent" step="0.5" @change="updateStyling" class="sn"><span class="su">em</span>
+    </div>
+
+    <div class="sr">
+      <label>段落间距</label>
+      <input type="range" min="0" max="3" step="0.1" v-model.number="pSpacing" @input="updateStyling" class="sl">
+      <input type="number" v-model.number="pSpacing" step="0.1" @change="updateStyling" class="sn"><span class="su">em</span>
     </div>
 
     <div class="sr">

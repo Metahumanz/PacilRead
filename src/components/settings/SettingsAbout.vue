@@ -84,6 +84,18 @@ const { silentUpdate } = settings
           <div class="pb-4 pt-2">
             <div class="flex items-center gap-2 mb-2">
               <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.6</span>
+              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-31</span>
+            </div>
+            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+              <li>WebDAV 增量同步模式：支持仅同步设置、规则与书籍列表，大幅降低备份体积</li>
+              <li>智能文件秒传：书籍与封面上传前自动探测云端状态，避免重复传输消耗流量</li>
+              <li>同步性能优化：通过内存库克隆与 VACUUM 压缩，确保备份数据的极致精简</li>
+              <li>体验增强：同步操作区清晰划分“增量”与“全量”模块，支持颗粒化数据恢复</li>
+            </ul>
+          </div>
+          <div class="py-4 border-t border-white/[0.04]">
+            <div class="flex items-center gap-2 mb-2">
               <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.5</span>
               <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
             </div>

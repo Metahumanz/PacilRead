@@ -26,6 +26,8 @@ const pageMode = ref<'single' | 'double'>('single')
 const doublePageStep = ref<1 | 2>(2)
 const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
 const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
+const pIndent = ref(2)
+const pSpacing = ref(0.8)
 
 // HUD settings
 const hudTopLeft = ref('none')
@@ -62,6 +64,8 @@ const isAlwaysOnTop = ref(false)
 const autoOpenLastRead = ref(false)
 const silentUpdate = ref(false)
 const sliderMode = ref<'book' | 'chapter'>('book')
+const sidebarCollapsed = ref(false)
+const viewMode = ref<'grid' | 'list' | 'icon'>('grid')
 
 // WebDAV
 const webdavUrl = ref('')
@@ -75,6 +79,7 @@ const webdavSyncUISettings = ref(true)
 const webdavSyncThemes = ref(true)
 const webdavSyncBackgrounds = ref(true)
 const webdavLastSync = ref('')
+const webdavLastLiteSync = ref('')
 
 // Custom themes
 interface CustomTheme {
@@ -139,6 +144,7 @@ export function useSettings() {
           if (s.key === 'webdavSyncThemes') webdavSyncThemes.value = s.value !== 'false'
           if (s.key === 'webdavSyncBackgrounds') webdavSyncBackgrounds.value = s.value !== 'false'
           if (s.key === 'webdavLastSync') webdavLastSync.value = s.value || ''
+          if (s.key === 'webdavLastLiteSync') webdavLastLiteSync.value = s.value || ''
           if (s.key === 'autoOpenLastRead') autoOpenLastRead.value = s.value === 'true'
           if (s.key === 'silentUpdate') silentUpdate.value = s.value === 'true'
           if (s.key === 'reader_sliderMode') sliderMode.value = s.value === 'chapter' ? 'chapter' : 'book'
@@ -152,6 +158,10 @@ export function useSettings() {
           if (s.key === 'hud_bc') hudBottomCenter.value = s.value
           if (s.key === 'hud_br') hudBottomRight.value = s.value
           if (s.key === 'chapterTitleDisplay') chapterTitleDisplay.value = s.value as any || 'left'
+          if (s.key === 'sidebarCollapsed') sidebarCollapsed.value = s.value === 'true'
+          if (s.key === 'viewMode') viewMode.value = s.value as any || 'grid'
+          if (s.key === 'reader_pIndent') pIndent.value = parseFloat(s.value) || 2
+          if (s.key === 'reader_pSpacing') pSpacing.value = parseFloat(s.value) || 0.8
         })
       }
       try { systemFonts.value = await window.electronAPI.font.getSystemFonts() } catch (_) { systemFonts.value = [] }
@@ -181,6 +191,8 @@ export function useSettings() {
     saveSetting('hud_br', hudBottomRight.value)
     saveSetting('chapterTitleDisplay', chapterTitleDisplay.value)
     saveSetting('reader_sliderMode', sliderMode.value)
+    saveSetting('reader_pIndent', pIndent.value)
+    saveSetting('reader_pSpacing', pSpacing.value)
   }
 
   const saveTtsSettings = () => {
@@ -198,6 +210,7 @@ export function useSettings() {
     fontFamily, fontColor, coverColor, bgImage, blurAmount,
     textAlign, alignBottom, pageMode, doublePageStep,
     flipMode, flipSpeed,
+    pIndent, pSpacing,
     // Auto-page
     autoPageSpeed,
     // TTS
@@ -210,14 +223,14 @@ export function useSettings() {
     // WebDAV
     webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
     webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-    webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync,
+    webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
     // Themes
     customThemes, systemFonts,
     // HUD
     hudTopLeft, hudTopCenter, hudTopRight,
     hudBottomLeft, hudBottomCenter, hudBottomRight,
     chapterTitleDisplay,
-    sliderMode,
+    sliderMode, sidebarCollapsed, viewMode,
     // Methods
     loadAllSettings, saveAllStyling, saveTtsSettings, saveSetting
   }

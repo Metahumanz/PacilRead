@@ -24,7 +24,7 @@ const {
   showKeyHints, nextKeys, prevKeys,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync,
+  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
   autoOpenLastRead, silentUpdate, ttsMiMoApiKey,
   bgImage
 } = settings
@@ -268,6 +268,90 @@ const fullRestore = async () => {
   } finally { webdavSyncing.value = false }
 }
 
+const incrementalBackup = async () => {
+  if (!webdavUrl.value) return
+  try {
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '准备增量同步...'
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let baseUrl = webdavUrl.value
+    if (webdavDir.value) baseUrl += webdavDir.value
+    if (!baseUrl.endsWith('/')) baseUrl += '/'
+    baseUrl += 'PacilRead/'
+
+    // Make sure dirs exist
+    await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+
+    if (webdavSyncBookshelf.value || webdavSyncUISettings.value || webdavSyncThemes.value) {
+      webdavSyncStatus.value = '处理增量数据库...'
+      const litePath = await (window.electronAPI.db as any).exportLite()
+      webdavSyncStatus.value = '上传增量数据库...'
+      await window.electronAPI.webdav.uploadFile(litePath, baseUrl + 'reader_lite.db', auth)
+    }
+
+    const appDataPath = await window.electronAPI.app.getPath('userData')
+    if (webdavSyncFiles.value) {
+      const booksDir = appDataPath + '/books/'
+      const bookFiles = await window.electronAPI.db.query('SELECT path FROM books')
+      for (let i = 0; i < (bookFiles as any[]).length; i++) {
+        const fileName = (bookFiles as any[])[i].path.split(/[\\/]/).pop()
+        const remotePath = baseUrl + 'books/' + fileName
+        // Check if exists using PROPFIND/HEAD
+        const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
+        if (check.status !== 200) {
+          webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
+          await window.electronAPI.webdav.uploadFile(booksDir + fileName, remotePath, auth)
+        }
+      }
+      const coversDir = appDataPath + '/covers/'
+      const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL')
+      for (let i = 0; i < (coverFiles as any[]).length; i++) {
+        const fileName = (coverFiles as any[])[i].cover_path.split(/[\\/]/).pop()
+        const remotePath = baseUrl + 'covers/' + fileName
+        const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
+        if (check.status !== 200) {
+          webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
+          await window.electronAPI.webdav.uploadFile(coversDir + fileName, remotePath, auth)
+        }
+      }
+    }
+
+    webdavLastLiteSync.value = new Date().toLocaleString()
+    await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
+    webdavSyncStatus.value = '增量同步成功'
+    alert('增量同步已完成！（仅包含设置、规则与书籍元数据）')
+  } catch (e: any) {
+    webdavSyncStatus.value = '同步失败: ' + (e.message || '网络错误')
+  } finally { webdavSyncing.value = false }
+}
+
+const incrementalRestore = async () => {
+  if (!webdavUrl.value || !confirm('确定要从云端增量恢复吗？这将覆盖您的书架列表与设置，但不会删除现有的本地缓存章节。')) return
+  try {
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '下载增量快照...'
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let baseUrl = webdavUrl.value
+    if (webdavDir.value) baseUrl += webdavDir.value
+    if (!baseUrl.endsWith('/')) baseUrl += '/'
+    baseUrl += 'PacilRead/'
+
+    const appDataPath = await window.electronAPI.app.getPath('userData')
+    const dstPath = appDataPath + '/reader_lite.db.restore'
+    const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader_lite.db', dstPath, auth)
+    if (dl.error) throw new Error('云端无增量备份数据，请考虑全量恢复: ' + dl.error)
+
+    webdavSyncStatus.value = '应用增量数据库...'
+    await window.electronAPI.db.importFromFile(dstPath)
+    alert('增量数据已恢复！\n注意：如果书籍未下载或章节被清空，请点击书籍或手动重新解析。')
+    webdavSyncStatus.value = '增量恢复成功'
+  } catch (e: any) {
+    webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
+  } finally { webdavSyncing.value = false }
+}
+
 onMounted(async () => {
   loadAllSettings()
   fetchAllRules()
@@ -310,6 +394,8 @@ onMounted(async () => {
       :testWebdav="testWebdav"
       :fullBackup="fullBackup"
       :fullRestore="fullRestore"
+      :incrementalBackup="incrementalBackup"
+      :incrementalRestore="incrementalRestore"
       :webdavTesting="webdavTesting"
       :webdavSyncing="webdavSyncing"
       :webdavSyncStatus="webdavSyncStatus"

@@ -4,6 +4,9 @@ import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useTTS } from '../composables/useTTS'
 import { usePagination } from '../composables/usePagination'
+import { useRules } from '../composables/useRules'
+import { useHUD } from '../composables/useHUD'
+import { useSync } from '../composables/useSync'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -18,7 +21,6 @@ import OptionsPanel from './reader/panels/OptionsPanel.vue'
 
 interface Chapter { id: number; title: string; body: string; order_index: number }
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string }
-interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean }>()
 const emit = defineEmits<{
@@ -63,8 +65,12 @@ const {
   hudBottomLeft, hudBottomCenter, hudBottomRight,
   chapterTitleDisplay,
   loadAllSettings, saveAllStyling, saveSetting,
-  sliderMode
+  sliderMode, pIndent, pSpacing
 } = settings
+
+const { rules, fetchRules, applyReplacements } = useRules()
+const { startHUD, stopHUD, formatHUD } = useHUD()
+const { uploadProgressToWebdav } = useSync()
 
 const toggleAlwaysOnTop = () => {
   isAlwaysOnTop.value = !isAlwaysOnTop.value
@@ -89,29 +95,7 @@ const fetchChapters = async () => {
   } catch (e) { console.error(e) }
 }
 
-// ---- Replacement rules ----
-const rules = ref<ReplacementRule[]>([])
-const fetchRules = async () => {
-  try {
-    const r = await window.electronAPI.db.query(
-      'SELECT * FROM replacement_rules WHERE (scope = ? AND book_id IS NULL) OR (scope = ? AND book_id = ?) ORDER BY id',
-      ['global', 'book', props.bookId]
-    )
-    rules.value = r as ReplacementRule[]
-  } catch (e) { console.error(e) }
-}
-const applyReplacements = (html: string): string => {
-  if (!html) return html
-  let result = html
-  for (const rule of rules.value) {
-    if (!rule.active) continue
-    try {
-      if (rule.is_regex) { result = result.replace(new RegExp(rule.pattern, 'g'), rule.replacement) }
-      else { result = result.replace(new RegExp(rule.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), rule.replacement) }
-    } catch (_) {}
-  }
-  return result
-}
+// Rules are now handled by useRules
 
 // ---- Chapter data (computed) ----
 const currentChapterData = computed(() => chapters.value[currentChapterIndex.value] || null)
@@ -122,31 +106,24 @@ const prevBody = computed(() => prevChapterData.value ? applyReplacements(prevCh
 const nextBody = computed(() => nextChapterData.value ? applyReplacements(nextChapterData.value.body) : '')
 
 // ---- Progress ----
-let uploadTimer: any = null
 const saveProgress = async () => {
   if (!book.value) return
   try {
     await window.electronAPI.db.query('UPDATE books SET progress_index = ?, progress_offset = ?, last_read = ? WHERE id = ?',
       [currentChapterIndex.value, pagination.currentPage.value, new Date().toISOString(), props.bookId])
-    uploadProgressToWebdav()
+    
+    uploadProgressToWebdav({
+      bookId: props.bookId,
+      title: book.value.title,
+      author: book.value.author || '',
+      currentChapterIndex: currentChapterIndex.value,
+      currentChapterTitle: currentChapterData.value?.title || '',
+      currentChapterBodyLength: currentChapterData.value?.body?.length || 0,
+      currentPage: pagination.currentPage.value,
+      totalPages: pagination.totalPages.value,
+      pendingWebdavPos: pagination.pendingWebdavPos.value
+    })
   } catch (e) { console.error(e) }
-}
-const uploadProgressToWebdav = async () => {
-  if (!webdavSync.value || !webdavUrl.value || !book.value) return
-  if (pagination.pendingWebdavPos.value >= 0) return
-  if (uploadTimer) clearTimeout(uploadTimer)
-  uploadTimer = setTimeout(async () => {
-    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let author = book.value?.author || '未知'; if (!author.trim()) author = '未知'
-    let safeName = book.value?.title.replace(/[\\/:\"*?<>|]/g, '_') || 'Unknown'
-    let safeAuthor = author.replace(/[\\/:\"*?<>|]/g, '_')
-    const filename = `${safeName}_${safeAuthor}.json`
-    const L = currentChapterData.value?.body?.length || 0
-    const charPos = pagination.totalPages.value > 0 ? Math.floor(L * (pagination.currentPage.value / pagination.totalPages.value)) : 0
-    const data = { author, durChapterIndex: currentChapterIndex.value, durChapterPos: charPos, durChapterTime: Date.now(), durChapterTitle: currentChapterData.value?.title || '', name: book.value?.title || 'Unknown' }
-    let baseURL = webdavUrl.value; if (webdavDir.value) baseURL += webdavDir.value
-    window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/' + encodeURIComponent(filename), method: 'PUT', headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 2) }).catch(e => console.error('WebDAV upload err:', e))
-  }, 2000)
 }
 
 // ---- Pagination (composable) ----
@@ -178,43 +155,7 @@ const textStyle = computed(() => ({
   textAlign: textAlign.value as any,
 }))
 
-// ---- HUD Logic ----
-const currentTime = ref('')
-const batteryLevel = ref('-%')
-let hudTimer: any = null
-let batteryObj: any = null
-
-const updateHUDTime = () => {
-  const d = new Date()
-  currentTime.value = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
-}
-
-const initBattery = async () => {
-  if ((navigator as any).getBattery) {
-    try {
-      batteryObj = await (navigator as any).getBattery()
-      const updateCharge = () => { batteryLevel.value = Math.round(batteryObj.level * 100) + '%' }
-      updateCharge()
-      batteryObj.addEventListener('levelchange', updateCharge)
-    } catch (e) { console.error('Battery API err:', e) }
-  }
-}
-
-const getHudContent = (type: string) => {
-  if (!type || type === 'none') return ''
-  if (type === 'bookTitle') return book.value?.title || ''
-  if (type === 'chapterTitle') return currentChapterData.value?.title || ''
-  if (type === 'titleOrChapter') {
-    return (currentChapterIndex.value === 0 && pagination.currentPage.value === 0) ? (book.value?.title || '') : (currentChapterData.value?.title || '')
-  }
-  if (type === 'currentTime') return currentTime.value
-  if (type === 'batteryLevel') return batteryLevel.value
-  if (type === 'chapterPage') return `${pagination.currentPage.value + 1} / ${pagination.totalPages.value}`
-  if (type === 'bookProgress') return `第 ${currentChapterIndex.value + 1} / ${chapters.value.length} 章`
-  if (type === 'pageAndProgress') return `${pagination.currentPage.value + 1} / ${pagination.totalPages.value} (${progressPercent.value}%)`
-  if (type === 'timeAndBattery') return `${currentTime.value}  ${batteryLevel.value}`
-  return ''
-}
+// HUD logic handled by useHUD
 
 // ---- TTS (composable) ----
 const tts = useTTS({
@@ -355,10 +296,8 @@ onMounted(async () => {
   await loadAllSettings()
   await fetchBook()
   await fetchChapters()
-  await fetchRules()
-  updateHUDTime()
-  hudTimer = setInterval(updateHUDTime, 30000)
-  initBattery()
+  await fetchRules(props.bookId)
+  startHUD()
   if (book.value) currentPage.value = book.value.progress_offset || 0
   await downloadProgressFromWebdav()
   loading.value = false
@@ -369,8 +308,9 @@ onMounted(async () => {
   injectHighlightStyles()
 })
 onUnmounted(() => {
-  if (hudTimer) clearInterval(hudTimer)
-  stopTts(); stopAutoPage()
+  stopHUD()
+  stopTts()
+  stopAutoPage()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
   window.removeEventListener('resize', recalc)
@@ -383,7 +323,9 @@ onUnmounted(() => {
     touchAction: showMenu ? 'auto' : 'none',
     '--dur-slide': flipDurationMap.slide,
     '--dur-cover': flipDurationMap.cover,
-    '--dur-curl': flipDurationMap.curl
+    '--dur-curl': flipDurationMap.curl,
+    '--p-indent': pIndent + 'em',
+    '--p-spacing': pSpacing + 'em'
   }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <!-- Background layer -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
@@ -464,8 +406,12 @@ onUnmounted(() => {
 
       <ReaderHUD 
         v-if="!showMenu"
-        :topLeft="getHudContent(hudTopLeft)" :topCenter="getHudContent(hudTopCenter)" :topRight="getHudContent(hudTopRight)"
-        :bottomLeft="getHudContent(hudBottomLeft)" :bottomCenter="getHudContent(hudBottomCenter)" :bottomRight="getHudContent(hudBottomRight)"
+        :topLeft="formatHUD(hudTopLeft, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
+        :topCenter="formatHUD(hudTopCenter, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
+        :topRight="formatHUD(hudTopRight, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
+        :bottomLeft="formatHUD(hudBottomLeft, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
+        :bottomCenter="formatHUD(hudBottomCenter, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
+        :bottomRight="formatHUD(hudBottomRight, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
       />
 
       <!-- Reader Menu -->
@@ -488,7 +434,7 @@ onUnmounted(() => {
         >
           <Transition name="sf"><SearchPanel v-if="showSearch" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { goToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
-          <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(); recalc(); }" /></Transition>
+          <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
           <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>
@@ -546,7 +492,7 @@ onUnmounted(() => {
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .ch-title { font-weight:700; margin-bottom:1.5em; opacity:0.85; }
 .ch-body { height:100%; }
-.ch-body :deep(p) { text-indent:2em; margin-bottom:0.8em; }
+.ch-body :deep(p) { text-indent: var(--p-indent); margin-bottom: var(--p-spacing); }
 /* kbd style */
 .kbd { padding: 0.25rem 0.5rem; background-color: rgba(255, 255, 255, 0.1); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 

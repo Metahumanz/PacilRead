@@ -1,149 +1,47 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
+import { useSettings } from '../composables/useSettings'
+import { useTheme } from '../composables/useTheme'
 
-// All reader styling keys
-const fontSize = ref(20)
-const lineHeight = ref(1.8)
-const letterSpacing = ref(0)
-const fontWeight = ref(400)
-const marginX = ref(60)
-const marginY = ref(40)
-const fontFamily = ref('system-ui')
-const fontColor = ref('#e2e8f0')
-const coverColor = ref('#0f172a')
-const bgImage = ref('')
-const bgPreview = ref('')
-const blurAmount = ref(0)
-const textAlign = ref<'left' | 'justify'>('justify')
-const alignBottom = ref(false)
-const pageMode = ref<'single' | 'double'>('single')
-const doublePageStep = ref<1 | 2>(2)
-const flipMode = ref<'slide' | 'cover'>('slide')
-const pIndent = ref(2)
-const pSpacing = ref(0.8)
-const chapterTitleDisplay = ref<'left' | 'center' | 'none'>('left')
+const settings = useSettings()
+const {
+  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
+  fontFamily, fontColor, coverColor, bgImage, blurAmount,
+  textAlign, alignBottom, pageMode, doublePageStep,
+  flipMode, pIndent, pSpacing, chapterTitleDisplay,
+  customThemes, saveAllStyling, saveSetting
+} = settings
 
-// Custom themes
-interface CustomTheme {
-  id: number; name: string; bgImage: string; coverColor: string; fontColor: string;
-  fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number;
-  fontWeight: number; marginX: number; marginY: number; pageMode: string; doublePageStep: number
-}
-const customThemes = ref<CustomTheme[]>([])
-const newThemeName = ref('')
+const {
+  newThemeName, applyThemeConfig, saveTheme, deleteTheme, readerBgStyle
+} = useTheme({ onStyleChanged: () => { saveAllStyling() } })
 
-const saveSetting = async (k: string, v: string) => {
-  await window.electronAPI.db.query('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [k, v])
-}
-
-const saveAll = async () => {
-  await saveSetting('reader_fontSize', fontSize.value.toString())
-  await saveSetting('reader_lineHeight', lineHeight.value.toString())
-  await saveSetting('reader_letterSpacing', letterSpacing.value.toString())
-  await saveSetting('reader_fontWeight', fontWeight.value.toString())
-  await saveSetting('reader_marginX', marginX.value.toString())
-  await saveSetting('reader_marginY', marginY.value.toString())
-  await saveSetting('reader_fontFamily', fontFamily.value)
-  await saveSetting('reader_fontColor', fontColor.value)
-  await saveSetting('reader_coverColor', coverColor.value)
-  await saveSetting('reader_blurAmount', blurAmount.value.toString())
-  await saveSetting('reader_textAlign', textAlign.value)
-  await saveSetting('reader_alignBottom', alignBottom.value ? 'true' : 'false')
-  await saveSetting('reader_pageMode', pageMode.value)
-  await saveSetting('reader_doublePageStep', doublePageStep.value.toString())
-  await saveSetting('reader_flipMode', flipMode.value)
-  await saveSetting('reader_pIndent', pIndent.value.toString())
-  await saveSetting('reader_pSpacing', pSpacing.value.toString())
-  await saveSetting('chapterTitleDisplay', chapterTitleDisplay.value)
-}
+const bgPreview = ref(bgImage.value)
 
 const browseImage = async () => {
   const p = await window.electronAPI.dialog.openImage()
-  if (p) { const url = 'file:///' + p.replace(/\\/g, '/'); bgImage.value = url; bgPreview.value = url }
+  if (p) {
+    const url = 'file:///' + p.replace(/\\/g, '/')
+    bgImage.value = url
+    bgPreview.value = url
+    saveSetting('bgImage', url)
+  }
 }
 
 const applyBgImage = async () => {
   let v = bgImage.value.trim()
-  if (v && !v.startsWith('file://') && !v.startsWith('http')) v = 'file:///' + v.replace(/\\/g, '/')
-  bgImage.value = v; bgPreview.value = v
+  if (v && !v.startsWith('file://') && !v.startsWith('http')) {
+    v = 'file:///' + v.replace(/\\/g, '/')
+  }
+  bgImage.value = v
+  bgPreview.value = v
   await saveSetting('bgImage', v)
 }
 
 const clearBgImage = async () => {
-  bgImage.value = ''; bgPreview.value = ''
+  bgImage.value = ''
+  bgPreview.value = ''
   await saveSetting('bgImage', '')
-}
-
-onMounted(async () => {
-  try {
-    const allKeys = [
-      'reader_fontSize', 'reader_lineHeight', 'reader_letterSpacing', 'reader_fontWeight',
-      'reader_marginX', 'reader_marginY', 'reader_fontFamily', 'reader_fontColor',
-      'reader_coverColor', 'bgImage', 'reader_blurAmount', 'reader_textAlign',
-      'reader_alignBottom', 'reader_pageMode', 'reader_doublePageStep', 'reader_flipMode',
-      'reader_pIndent', 'reader_pSpacing', 'chapterTitleDisplay', 'custom_themes'
-    ]
-    const placeholders = allKeys.map(() => '?').join(',')
-    const s = await window.electronAPI.db.query(`SELECT * FROM settings WHERE key IN (${placeholders})`, allKeys)
-    for (const row of s as any[]) {
-      switch (row.key) {
-        case 'reader_fontSize': fontSize.value = Number(row.value); break
-        case 'reader_lineHeight': lineHeight.value = Number(row.value); break
-        case 'reader_letterSpacing': letterSpacing.value = Number(row.value); break
-        case 'reader_fontWeight': fontWeight.value = Number(row.value); break
-        case 'reader_marginX': marginX.value = Number(row.value); break
-        case 'reader_marginY': marginY.value = Number(row.value); break
-        case 'reader_fontFamily': fontFamily.value = row.value; break
-        case 'reader_fontColor': fontColor.value = row.value; break
-        case 'reader_coverColor': coverColor.value = row.value; break
-        case 'bgImage': bgImage.value = row.value || ''; bgPreview.value = row.value || ''; break
-        case 'reader_blurAmount': blurAmount.value = Number(row.value); break
-        case 'reader_textAlign': textAlign.value = row.value as any; break
-        case 'reader_alignBottom': alignBottom.value = row.value === 'true'; break
-        case 'reader_pageMode': pageMode.value = row.value as any; break
-        case 'reader_doublePageStep': doublePageStep.value = Number(row.value) as any; break
-        case 'reader_flipMode': flipMode.value = row.value as any; break
-        case 'reader_pIndent': pIndent.value = Number(row.value); break
-        case 'reader_pSpacing': pSpacing.value = Number(row.value); break
-        case 'chapterTitleDisplay': chapterTitleDisplay.value = row.value as any; break
-        case 'custom_themes': try { customThemes.value = JSON.parse(row.value) || [] } catch (_) {} break
-      }
-    }
-  } catch {}
-})
-
-const saveTheme = async () => {
-  if (!newThemeName.value.trim()) return
-  customThemes.value.push({
-    id: Date.now(), name: newThemeName.value.trim(), bgImage: bgImage.value, coverColor: coverColor.value,
-    fontColor: fontColor.value, fontFamily: fontFamily.value, fontSize: fontSize.value, lineHeight: lineHeight.value,
-    letterSpacing: letterSpacing.value, fontWeight: fontWeight.value, marginX: marginX.value, marginY: marginY.value,
-    pageMode: pageMode.value, doublePageStep: doublePageStep.value
-  })
-  await saveSetting('custom_themes', JSON.stringify(customThemes.value))
-  newThemeName.value = ''
-}
-
-const deleteTheme = async (id: number) => {
-  customThemes.value = customThemes.value.filter(t => t.id !== id)
-  await saveSetting('custom_themes', JSON.stringify(customThemes.value))
-}
-
-const applyThemeConfig = (t: Partial<CustomTheme>) => {
-  if (t.bgImage !== undefined) bgImage.value = t.bgImage
-  if (t.coverColor !== undefined) coverColor.value = t.coverColor
-  if (t.fontColor !== undefined) fontColor.value = t.fontColor
-  if (t.fontFamily !== undefined) fontFamily.value = t.fontFamily
-  if (t.fontSize !== undefined) fontSize.value = t.fontSize
-  if (t.lineHeight !== undefined) lineHeight.value = t.lineHeight
-  if (t.letterSpacing !== undefined) letterSpacing.value = t.letterSpacing
-  if (t.fontWeight !== undefined) fontWeight.value = t.fontWeight
-  if (t.marginX !== undefined) marginX.value = t.marginX
-  if (t.marginY !== undefined) marginY.value = t.marginY
-  if (t.pageMode !== undefined) pageMode.value = t.pageMode as 'single' | 'double'
-  if (t.doublePageStep !== undefined) doublePageStep.value = t.doublePageStep as 1 | 2
-  bgPreview.value = bgImage.value
-  saveAll()
 }
 </script>
 
@@ -157,22 +55,22 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
     <!-- Preview Box -->
     <div class="mb-8">
       <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">阅读引擎实时效果映射</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm p-10 overflow-hidden relative"
-           :style="bgPreview ? { backgroundImage: `url('${bgPreview}')`, backgroundSize: 'cover', backgroundPosition: 'center' } : { backgroundColor: coverColor }">
+          <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm p-10 overflow-hidden relative"
+               :style="readerBgStyle">
          <div class="absolute inset-0 bg-white/40 dark:bg-black/40 backdrop-blur-[2px]" v-if="bgPreview && blurAmount > 0"></div>
          <div class="relative z-10 prose mx-auto break-words"
-              :style="{ 
+              :style="({ 
                 fontSize: fontSize + 'px', 
-                lineHeight: lineHeight,
+                lineHeight: Number(lineHeight),
                 letterSpacing: letterSpacing + 'em',
-                fontWeight: fontWeight,
+                fontWeight: Number(fontWeight),
                 fontFamily: fontFamily,
                 color: fontColor,
                 textAlign: textAlign,
                 textIndent: pIndent + 'em',
                 columnCount: pageMode === 'double' ? 2 : 1,
                 columnGap: pageMode === 'double' ? '3rem' : 'normal'
-              }">
+              } as any)">
             <h1 v-if="chapterTitleDisplay !== 'none'" class="font-bold mb-10 opacity-70" :style="{ fontSize: (fontSize * 1.4) + 'px', color: fontColor, textAlign: chapterTitleDisplay }">第一章 深渊的呼唤</h1>
             <p :style="{ marginBottom: pSpacing + 'em' }">随着一阵白光闪过，这片死寂的空间里突然多出了几分鲜活的生气。他睁开眼睛，环顾四周，这不仅仅是单纯视觉的反馈，那股厚重潮湿的空气顺着鼻腔直达肺部。</p>
             <p :style="{ marginBottom: pSpacing + 'em' }">"就是这里了吗？"他低声喃喃自语，目光落在了远处那座隐约可见的轮廓上。那是一座高塔，直入云霄，仿佛要刺破这令人窒息的天穹。</p>
@@ -211,7 +109,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>全局正文字号 (Font Size)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ fontSize }}px</span>
               </div>
-              <input type="range" v-model.number="fontSize" min="12" max="64" step="1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="fontSize" min="12" max="64" step="1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -225,7 +123,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>字重 (Font Weight)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ fontWeight }}</span>
               </div>
-              <input type="range" v-model.number="fontWeight" min="100" max="900" step="1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="fontWeight" min="100" max="900" step="1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -239,7 +137,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>行间距 (Line Height)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ Number(lineHeight).toFixed(1) }}</span>
               </div>
-              <input type="range" v-model.number="lineHeight" min="1.0" max="4.0" step="0.1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="lineHeight" min="1.0" max="4.0" step="0.1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -253,7 +151,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>字间距 (Letter Spacing)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ Number(letterSpacing).toFixed(2) }}em</span>
               </div>
-              <input type="range" v-model.number="letterSpacing" min="-0.1" max="1" step="0.01" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="letterSpacing" min="-0.1" max="1" step="0.01" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -267,7 +165,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>首行缩进 (Indent)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ pIndent }}em</span>
               </div>
-              <input type="range" v-model.number="pIndent" min="0" max="4" step="0.5" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="pIndent" min="0" max="4" step="0.5" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -281,7 +179,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>段落间距 (Spacing)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ Number(pSpacing).toFixed(1) }}em</span>
               </div>
-              <input type="range" v-model.number="pSpacing" min="0" max="3" step="0.1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="pSpacing" min="0" max="3" step="0.1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -295,7 +193,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>左右边距 (Horizontal Margin)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ marginX }}px</span>
               </div>
-              <input type="range" v-model.number="marginX" min="0" max="200" step="1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="marginX" min="0" max="200" step="1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -309,7 +207,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>上下边距 (Vertical Margin)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ marginY }}px</span>
               </div>
-              <input type="range" v-model.number="marginY" min="0" max="150" step="1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="marginY" min="0" max="150" step="1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -323,7 +221,7 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
                 <span>背景模糊 (Blur)</span>
                 <span class="text-emerald-500 dark:text-emerald-400 font-mono">{{ blurAmount }}px</span>
               </div>
-              <input type="range" v-model.number="blurAmount" min="0" max="40" step="1" @change="saveAll" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
+              <input type="range" v-model.number="blurAmount" min="0" max="40" step="1" @change="saveAllStyling" class="w-full mt-3 h-1.5 bg-black/10 dark:bg-black/40 rounded-full appearance-none cursor-pointer accent-[#005fb8]" />
             </div>
           </div>
          </div>
@@ -341,8 +239,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🎨</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">字体颜色</div>
-            <input type="color" v-model="fontColor" @input="saveAll" class="w-8 h-8 rounded cursor-pointer border-0" />
-            <input type="text" v-model="fontColor" @change="saveAll" class="w-20 bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-2 py-1 text-[12px] font-mono text-slate-800 dark:text-white/90 outline-none" />
+            <input type="color" v-model="fontColor" @input="saveAllStyling" class="w-8 h-8 rounded cursor-pointer border-0" />
+            <input type="text" v-model="fontColor" @change="saveAllStyling" class="w-20 bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-2 py-1 text-[12px] font-mono text-slate-800 dark:text-white/90 outline-none" />
           </div>
          </div>
 
@@ -351,8 +249,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🖌️</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页底色</div>
-            <input type="color" v-model="coverColor" @input="saveAll" class="w-8 h-8 rounded cursor-pointer border-0" />
-            <input type="text" v-model="coverColor" @change="saveAll" class="w-20 bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-2 py-1 text-[12px] font-mono text-slate-800 dark:text-white/90 outline-none" />
+            <input type="color" v-model="coverColor" @input="saveAllStyling" class="w-8 h-8 rounded cursor-pointer border-0" />
+            <input type="text" v-model="coverColor" @change="saveAllStyling" class="w-20 bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-2 py-1 text-[12px] font-mono text-slate-800 dark:text-white/90 outline-none" />
           </div>
          </div>
 
@@ -362,8 +260,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">📐</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">文字对齐</div>
             <div class="flex gap-2">
-              <button @click="textAlign='left'; saveAll()" :class="textAlign==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
-              <button @click="textAlign='justify'; saveAll()" :class="textAlign==='justify' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">两端</button>
+              <button @click="textAlign='left'; saveAllStyling()" :class="textAlign==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
+              <button @click="textAlign='justify'; saveAllStyling()" :class="textAlign==='justify' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">两端</button>
             </div>
           </div>
          </div>
@@ -374,9 +272,9 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">🔖</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">章节标题</div>
             <div class="flex gap-2">
-              <button @click="chapterTitleDisplay='left'; saveAll()" :class="chapterTitleDisplay==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
-              <button @click="chapterTitleDisplay='center'; saveAll()" :class="chapterTitleDisplay==='center' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">居中</button>
-              <button @click="chapterTitleDisplay='none'; saveAll()" :class="chapterTitleDisplay==='none' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">隐藏</button>
+              <button @click="chapterTitleDisplay='left'; saveAllStyling()" :class="chapterTitleDisplay==='left' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠左</button>
+              <button @click="chapterTitleDisplay='center'; saveAllStyling()" :class="chapterTitleDisplay==='center' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">居中</button>
+              <button @click="chapterTitleDisplay='none'; saveAllStyling()" :class="chapterTitleDisplay==='none' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">隐藏</button>
             </div>
           </div>
          </div>
@@ -387,8 +285,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">⬇️</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">垂直对齐</div>
             <div class="flex gap-2">
-              <button @click="alignBottom=false; saveAll()" :class="!alignBottom ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠上</button>
-              <button @click="alignBottom=true; saveAll()" :class="alignBottom ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠底</button>
+              <button @click="alignBottom=false; saveAllStyling()" :class="!alignBottom ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠上</button>
+              <button @click="alignBottom=true; saveAllStyling()" :class="alignBottom ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">靠底</button>
             </div>
           </div>
          </div>
@@ -407,8 +305,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">📖</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">视图模式</div>
             <div class="flex gap-2">
-              <button @click="pageMode='single'; saveAll()" :class="pageMode==='single' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">单页</button>
-              <button @click="pageMode='double'; saveAll()" :class="pageMode==='double' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">双页(横屏)</button>
+              <button @click="pageMode='single'; saveAllStyling()" :class="pageMode==='single' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">单页</button>
+              <button @click="pageMode='double'; saveAllStyling()" :class="pageMode==='double' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">双页(横屏)</button>
             </div>
           </div>
          </div>
@@ -419,8 +317,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">📄</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页效果</div>
             <div class="flex gap-2">
-              <button @click="flipMode='slide'; saveAll()" :class="flipMode==='slide' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">平移</button>
-              <button @click="flipMode='cover'; saveAll()" :class="flipMode==='cover' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">覆盖</button>
+              <button @click="flipMode='slide'; saveAllStyling()" :class="flipMode==='slide' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">平移</button>
+              <button @click="flipMode='cover'; saveAllStyling()" :class="flipMode==='cover' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">覆盖</button>
             </div>
           </div>
          </div>
@@ -431,8 +329,8 @@ const applyThemeConfig = (t: Partial<CustomTheme>) => {
             <span class="text-xl opacity-80">📑</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页步长</div>
             <div class="flex gap-2">
-              <button @click="doublePageStep=1; saveAll()" :class="doublePageStep===1 ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">1页</button>
-              <button @click="doublePageStep=2; saveAll()" :class="doublePageStep===2 ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">2页</button>
+              <button @click="doublePageStep=1; saveAllStyling()" :class="doublePageStep===1 ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">1页</button>
+              <button @click="doublePageStep=2; saveAllStyling()" :class="doublePageStep===2 ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-black/20 text-slate-800 dark:text-white/90 border-black/5 dark:border-white/5'" class="px-4 py-1.5 rounded-md text-[13px] font-medium border transition-colors">2页</button>
             </div>
           </div>
          </div>

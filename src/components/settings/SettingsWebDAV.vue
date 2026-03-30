@@ -6,6 +6,8 @@ const {
   testWebdav,
   fullBackup,
   fullRestore,
+  incrementalBackup,
+  incrementalRestore,
   webdavTesting,
   webdavSyncing,
   webdavSyncStatus,
@@ -15,6 +17,8 @@ const {
   testWebdav: () => void
   fullBackup: () => void
   fullRestore: () => void
+  incrementalBackup: () => void
+  incrementalRestore: () => void
   webdavTesting: boolean
   webdavSyncing: boolean
   webdavSyncStatus: string
@@ -25,7 +29,7 @@ const settings = useSettings()
 const {
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync
+  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync
 } = settings
 </script>
 
@@ -80,21 +84,45 @@ const {
                   <button @click="webdavSyncBackgrounds = !webdavSyncBackgrounds; saveWebdav()" :class="webdavSyncBackgrounds ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">背景图片</button>
                 </div>
                 
-                <div class="flex items-center gap-3">
-                  <button @click="fullBackup" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-md text-[12px] font-medium transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95">
-                    <span v-if="webdavSyncing && webdavSyncStatus.includes('上传')">⏳ {{ webdavSyncStatus }}</span>
-                    <span v-else-if="webdavSyncing">⏳ 处理中...</span>
-                    <span v-else>📤 立即备份到云端</span>
-                  </button>
-                  <button @click="fullRestore" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-md text-[12px] font-medium transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95">
-                    <span v-if="webdavSyncing && webdavSyncStatus.includes('下载')">⏳ {{ webdavSyncStatus }}</span>
-                    <span v-else-if="webdavSyncing">⏳ 处理中...</span>
-                    <span v-else>📥 从云端恢复数据</span>
-                  </button>
+                <div class="flex flex-col gap-4">
+                  <!-- Incremental Sync (Lite) -->
+                  <div class="bg-black/5 dark:bg-white/5 p-3 rounded-lg border border-black/5 dark:border-white/5">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="text-[11px] font-bold text-slate-500 dark:text-white/40 uppercase tracking-wider">⚡ 增量同步 (推荐)</span>
+                      <span v-if="webdavLastLiteSync" class="text-[10px] text-emerald-500/70 font-mono">{{ webdavLastLiteSync }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button @click="incrementalBackup" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-md text-[12px] font-medium transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                        <span>📤 同步基础数据</span>
+                      </button>
+                      <button @click="incrementalRestore" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-3 py-2 bg-slate-600/20 hover:bg-slate-600/30 text-slate-400 border border-slate-500/30 rounded-md text-[12px] font-medium transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                        <span>📥 恢复基础数据</span>
+                      </button>
+                    </div>
+                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">排除冗长的章节文本，仅同步设置、规则与书籍列表，速度极快。</p>
+                  </div>
+
+                  <!-- Full Sync (Snapshot) -->
+                  <div class="bg-black/5 dark:bg-white/5 p-3 rounded-lg border border-black/5 dark:border-white/5">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="text-[11px] font-bold text-slate-500 dark:text-white/40 uppercase tracking-wider">📦 全量备份 (镜像)</span>
+                      <span v-if="webdavLastSync" class="text-[10px] text-amber-500/70 font-mono">{{ webdavLastSync }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button @click="fullBackup" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-md text-[12px] font-medium transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                        <span>📤 备份全量镜像</span>
+                      </button>
+                      <button @click="fullRestore" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-500/30 rounded-md text-[12px] font-medium transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                        <span>📥 恢复全量镜像</span>
+                      </button>
+                    </div>
+                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">保存完整的数据库快照（含章节缓存），体积随书籍量增长。</p>
+                  </div>
                 </div>
-                <div v-if="webdavLastSync" class="text-center mt-3 text-[10px] text-slate-500 dark:text-white/30 flex items-center justify-center gap-1.5">
-                  <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                  最后同步/备份: {{ webdavLastSync }}
+
+                <div v-if="webdavSyncing" class="text-center mt-3 text-[11px] text-blue-400 animate-pulse flex items-center justify-center gap-2">
+                  <span class="w-2 h-2 bg-blue-400 rounded-full"></span>
+                  {{ webdavSyncStatus || '正在处理同步请求...' }}
                 </div>
               </div>
 

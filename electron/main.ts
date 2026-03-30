@@ -466,6 +466,25 @@ ipcMain.handle('db:export', async () => {
   return tempPath
 })
 
+ipcMain.handle('db:exportLite', async () => {
+  if (!db || !SQL) throw new Error('Database not initialized')
+  // Clone current database
+  const data = db.export()
+  const tempDb = new SQL.Database(data)
+  // Remove heavy content
+  try {
+    tempDb.run('DROP TABLE IF EXISTS chapters')
+    tempDb.run('VACUUM')
+  } catch (e) {
+    console.error('Lite export cleanup failed:', e)
+  }
+  const liteData = tempDb.export()
+  const tempPath = join(app.getPath('temp'), `pacilread_lite_${Date.now()}.db`)
+  writeFileSync(tempPath, Buffer.from(liteData))
+  tempDb.close()
+  return tempPath
+})
+
 ipcMain.handle('db:importFromFile', async (_, filePath: string) => {
   if (!SQL) throw new Error('SQL.js not initialized')
   const data = readFileSync(filePath)

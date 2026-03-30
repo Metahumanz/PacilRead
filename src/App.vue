@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useSettings } from './composables/useSettings'
 import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
 import SettingsView from './components/SettingsView.vue'
@@ -7,15 +8,18 @@ import TypographyView from './components/TypographyView.vue'
 
 type View = 'bookshelf' | 'reader' | 'settings' | 'typography'
 
+const settings = useSettings()
+const { sidebarCollapsed, autoOpenLastRead, loadAllSettings, saveSetting } = settings
+
 const currentView = ref<View>('bookshelf')
 const selectedBookId = ref<number | null>(null)
 const isImmersive = ref(false)
 const showQuitConfirm = ref(false)
-const isSidebarCollapsed = ref(false)
 const isWindowMaximized = ref(false)
-const toggleSidebar = async () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value
-  try { await window.electronAPI.db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('sidebarCollapsed', ?)", [isSidebarCollapsed.value ? 'true' : 'false']) } catch {}
+
+const toggleSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  saveSetting('sidebarCollapsed', sidebarCollapsed.value ? 'true' : 'false')
 }
 
 const openBook = (bookId: number) => {
@@ -80,20 +84,20 @@ onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
   window.addEventListener('touchstart', handleTouchStart, { passive: true })
   window.addEventListener('touchend', handleTouchEnd, { passive: true })
-  try {
-    const sc = await window.electronAPI.db.query("SELECT value FROM settings WHERE key = 'sidebarCollapsed'")
-    if (sc[0] && sc[0].value === 'true') isSidebarCollapsed.value = true
-  } catch {}
-  try {
-    const s = await window.electronAPI.db.query("SELECT value FROM settings WHERE key = 'autoOpenLastRead'")
-    if (s[0] && s[0].value === 'true') {
+  
+  await loadAllSettings()
+  
+  if (autoOpenLastRead.value) {
+    try {
       const b = await window.electronAPI.db.query("SELECT id FROM books ORDER BY last_read DESC LIMIT 1")
       if (b[0] && b[0].id) {
         selectedBookId.value = b[0].id
         currentView.value = 'reader'
       }
+    } catch (e) {
+      console.error('Auto open last read failed:', e)
     }
-  } catch (e) {}
+  }
 
   // Sync window maximized state
   try {
@@ -145,12 +149,12 @@ onUnmounted(() => {
         <!-- Custom Window Controls moved to Content Pane -->
 
         <!-- Sidebar -->
-        <aside :class="['bg-slate-50 dark:bg-[#1e1e1e] flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-black/5 dark:border-white/5', isSidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
+        <aside :class="['bg-slate-50 dark:bg-[#1e1e1e] flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-black/5 dark:border-white/5', sidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
           <div class="px-4 mb-6 flex items-center window-drag relative min-h-[32px]">
             <button @click="toggleSidebar" class="absolute left-4 w-9 h-9 rounded-md hover:bg-black/5 dark:hover:bg-white/10 flex items-center justify-center text-lg active:scale-95 transition-colors no-drag cursor-pointer z-50 text-slate-600 hover:text-slate-800 dark:text-white/80 dark:hover:text-white" title="折叠导航栏">
               ☰
             </button>
-            <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="isSidebarCollapsed ? 'opacity-0' : 'opacity-100'">
+            <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="sidebarCollapsed ? 'opacity-0' : 'opacity-100'">
               <div class="w-8 h-8 rounded-md bg-[#005fb8] flex items-center justify-center font-bold text-lg shadow-sm font-italic text-white">P</div>
               <h1 class="text-[15px] font-semibold tracking-wide text-slate-800 dark:text-white/90">PacilRead</h1>
             </div>
@@ -164,7 +168,7 @@ onUnmounted(() => {
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">📚</span>
               </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="isSidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">书架大厅</span>
+              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">书架大厅</span>
             </button>
 
             <button @click="currentView = 'typography'" 
@@ -174,7 +178,7 @@ onUnmounted(() => {
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">✨</span>
               </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="isSidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">排版与预览</span>
+              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">排版与预览</span>
             </button>
           </nav>
 
@@ -186,7 +190,7 @@ onUnmounted(() => {
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">⚙️</span>
               </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="isSidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">偏好设置</span>
+              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">偏好设置</span>
             </button>
           </div>
         </aside>

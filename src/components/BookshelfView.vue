@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useSettings } from '../composables/useSettings'
 
 interface Book {
   id: number
@@ -15,12 +16,14 @@ interface Book {
 
 const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
 
+const settings = useSettings()
+const { viewMode, saveSetting } = settings
+
 const books = ref<Book[]>([])
 const loading = ref(true)
 const importing = ref(false)
 
 const searchQuery = ref('')
-const viewMode = ref<'grid' | 'list' | 'icon'>('grid') // 网格 | 列表 | 图标
 
 const filteredBooks = computed(() => {
   if (!searchQuery.value) return books.value
@@ -125,9 +128,9 @@ onMounted(() => fetchBooks())
         
         <!-- View Toggles -->
         <div class="flex items-center bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg p-1 overflow-hidden shrink-0">
-          <button @click="viewMode = 'grid'" :class="viewMode === 'grid' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="网格平铺">🔳</button>
-          <button @click="viewMode = 'list'" :class="viewMode === 'list' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="列表视图">☰</button>
-          <button @click="viewMode = 'icon'" :class="viewMode === 'icon' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="图标视图">▦</button>
+          <button @click="viewMode = 'grid'; saveSetting('viewMode', 'grid')" :class="viewMode === 'grid' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="网格平铺">🔳</button>
+          <button @click="viewMode = 'list'; saveSetting('viewMode', 'list')" :class="viewMode === 'list' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="列表视图">☰</button>
+          <button @click="viewMode = 'icon'; saveSetting('viewMode', 'icon')" :class="viewMode === 'icon' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="图标视图">▦</button>
         </div>
         
         <button @click="addBook" :disabled="importing" class="group px-4 py-2 shrink-0 bg-[#005fb8] hover:bg-[#005fb8]/90 hover:-translate-y-0.5 hover:shadow-lg disabled:bg-black/5 dark:bg-white/5 disabled:hover:translate-y-0 disabled:text-slate-400 dark:text-white/30 rounded-lg transition-all flex justify-center items-center gap-1.5 font-medium border border-[#005fb8]/50 shadow-sm">

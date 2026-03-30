@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     query: (sql: string, params?: any[]) => ipcRenderer.invoke('db:query', sql, params),
     importBook: (filePath: string) => ipcRenderer.invoke('db:importBook', filePath),
     export: () => ipcRenderer.invoke('db:export'),
+    exportLite: () => ipcRenderer.invoke('db:exportLite'),
     importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath)
   },
   dialog: {
