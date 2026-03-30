@@ -3,7 +3,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
     query: (sql: string, params?: any[]) => ipcRenderer.invoke('db:query', sql, params),
-    importBook: (filePath: string) => ipcRenderer.invoke('db:importBook', filePath)
+    importBook: (filePath: string) => ipcRenderer.invoke('db:importBook', filePath),
+    export: () => ipcRenderer.invoke('db:export'),
+    importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath)
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),
@@ -42,10 +44,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
     quit: () => ipcRenderer.invoke('app:quit')
   },
   webdav: {
-    request: (opts: any) => ipcRenderer.invoke('webdav:request', opts)
+    request: (opts: any) => ipcRenderer.invoke('webdav:request', opts),
+    uploadFile: (localPath: string, remoteUrl: string, auth: string) => ipcRenderer.invoke('webdav:uploadFile', localPath, remoteUrl, auth),
+    downloadFile: (remoteUrl: string, localPath: string, auth: string) => ipcRenderer.invoke('webdav:downloadFile', remoteUrl, localPath, auth)
   },
   tts: {
     getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),

@@ -10,6 +10,8 @@ export interface ElectronAPI {
   db: {
     query: (sql: string, params?: any[]) => Promise<any>
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
+    export: () => Promise<string>
+    importFromFile: (filePath: string) => Promise<void>
   }
   dialog: {
     openFile: () => Promise<string | null>
@@ -42,10 +44,13 @@ export interface ElectronAPI {
   }
   app: {
     getVersion: () => Promise<string>
+    getPath: (name: string) => Promise<string>
     quit: () => Promise<void>
   }
   webdav: {
     request: (opts: { url: string; method: string; headers?: Record<string, string>; body?: string }) => Promise<{ status?: number; data?: string; error?: string }>
+    uploadFile: (localPath: string, remoteUrl: string, auth: string) => Promise<{ success: boolean; error?: string }>
+    downloadFile: (remoteUrl: string, localPath: string, auth: string) => Promise<{ success: boolean; error?: string }>
   }
   tts: {
     getEdgeVoices: () => Promise<any[]>

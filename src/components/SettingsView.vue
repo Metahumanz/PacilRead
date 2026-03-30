@@ -31,6 +31,15 @@ const webdavPass = ref('')
 const webdavSync = ref(false)
 const webdavTestResult = ref('')
 const webdavTesting = ref(false)
+const webdavSyncing = ref(false)
+const webdavSyncStatus = ref('')
+const webdavLastSync = ref('')
+
+const webdavSyncBookshelf = ref(true)
+const webdavSyncFiles = ref(true)
+const webdavSyncUISettings = ref(true)
+const webdavSyncThemes = ref(true)
+const webdavSyncBackgrounds = ref(true)
 
 // Replacement rules
 const allRules = ref<ReplacementRule[]>([])
@@ -50,6 +59,12 @@ const loadSettings = async () => {
       if (s.key === 'webdavUser') webdavUser.value = s.value
       if (s.key === 'webdavPass') webdavPass.value = s.value
       if (s.key === 'webdavSync') webdavSync.value = s.value === 'true'
+      if (s.key === 'webdavSyncBookshelf') webdavSyncBookshelf.value = s.value !== 'false'
+      if (s.key === 'webdavSyncFiles') webdavSyncFiles.value = s.value !== 'false'
+      if (s.key === 'webdavSyncUISettings') webdavSyncUISettings.value = s.value !== 'false'
+      if (s.key === 'webdavSyncThemes') webdavSyncThemes.value = s.value !== 'false'
+      if (s.key === 'webdavSyncBackgrounds') webdavSyncBackgrounds.value = s.value !== 'false'
+      if (s.key === 'webdavLastSync') webdavLastSync.value = s.value || ''
       if (s.key === 'autoOpenLastRead') autoOpenLastRead.value = s.value === 'true'
       if (s.key === 'silentUpdate') silentUpdate.value = s.value === 'true'
       if (s.key === 'reader_ttsMiMoApiKey') ttsMiMoApiKey.value = s.value || ''
@@ -81,6 +96,11 @@ const saveWebdav = async () => {
   await saveSetting('webdavUser', webdavUser.value.trim())
   await saveSetting('webdavPass', webdavPass.value.trim())
   await saveSetting('webdavSync', webdavSync.value ? 'true' : 'false')
+  await saveSetting('webdavSyncBookshelf', webdavSyncBookshelf.value ? 'true' : 'false')
+  await saveSetting('webdavSyncFiles', webdavSyncFiles.value ? 'true' : 'false')
+  await saveSetting('webdavSyncUISettings', webdavSyncUISettings.value ? 'true' : 'false')
+  await saveSetting('webdavSyncThemes', webdavSyncThemes.value ? 'true' : 'false')
+  await saveSetting('webdavSyncBackgrounds', webdavSyncBackgrounds.value ? 'true' : 'false')
 }
 
 const testWebdav = async () => {
@@ -215,6 +235,106 @@ const toggleRuleActive = async (rule: ReplacementRule) => {
     await window.electronAPI.db.query('UPDATE replacement_rules SET active = ? WHERE id = ?', [rule.active ? 0 : 1, rule.id])
     await fetchAllRules()
   } catch (e) { console.error(e) }
+}
+
+
+const fullBackup = async () => {
+  if (!webdavUrl.value) return
+  try {
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '准备备份...'
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let baseUrl = webdavUrl.value
+    if (webdavDir.value) baseUrl += webdavDir.value
+    if (!baseUrl.endsWith('/')) baseUrl += '/'
+    baseUrl += 'PacilRead/'
+
+    // 1. Create directory structure
+    webdavSyncStatus.value = '创建云端目录...'
+    await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'backgrounds/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+
+    // 2. Database Sync (Bookshelf, UI Settings, Themes)
+    if (webdavSyncBookshelf.value || webdavSyncUISettings.value || webdavSyncThemes.value) {
+      webdavSyncStatus.value = '导出数据库...'
+      const dbPath = await window.electronAPI.db.export()
+      webdavSyncStatus.value = '上传数据库...'
+      await window.electronAPI.webdav.uploadFile(dbPath, baseUrl + 'reader.db', auth)
+    }
+
+    // 3. User Data Sync
+    const appDataPath = await window.electronAPI.app.getPath('userData')
+    
+    if (webdavSyncFiles.value) {
+      const booksDir = appDataPath + '/books/'
+      const bookFiles = await window.electronAPI.db.query('SELECT path FROM books')
+      for (let i = 0; i < (bookFiles as any[]).length; i++) {
+        const b = (bookFiles as any[])[i]
+        const fileName = b.path.split(/[\\/]/).pop()
+        webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
+        await window.electronAPI.webdav.uploadFile(booksDir + fileName, baseUrl + 'books/' + fileName, auth)
+      }
+      
+      const coversDir = appDataPath + '/covers/'
+      const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL')
+      for (let i = 0; i < (coverFiles as any[]).length; i++) {
+        const c = (coverFiles as any[])[i]
+        const fileName = c.cover_path.split(/[\\/]/).pop()
+        webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
+        await window.electronAPI.webdav.uploadFile(coversDir + fileName, baseUrl + 'covers/' + fileName, auth)
+      }
+    }
+
+    if (webdavSyncBackgrounds.value) {
+      const bgDir = appDataPath + '/backgrounds/'
+      if (bgImage.value && bgImage.value.startsWith('file:///')) {
+        const fileName = bgImage.value.split(/[\\/]/).pop()
+        webdavSyncStatus.value = '上传自定义背景...'
+        await window.electronAPI.webdav.uploadFile(bgDir + fileName, baseUrl + 'backgrounds/' + fileName, auth)
+      }
+    }
+
+    webdavLastSync.value = new Date().toLocaleString()
+    await saveSetting('webdavLastSync', webdavLastSync.value)
+    webdavSyncStatus.value = '备份成功'
+    alert('所有选定数据已同步至 WebDAV 云端！')
+  } catch (e: any) {
+    webdavSyncStatus.value = '备份失败: ' + (e.message || '网络错误')
+    console.error(e)
+  } finally {
+    webdavSyncing.value = false
+  }
+}
+
+const fullRestore = async () => {
+  if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动（书籍文件将尝试合并）。')) return
+  try {
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '拉取云端数据...'
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let baseUrl = webdavUrl.value
+    if (webdavDir.value) baseUrl += webdavDir.value
+    if (!baseUrl.endsWith('/')) baseUrl += '/'
+    baseUrl += 'PacilRead/'
+
+    const appDataPath = await window.electronAPI.app.getPath('userData')
+    const dstPath = appDataPath + '/reader.db.restore'
+    webdavSyncStatus.value = '下载数据库快照...'
+    const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader.db', dstPath, auth)
+    if (dl.error) throw new Error('云端无备份数据: ' + dl.error)
+
+    webdavSyncStatus.value = '应用数据库...'
+    await window.electronAPI.db.importFromFile(dstPath)
+
+    alert('数据库已成功从云端恢复！书架内容、个性化设置、自定义主题等已就绪，某些设置可能需要软件重启后完全生效。')
+    webdavSyncStatus.value = '从云端恢复成功'
+  } catch (e: any) {
+    webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
+  } finally {
+    webdavSyncing.value = false
+  }
 }
 
 onMounted(async () => {
@@ -373,9 +493,38 @@ onMounted(async () => {
                     <input type="password" v-model="webdavPass" @change="saveWebdav" placeholder="••••••••" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                   </div>
                 </div>
-                <div class="flex items-center justify-between pt-2 border-t border-white/[0.05] mt-3">
+                <div v-if="webdavSync" class="mt-4 pt-4 border-t border-black/10 dark:border-white/[0.05]">
+                  <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-2 font-medium text-left">同步内容选择 (点击切换)</label>
+                  <div class="flex flex-wrap gap-2 mb-5">
+                    <button @click="webdavSyncBookshelf = !webdavSyncBookshelf; saveWebdav()" :class="webdavSyncBookshelf ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">书架内容</button>
+                    <button @click="webdavSyncFiles = !webdavSyncFiles; saveWebdav()" :class="webdavSyncFiles ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">书籍文件</button>
+                    <button @click="webdavSyncUISettings = !webdavSyncUISettings; saveWebdav()" :class="webdavSyncUISettings ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">界面设置</button>
+                    <button @click="webdavSyncThemes = !webdavSyncThemes; saveWebdav()" :class="webdavSyncThemes ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">阅读主题</button>
+                    <button @click="webdavSyncBackgrounds = !webdavSyncBackgrounds; saveWebdav()" :class="webdavSyncBackgrounds ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/30 border-transparent'" class="px-3 py-1 rounded-full text-[11px] font-medium transition-all border shadow-sm">背景图片</button>
+                  </div>
+                  
+                  <div class="flex items-center gap-3">
+                    <button @click="fullBackup" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-md text-[12px] font-medium transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95">
+                      <span v-if="webdavSyncing && webdavSyncStatus.includes('上传')">⏳ {{ webdavSyncStatus }}</span>
+                      <span v-else-if="webdavSyncing">⏳ 处理中...</span>
+                      <span v-else>📤 立即备份到云端</span>
+                    </button>
+                    <button @click="fullRestore" :disabled="webdavSyncing || !webdavUrl" class="flex-1 px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-md text-[12px] font-medium transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95">
+                      <span v-if="webdavSyncing && webdavSyncStatus.includes('下载')">⏳ {{ webdavSyncStatus }}</span>
+                      <span v-else-if="webdavSyncing">⏳ 处理中...</span>
+                      <span v-else>📥 从云端恢复数据</span>
+                    </button>
+                  </div>
+                  <div v-if="webdavLastSync" class="text-center mt-3 text-[10px] text-slate-500 dark:text-white/30 flex items-center justify-center gap-1.5">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                    最后同步/备份: {{ webdavLastSync }}
+                  </div>
+                </div>
+
+                <!-- WebDAV Test Connection -->
+                <div class="flex items-center justify-between pt-2 border-t border-black/10 dark:border-white/[0.05] mt-3">
                   <span class="text-[12px] min-h-[18px]" :class="webdavTestResult.includes('✅') ? 'text-emerald-400' : 'text-red-400'">{{ webdavTestResult }}</span>
-                  <button @click="testWebdav" :disabled="webdavTesting" class="px-4 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-white/20 disabled:opacity-50 text-white rounded-md text-[12px] transition-colors font-medium border border-black/5 dark:border-white/5">探测网络</button>
+                  <button @click="testWebdav" :disabled="webdavTesting" class="px-4 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-800 dark:text-white/90 rounded-md text-[13px] transition-colors font-medium border border-black/5 dark:border-white/5">探测网络</button>
                 </div>
               </div>
             </div>

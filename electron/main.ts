@@ -9,6 +9,7 @@ import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database | null = null
+let SQL: any = null
 let dbPath: string = ''
 let mimoAbortController: AbortController | null = null
 
@@ -240,7 +241,7 @@ function parseBookNameAndAuthor(rawName: string): { title: string, author: strin
 async function initDatabase(): Promise<void> {
   const wasmPath = getWasmPath()
   const wasmBuffer = readFileSync(wasmPath)
-  const SQL = await initSqlJs({ wasmBinary: wasmBuffer.buffer })
+  SQL = await initSqlJs({ wasmBinary: wasmBuffer.buffer })
   dbPath = join(app.getPath('userData'), 'reader.db')
   db = existsSync(dbPath) ? new SQL.Database(readFileSync(dbPath)) : new SQL.Database()
 
@@ -454,7 +455,52 @@ ipcMain.handle('updater:install', async (_, silent?: boolean) => {
 })
 
 ipcMain.handle('app:getVersion', async () => app.getVersion())
+ipcMain.handle('app:getPath', async (_, name: any) => app.getPath(name))
 ipcMain.handle('app:quit', async () => app.quit())
+
+ipcMain.handle('db:export', async () => {
+  if (!db) throw new Error('Database not initialized')
+  const data = db.export()
+  const tempPath = join(app.getPath('temp'), `pacilread_export_${Date.now()}.db`)
+  writeFileSync(tempPath, Buffer.from(data))
+  return tempPath
+})
+
+ipcMain.handle('db:importFromFile', async (_, filePath: string) => {
+  if (!SQL) throw new Error('SQL.js not initialized')
+  const data = readFileSync(filePath)
+  db = new SQL.Database(data)
+  saveDatabase()
+})
+
+ipcMain.handle('webdav:uploadFile', async (_, localPath: string, remoteUrl: string, auth: string) => {
+  try {
+    const data = readFileSync(localPath)
+    const res = await fetch(remoteUrl, {
+      method: 'PUT',
+      headers: { 'Authorization': `Basic ${auth}` },
+      body: data
+    })
+    return { success: res.ok, status: res.status }
+  } catch (error: any) {
+    return { success: false, error: error.message || String(error) }
+  }
+})
+
+ipcMain.handle('webdav:downloadFile', async (_, remoteUrl: string, localPath: string, auth: string) => {
+  try {
+    const res = await fetch(remoteUrl, {
+      method: 'GET',
+      headers: { 'Authorization': `Basic ${auth}` }
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const buffer = await res.arrayBuffer()
+    writeFileSync(localPath, Buffer.from(buffer))
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message || String(error) }
+  }
+})
 
 ipcMain.handle('webdav:request', async (_, opts: { url: string; method: string; headers?: any; body?: string }) => {
   try {
