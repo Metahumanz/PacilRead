@@ -313,7 +313,7 @@ onMounted(async () => {
                       {{ k === ' ' ? 'Space' : k }} &times;
                     </span>
                   </div>
-                  <input type="text" placeholder="按下按键录入..." @keydown.prevent="addNextKey" class="w-full bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                  <input type="text" placeholder="按下按键录入..." @keydown.prevent="addNextKey" class="w-full bg-black/[0.03] dark:bg-black/20 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                 </div>
                 <div>
                   <label class="block text-[12px] text-slate-600 dark:text-white/60 mb-2 font-medium">上一页 / 上一章绑定</label>
@@ -322,7 +322,7 @@ onMounted(async () => {
                       {{ k === ' ' ? 'Space' : k }} &times;
                     </span>
                   </div>
-                  <input type="text" placeholder="按下按键录入..." @keydown.prevent="addPrevKey" class="w-full bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                  <input type="text" placeholder="按下按键录入..." @keydown.prevent="addPrevKey" class="w-full bg-black/[0.03] dark:bg-black/20 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                 </div>
               </div>
             </div>
@@ -356,21 +356,21 @@ onMounted(async () => {
                 <div class="grid grid-cols-[2fr_1fr] gap-3">
                   <div>
                     <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">主线服务器 URL (需尾随 /)</label>
-                    <input type="text" v-model="webdavUrl" @change="saveWebdav" placeholder="https://dav.jianguoyun.com/dav/" class="w-full bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                    <input type="text" v-model="webdavUrl" @change="saveWebdav" placeholder="https://dav.jianguoyun.com/dav/" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                   </div>
                   <div>
                     <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">子目录 (例如 Books)</label>
-                    <input type="text" v-model="webdavDir" @change="saveWebdav" placeholder="Books" class="w-full bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                    <input type="text" v-model="webdavDir" @change="saveWebdav" placeholder="Books" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                   <div>
                     <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">认证账户 (User)</label>
-                    <input type="text" v-model="webdavUser" @change="saveWebdav" placeholder="example@email.com" class="w-full bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                    <input type="text" v-model="webdavUser" @change="saveWebdav" placeholder="example@email.com" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                   </div>
                   <div>
                     <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">连接密钥 (App Password)</label>
-                    <input type="password" v-model="webdavPass" @change="saveWebdav" placeholder="••••••••" class="w-full bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                    <input type="password" v-model="webdavPass" @change="saveWebdav" placeholder="••••••••" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                   </div>
                 </div>
                 <div class="flex items-center justify-between pt-2 border-t border-white/[0.05] mt-3">

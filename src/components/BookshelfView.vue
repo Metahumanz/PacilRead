@@ -125,9 +125,9 @@ onMounted(() => fetchBooks())
         
         <!-- View Toggles -->
         <div class="flex items-center bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg p-1 overflow-hidden shrink-0">
-          <button @click="viewMode = 'grid'" :class="viewMode === 'grid' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:bg-white/10 text-slate-600 dark:text-white/60 hover:text-white'" class="p-1.5 rounded-md transition-colors leading-none" title="网格平铺">🔲</button>
-          <button @click="viewMode = 'list'" :class="viewMode === 'list' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:bg-white/10 text-slate-600 dark:text-white/60 hover:text-white'" class="p-1.5 rounded-md transition-colors leading-none" title="列表视图">📄</button>
-          <button @click="viewMode = 'icon'" :class="viewMode === 'icon' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:bg-white/10 text-slate-600 dark:text-white/60 hover:text-white'" class="p-1.5 rounded-md transition-colors leading-none" title="图标视图">🖼️</button>
+          <button @click="viewMode = 'grid'" :class="viewMode === 'grid' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="网格平铺">🔳</button>
+          <button @click="viewMode = 'list'" :class="viewMode === 'list' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="列表视图">☰</button>
+          <button @click="viewMode = 'icon'" :class="viewMode === 'icon' ? 'bg-[#005fb8] shadow-sm text-white' : 'hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-white/60'" class="p-1.5 rounded-md transition-all leading-none" title="图标视图">▦</button>
         </div>
         
         <button @click="addBook" :disabled="importing" class="group px-4 py-2 shrink-0 bg-[#005fb8] hover:bg-[#005fb8]/90 hover:-translate-y-0.5 hover:shadow-lg disabled:bg-black/5 dark:bg-white/5 disabled:hover:translate-y-0 disabled:text-slate-400 dark:text-white/30 rounded-lg transition-all flex justify-center items-center gap-1.5 font-medium border border-[#005fb8]/50 shadow-sm">
@@ -198,7 +198,8 @@ onMounted(() => fetchBooks())
 
     <!-- LIST VIEW -->
     <div v-if="!loading && filteredBooks.length > 0 && viewMode === 'list'" class="flex flex-col gap-2 pb-10">
-      <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id" class="group flex items-center bg-white dark:bg-[#2d2d2d]/40 hover:bg-white dark:bg-[#2d2d2d] border border-black/5 dark:border-white/[0.02] hover:border-white/[0.1] rounded-lg p-2 transition-all cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 bookshelf-card"
+      <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id" 
+           class="group flex items-center bg-white dark:bg-[#2d2d2d] hover:bg-white/80 dark:hover:bg-[#323232] border border-black/5 dark:border-white/[0.04] hover:border-white/[0.15] rounded-lg p-2 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 bookshelf-card"
            :style="{ animationDelay: `${index * 20}ms` }" @click="emit('open-book', book.id)">
         <div class="w-12 h-16 shrink-0 bg-[#222] rounded overflow-hidden shadow relative" :class="{'ring-1 ring-[#005fb8]': book.pinned}">
             <img v-if="book.cover_path" :src="book.cover_path" class="w-full h-full object-cover" />
