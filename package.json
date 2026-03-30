@@ -1,6 +1,6 @@
 {
   "name": "pacil-read",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "author": "Metahumanz",
   "description": "A modern desktop reader application built with Electron and Vue",
   "main": "dist-electron/main.js",

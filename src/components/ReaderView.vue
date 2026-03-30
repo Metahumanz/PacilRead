@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed, onUnmounted, nextTick } from 'vue'
-import { useSettings, saveSetting } from '../composables/useSettings'
+import { ref, onMounted, watch, computed, onUnmounted } from 'vue'
+import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useTTS } from '../composables/useTTS'
 import { usePagination } from '../composables/usePagination'
 
+// Sub-components
+import ReaderHUD from './reader/ReaderHUD.vue'
+import ReaderMenu from './reader/ReaderMenu.vue'
+import StylePanel from './reader/panels/StylePanel.vue'
+import TOCPanel from './reader/panels/TOCPanel.vue'
+import SearchPanel from './reader/panels/SearchPanel.vue'
+import RulesPanel from './reader/panels/RulesPanel.vue'
+import AutoPagePanel from './reader/panels/AutoPagePanel.vue'
+import TTSPanel from './reader/panels/TTSPanel.vue'
+import OptionsPanel from './reader/panels/OptionsPanel.vue'
+
 interface Chapter { id: number; title: string; body: string; order_index: number }
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string }
 interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
-interface SearchResult { chapterIndex: number; chapterTitle: string; snippet: string }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean }>()
 const emit = defineEmits<{
@@ -29,24 +39,9 @@ const showRules = ref(false)
 const showAutoPage = ref(false)
 const showTts = ref(false)
 const autoPageActive = ref(false)
-const sliderMode = ref<'book' | 'chapter'>('book')
 const showReaderOptions = ref(false)
-const showHudSettings = ref(false)
-const hudOptions = [
-  { value: 'none', label: '隐藏' },
-  { value: 'bookTitle', label: '书名' },
-  { value: 'chapterTitle', label: '章节名' },
-  { value: 'titleOrChapter', label: '书名/章节名' },
-  { value: 'currentTime', label: '现在时间' },
-  { value: 'batteryLevel', label: '系统电量' },
-  { value: 'chapterPage', label: '本章页数' },
-  { value: 'bookProgress', label: '全书进度' },
-  { value: 'pageAndProgress', label: '页数及进度' },
-  { value: 'timeAndBattery', label: '时间及电量' },
-]
 const showCopyModal = ref(false)
 const selectedText = ref('')
-const tocListRef = ref<HTMLElement | null>(null)
 
 // DOM refs
 const contentRef = ref<HTMLElement | null>(null)
@@ -64,11 +59,11 @@ const {
   ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
-  customThemes, systemFonts,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
   chapterTitleDisplay,
-  loadAllSettings, saveAllStyling, saveTtsSettings,
+  loadAllSettings, saveAllStyling, saveSetting,
+  sliderMode
 } = settings
 
 const toggleAlwaysOnTop = () => {
@@ -96,11 +91,6 @@ const fetchChapters = async () => {
 
 // ---- Replacement rules ----
 const rules = ref<ReplacementRule[]>([])
-const newPattern = ref('')
-const newReplacement = ref('')
-const newScope = ref<'book' | 'global'>('book')
-const newIsRegex = ref(false)
-
 const fetchRules = async () => {
   try {
     const r = await window.electronAPI.db.query(
@@ -109,23 +99,6 @@ const fetchRules = async () => {
     )
     rules.value = r as ReplacementRule[]
   } catch (e) { console.error(e) }
-}
-const addRule = async () => {
-  if (!newPattern.value.trim()) return
-  try {
-    await window.electronAPI.db.query(
-      'INSERT INTO replacement_rules (pattern, replacement, scope, book_id, is_regex, active) VALUES (?, ?, ?, ?, ?, 1)',
-      [newPattern.value, newReplacement.value, newScope.value, newScope.value === 'book' ? props.bookId : null, newIsRegex.value ? 1 : 0]
-    )
-    newPattern.value = ''; newReplacement.value = ''; newIsRegex.value = false
-    await fetchRules(); recalc()
-  } catch (e) { console.error(e) }
-}
-const deleteRule = async (id: number) => {
-  try { await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE id = ?', [id]); await fetchRules(); recalc() } catch (e) { console.error(e) }
-}
-const toggleRuleActive = async (rule: ReplacementRule) => {
-  try { await window.electronAPI.db.query('UPDATE replacement_rules SET active = ? WHERE id = ?', [rule.active ? 0 : 1, rule.id]); await fetchRules(); recalc() } catch (e) { console.error(e) }
 }
 const applyReplacements = (html: string): string => {
   if (!html) return html
@@ -194,16 +167,9 @@ const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterI
 
 // ---- Theme (composable) ----
 const theme = useTheme({
-  bgImage, coverColor, fontColor, fontFamily, fontSize, lineHeight,
-  letterSpacing, fontWeight, marginX, marginY, pageMode, doublePageStep,
-  customThemes, blurAmount,
   onStyleChanged: () => { saveAllStyling(); recalc() },
 })
-const { newThemeName, applyThemeConfig, applyTheme, saveTheme, deleteTheme, readerBgStyle } = theme
-
-const updateStyling = () => { saveAllStyling(); recalc() }
-const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => { flipMode.value = mode; saveSetting('reader_flipMode', mode) }
-const setFlipSpeed = (speed: 'fast' | 'medium' | 'slow') => { flipSpeed.value = speed; saveSetting('reader_flipSpeed', speed) }
+const { readerBgStyle } = theme
 
 const textStyle = computed(() => ({
   fontFamily: fontFamily.value, fontSize: fontSize.value + 'px',
@@ -282,33 +248,6 @@ const stopAutoPage = () => { if (autoPageTimer) clearInterval(autoPageTimer); au
 const toggleAutoPage = () => { if (autoPageActive.value) stopAutoPage(); else startAutoPage() }
 watch(autoPageSpeed, () => { if (autoPageActive.value) startAutoPage() })
 
-// ---- Search (in-book) ----
-const searchQuery = ref('')
-const searchResults = ref<SearchResult[]>([])
-const searching = ref(false)
-const doSearch = async () => {
-  const q = searchQuery.value.trim(); if (!q) { searchResults.value = []; return }
-  searching.value = true
-  try {
-    const results: SearchResult[] = []
-    for (let i = 0; i < chapters.value.length; i++) {
-      const plain = chapters.value[i].body.replace(/<[^>]+>/g, '')
-      let startIndex = 0
-      while (startIndex < plain.length) {
-        const idx = plain.toLowerCase().indexOf(q.toLowerCase(), startIndex)
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 20), end = Math.min(plain.length, idx + q.length + 40)
-          results.push({ chapterIndex: i, chapterTitle: chapters.value[i].title, snippet: (start > 0 ? '...' : '') + plain.substring(start, end) + (end < plain.length ? '...' : '') })
-          startIndex = idx + q.length
-        } else break
-      }
-    }
-    searchResults.value = results
-  } catch (e) { console.error(e) }
-  searching.value = false
-}
-const jumpToSearchResult = (idx: number) => { goToChapter(idx, true) }
-
 // ---- WebDAV download ----
 const downloadProgressFromWebdav = async () => {
   if (!webdavSync.value || !webdavUrl.value || !book.value) return
@@ -339,7 +278,7 @@ const downloadProgressFromWebdav = async () => {
 const closeAll = () => {
   showMenu.value = false; showStyling.value = false; showToc.value = false;
   showSearch.value = false; showRules.value = false; showAutoPage.value = false;
-  showTts.value = false; showReaderOptions.value = false; showHudSettings.value = false
+  showTts.value = false; showReaderOptions.value = false;
 }
 const closeKeyHints = () => { showKeyHints.value = false }
 const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
@@ -393,15 +332,8 @@ const toggleImmersiveMode = () => {
   if (props.isImmersive) { setTimeout(recalc, 400); setTimeout(recalc, 800) }
 }
 const handleGoBack = () => { saveProgress(); closeAll(); emit('go-back') }
-const handleProgressSlider = (e: Event) => {
-  const v = parseInt((e.target as HTMLInputElement).value)
-  if (sliderMode.value === 'book') {
-    goToChapter(v, true)
-  } else {
-    currentPage.value = v
-  }
-}
-const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 'tts' | 'readerOptions') => {
+
+const openPanel = (panel: string) => {
   showToc.value = panel === 'toc' ? !showToc.value : false
   showStyling.value = panel === 'styling' ? !showStyling.value : false
   showSearch.value = panel === 'search' ? !showSearch.value : false
@@ -410,9 +342,9 @@ const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 
   showTts.value = panel === 'tts' ? !showTts.value : false
   showReaderOptions.value = panel === 'readerOptions' ? !showReaderOptions.value : false
 }
-watch(showToc, (v) => {
-  if (v) nextTick(() => { const el = tocListRef.value?.querySelector('.toc-active') as HTMLElement; if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }) })
-})
+
+const jumpToSearchResult = (idx: number) => { goToChapter(idx, true) }
+
 watch(currentChapterIndex, () => recalc())
 watch([fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight], () => recalc())
 watch(currentPage, () => saveProgress())
@@ -446,7 +378,6 @@ onUnmounted(() => {
 })
 </script>
 
-
 <template>
   <div class="reader-root" :style="{ 
     touchAction: showMenu ? 'auto' : 'none',
@@ -454,12 +385,11 @@ onUnmounted(() => {
     '--dur-cover': flipDurationMap.cover,
     '--dur-curl': flipDurationMap.curl
   }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
-    <!-- Separate background layer to allow blurring without blurring text -->
+    <!-- Background layer -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
          :style="[readerBgStyle, { filter: blurAmount > 0 ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 ? 'scale(1.1)' : 'none' }]"
          :class="{ 'bg-[#0f172a]': !bgImage }">
     </div>
-    <!-- Darken overlay, ONLY applied when blur > 0 to not ruin original image -->
     <div v-if="bgImage && blurAmount > 0" class="fixed inset-0 pointer-events-none bg-black/40"></div>
 
     <div v-if="loading" class="load"><div class="spinner"></div><p>正在载入...</p></div>
@@ -475,17 +405,14 @@ onUnmounted(() => {
       </div>
       <div v-if="showingCover" class="sweep-line" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']"></div>
 
-      <!-- Three-container carousel -->
+      <!-- Carousel -->
       <div class="carousel" :class="{ sliding: carouselSliding }" :style="{ transform: carouselTransform }">
-        <!-- PREV chapter (last page) -->
         <div class="slide">
           <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px`, justifyContent: alignBottom ? 'flex-end' : 'flex-start' }">
             <div ref="prevContentRef" class="pg-ct" :style="{
-              ...textStyle,
-              transform: `translateX(${prevPageOffset})`,
+              ...textStyle, transform: `translateX(${prevPageOffset})`,
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto',
-              alignContent: alignBottom ? 'end' : 'start'
+              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
             }" v-if="prevChapterData">
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
               <div v-html="prevBody" class="ch-body"></div>
@@ -493,15 +420,12 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- CURRENT chapter -->
         <div class="slide">
           <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px`, justifyContent: alignBottom ? 'flex-end' : 'flex-start' }">
             <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim }" :style="{
-              ...textStyle,
-              transform: `translateX(${pageOffset})`,
+              ...textStyle, transform: `translateX(${pageOffset})`,
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto',
-              alignContent: alignBottom ? 'end' : 'start'
+              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
             }">
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
@@ -509,7 +433,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- NEXT chapter (first page) -->
         <div class="slide">
           <div class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div class="pg-ct" :style="textStyle" v-if="nextChapterData">
@@ -520,412 +443,66 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Key Hints Overlay -->
+      <!-- Key Hints -->
       <Transition name="fade">
         <div v-if="showKeyHints" class="absolute inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.stop>
           <div class="glass-dark p-8 rounded-3xl w-full max-w-md shadow-2xl border border-white/10 animate-scale-up">
-            <h3 class="text-2xl font-bold mb-6 flex items-center gap-3"><span class="text-3xl">⌨️</span> 快捷键指南</h3>
+            <h3 class="text-2xl font-bold mb-6 flex items-center gap-3">⌨️ 快捷键指南</h3>
             <div class="space-y-4 mb-8">
-              <div class="flex items-center justify-between p-3 glass rounded-xl">
-                <span class="text-slate-300">上一页</span>
-                <div class="flex gap-1">
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">←</kbd>
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">A / W</kbd>
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgUp</kbd>
-                </div>
-              </div>
-              <div class="flex items-center justify-between p-3 glass rounded-xl">
-                <span class="text-slate-300">下一页</span>
-                <div class="flex gap-1">
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">→</kbd>
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">D / S</kbd>
-                  <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgDn</kbd>
-                </div>
-              </div>
-              <div class="flex items-center justify-between p-3 glass rounded-xl">
-                <span class="text-slate-300">退出全屏 / 关闭菜单</span>
-                <kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">ESC</kbd>
-              </div>
-              <div class="flex items-center justify-between p-3 glass rounded-xl">
-                <span class="text-slate-300">鼠标操作</span>
-                <span class="text-xs text-slate-400">点击中间唤出菜单，两侧翻页</span>
-              </div>
+              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">上一页</span><div class="flex gap-1"><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">←</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">A/W</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgUp</kbd></div></div>
+              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">下一页</span><div class="flex gap-1"><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">→</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">D/S</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgDn</kbd></div></div>
+              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">退出 / 菜单</span><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">ESC</kbd></div>
+              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">鼠标操作</span><span class="text-xs text-slate-400">点击中间唤出菜单</span></div>
             </div>
             <div class="flex gap-4">
-              <button @click="disableKeyHints" class="flex-1 py-3 px-4 glass-card rounded-xl text-sm font-medium hover:bg-white/10 transition-all border border-white/5">不再提示</button>
-              <button @click="closeKeyHints" class="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20 transition-all">我知道了 (ESC)</button>
+              <button @click="disableKeyHints" class="flex-1 py-3 px-4 glass-card rounded-xl text-sm border border-white/5">不再提示</button>
+              <button @click="closeKeyHints" class="flex-1 py-3 px-4 bg-blue-600 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20">我知道了</button>
             </div>
           </div>
         </div>
       </Transition>
 
-      <!-- HUD -->
-      <template v-if="!showMenu">
-        <!-- Top HUD -->
-        <div class="hud hud-t">
-          <div class="hs hs-l"><span v-if="getHudContent(hudTopLeft)" class="hp">{{ getHudContent(hudTopLeft) }}</span></div>
-          <div class="hs hs-c"><span v-if="getHudContent(hudTopCenter)" class="hp text-center">{{ getHudContent(hudTopCenter) }}</span></div>
-          <div class="hs hs-r"><span v-if="getHudContent(hudTopRight)" class="hp text-right">{{ getHudContent(hudTopRight) }}</span></div>
-        </div>
-        <!-- Bottom HUD -->
-        <div class="hud hud-b">
-          <div class="hs hs-l"><span v-if="getHudContent(hudBottomLeft)" class="hp">{{ getHudContent(hudBottomLeft) }}</span></div>
-          <div class="hs hs-c"><span v-if="getHudContent(hudBottomCenter)" class="hp text-center">{{ getHudContent(hudBottomCenter) }}</span></div>
-          <div class="hs hs-r"><span v-if="getHudContent(hudBottomRight)" class="hp text-right">{{ getHudContent(hudBottomRight) }}</span></div>
-        </div>
-      </template>
+      <ReaderHUD 
+        v-if="!showMenu"
+        :topLeft="getHudContent(hudTopLeft)" :topCenter="getHudContent(hudTopCenter)" :topRight="getHudContent(hudTopRight)"
+        :bottomLeft="getHudContent(hudBottomLeft)" :bottomCenter="getHudContent(hudBottomCenter)" :bottomRight="getHudContent(hudBottomRight)"
+      />
 
-      <!-- MENU -->
+      <!-- Reader Menu -->
       <Transition name="menu-slide">
-        <div v-if="showMenu" class="menu-ov">
-          <div class="m-top" @click.stop>
-            <button @click="handleGoBack" class="m-back">← 书架</button>
-            <div class="m-title">{{ book?.title }}</div>
-            <div class="m-acts">
-              <button @click="toggleAlwaysOnTop" class="m-capsule-btn" :class="{ 'is-active': isAlwaysOnTop }">
-                <div class="mc-track"><div class="mc-thumb"></div></div>
-                <span>置顶</span>
-              </button>
-              <button @click="toggleImmersiveMode" class="m-btn">{{ props.isImmersive ? '⊡ 退出全屏' : '⛶ 全屏' }}</button>
-              <button @click="openPanel('search')" class="m-btn" :class="{active:showSearch}">🔍 搜索</button>
-              <button @click="openPanel('rules')" class="m-btn" :class="{active:showRules}">📝 替换</button>
-              <button @click="openPanel('styling')" class="m-btn" :class="{active:showStyling}">Aa 排版</button>
-              <button @click="openPanel('autopage')" class="m-btn shadow-sm" :class="showAutoPage || autoPageActive ? 'bg-indigo-600/80 border-indigo-500 text-white' : ''">⏱ 翻页</button>
-              <button @click="openPanel('tts')" class="m-btn shadow-sm" :class="showTts || ttsActive ? 'bg-violet-600/80 border-violet-500 text-white' : ''">🎧 听书</button>
-            </div>
-          </div>
-          <div class="m-bot" @click.stop>
-            <button @click="goToChapter(currentChapterIndex-1,true)" :disabled="currentChapterIndex===0" class="m-ch">⏮ 上一章</button>
-            <div class="m-prog"><input type="range" min="0" :max="sliderMax" :value="sliderValue" @input="handleProgressSlider" class="m-slider"></div>
-            <button @click="goToChapter(currentChapterIndex+1,true)" :disabled="currentChapterIndex>=chapters.length-1" class="m-ch">下一章 ⏭</button>
-          </div>
-          <div class="m-info" style="pointer-events: auto;" @click.stop>
-            <div class="flex items-center justify-start">
-              <button @click="openPanel('toc')" class="m-btn" :class="{active:showToc}">☰ 目录</button>
-            </div>
-            
-            <div class="flex flex-1 items-center justify-around text-center">
-              <span>第 {{ currentChapterIndex+1 }}/{{ chapters.length }} 章</span>
-              <span class="truncate max-w-[180px]">「{{ currentChapterData?.title }}」</span>
-              <span>第 {{ currentPage+1 }}/{{ totalPages }} 页</span>
-            </div>
-
-            <div class="flex items-center justify-end">
-              <button @click="openPanel('readerOptions')" class="m-btn" :class="{active:showReaderOptions}">⚙️ 设置</button>
-            </div>
-          </div>
-
-          <!-- Search panel -->
-          <Transition name="sf">
-            <div v-if="showSearch" class="search-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">全文搜索</span><button @click="showSearch=false" class="px">✕</button></div>
-              <div class="search-input-row">
-                <input type="text" v-model="searchQuery" @keydown.enter="doSearch" placeholder="输入关键词..." class="search-input" />
-                <button @click="doSearch" class="search-go" :disabled="searching">{{ searching ? '...' : '搜索' }}</button>
-              </div>
-              <div v-if="searchResults.length > 0" class="search-count">找到 {{ searchResults.length }} 个结果</div>
-              <div v-else-if="searchQuery && !searching" class="search-count empty">未找到匹配内容</div>
-              <div class="search-list">
-                <button v-for="sr in searchResults" :key="sr.chapterIndex" @click="jumpToSearchResult(sr.chapterIndex)" class="search-item">
-                  <span class="sr-ch">{{ sr.chapterTitle }}</span>
-                  <span class="sr-snip">{{ sr.snippet }}</span>
-                </button>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- TOC -->
-          <Transition name="sf">
-            <div v-if="showToc" class="toc-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">目录</span><button @click="showToc=false" class="px">✕</button></div>
-              <div ref="tocListRef" class="toc-l">
-                <button v-for="(ch,i) in chapters" :key="ch.id" @click="goToChapter(i,true)" class="toc-i" :class="{'toc-active':i===currentChapterIndex}">
-                  <span class="ti">{{ i+1 }}</span><span class="tn">{{ ch.title }}</span>
-                </button>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- Replacement rules panel -->
-          <Transition name="sf">
-            <div v-if="showRules" class="rules-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">替换规则</span><button @click="showRules=false" class="px">✕</button></div>
-              <!-- Add rule form -->
-              <div class="rule-form">
-                <input type="text" v-model="newPattern" placeholder="查找内容..." class="rule-input" />
-                <input type="text" v-model="newReplacement" placeholder="替换为..." class="rule-input" />
-                <div class="rule-opts">
-                  <label class="rule-scope-opt">
-                    <input type="radio" value="book" v-model="newScope" /> 本书
-                  </label>
-                  <label class="rule-scope-opt">
-                    <input type="radio" value="global" v-model="newScope" /> 全局
-                  </label>
-                  <label class="rule-regex-opt">
-                    <input type="checkbox" v-model="newIsRegex" /> 正则
-                  </label>
-                  <button @click="addRule" class="rule-add-btn" :disabled="!newPattern.trim()">+ 添加</button>
-                </div>
-              </div>
-              <!-- Rules list -->
-              <div class="rules-list">
-                <div v-if="rules.length === 0" class="rules-empty">暂无替换规则</div>
-                <div v-for="rule in rules" :key="rule.id" class="rule-item" :class="{ inactive: !rule.active }">
-                  <div class="rule-content">
-                    <span class="rule-pattern">{{ rule.pattern }}</span>
-                    <span class="rule-arrow">→</span>
-                    <span class="rule-repl">{{ rule.replacement || '(删除)' }}</span>
-                  </div>
-                  <div class="rule-meta">
-                    <span class="rule-badge" :class="rule.scope">{{ rule.scope === 'global' ? '全局' : '本书' }}</span>
-                    <span v-if="rule.is_regex" class="rule-badge regex">正则</span>
-                    <button @click="toggleRuleActive(rule)" class="rule-toggle" :title="rule.active ? '禁用' : '启用'">{{ rule.active ? '✓' : '○' }}</button>
-                    <button @click="deleteRule(rule.id)" class="rule-del" title="删除">✕</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- Styling panel -->
-          <Transition name="sf">
-            <div v-if="showStyling" class="sty-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">排版设置</span><button @click="showStyling=false" class="px">✕</button></div>
-              <div class="sr"><label>字体</label><select v-model="fontFamily" @change="updateStyling" class="ss"><option value="system-ui">系统默认</option><option value="serif">宋体</option><option value="'Microsoft YaHei'">微软雅黑</option><option v-for="f in systemFonts" :key="f" :value="`'${f}'`">{{ f }}</option></select></div>
-              <div class="sr"><label>字色</label><input type="color" v-model="fontColor" @input="updateStyling" class="sc"><input type="text" v-model="fontColor" @change="updateStyling" class="sn w72"></div>
-              <div class="sr"><label>字号</label><input type="range" min="12" max="64" step="1" v-model.number="fontSize" @input="updateStyling" class="sl"><input type="number" v-model.number="fontSize" @change="updateStyling" class="sn"><span class="su">px</span></div>
-              <div class="sr"><label>字重</label><input type="range" min="100" max="900" step="1" v-model.number="fontWeight" @input="updateStyling" class="sl"><input type="number" v-model.number="fontWeight" @change="updateStyling" class="sn"><small class="sw-note">*取决于字体</small></div>
-              <div class="sr"><label>行间距</label><input type="range" min="1" max="4" step="0.1" v-model.number="lineHeight" @input="updateStyling" class="sl"><input type="number" v-model.number="lineHeight" step="0.1" @change="updateStyling" class="sn"></div>
-              <div class="sr"><label>字间距</label><input type="range" min="-0.1" max="1" step="0.01" v-model.number="letterSpacing" @input="updateStyling" class="sl"><input type="number" v-model.number="letterSpacing" step="0.01" @change="updateStyling" class="sn"><span class="su">em</span></div>
-              <div class="sr"><label>左右边距</label><input type="range" min="0" max="200" step="1" v-model.number="marginX" @input="updateStyling" class="sl"><input type="number" v-model.number="marginX" @change="updateStyling" class="sn"><span class="su">px</span></div>
-              <div class="sr"><label>上下边距</label><input type="range" min="0" max="150" step="1" v-model.number="marginY" @input="updateStyling" class="sl"><input type="number" v-model.number="marginY" @change="updateStyling" class="sn"><span class="su">px</span></div>
-              <div class="sr"><label>翻页底色</label><input type="color" v-model="coverColor" @input="updateStyling" class="sc"><input type="text" v-model="coverColor" @change="updateStyling" class="sn w72"><small class="sw-note">*有背景图时自动适配</small></div>
-              <div class="sr"><label>背景模糊</label><input type="range" min="0" max="40" step="1" v-model.number="blurAmount" @input="updateStyling" class="sl"><input type="number" v-model.number="blurAmount" @change="updateStyling" class="sn"><span class="su">px</span></div>
-              <div class="sr">
-                <label>文字对齐</label>
-                <div class="btn-group">
-                  <button @click="textAlign='left'; updateStyling()" :class="{active: textAlign==='left'}">靠左对齐</button>
-                  <button @click="textAlign='justify'; updateStyling()" :class="{active: textAlign==='justify'}">两端对齐</button>
-                </div>
-              </div>
-              <div class="sr">
-                <label>章节标题</label>
-                <div class="btn-group">
-                  <button @click="chapterTitleDisplay='left'; updateStyling()" :class="{active: chapterTitleDisplay==='left'}">靠左</button>
-                  <button @click="chapterTitleDisplay='center'; updateStyling()" :class="{active: chapterTitleDisplay==='center'}">居中</button>
-                  <button @click="chapterTitleDisplay='none'; updateStyling()" :class="{active: chapterTitleDisplay==='none'}">隐藏</button>
-                </div>
-              </div>
-              <div class="sr">
-                <label>垂直对齐</label>
-                <div class="btn-group">
-                  <button @click="alignBottom=false; updateStyling()" :class="{active: !alignBottom}">常规（靠上）</button>
-                  <button @click="alignBottom=true; updateStyling()" :class="{active: alignBottom}">靠底沉降</button>
-                </div>
-              </div>
-              <div class="sp-divider"></div>
-              <div class="sr">
-                <label>视图模式</label>
-                <div class="btn-group">
-                  <button @click="pageMode='single'; updateStyling()" :class="{active: pageMode==='single'}">单页</button>
-                  <button @click="pageMode='double'; updateStyling()" :class="{active: pageMode==='double'}">双页(横屏)</button>
-                </div>
-              </div>
-              <div class="sr" v-if="pageMode==='double'">
-                <label>翻页步长</label>
-                <div class="btn-group">
-                  <button @click="doublePageStep=1; updateStyling()" :class="{active: doublePageStep===1}">1页</button>
-                  <button @click="doublePageStep=2; updateStyling()" :class="{active: doublePageStep===2}">2页</button>
-                </div>
-              </div>
-              <div class="sp-divider"></div>
-              <div class="sr themes-sr">
-                <label>预设主题</label>
-                <div class="btn-group theme-btns">
-                  <button @click="applyTheme('dark')">深色</button>
-                  <button @click="applyTheme('paper')">纸质/羊皮纸</button>
-                  <button @click="applyTheme('green')">护眼绿</button>
-                </div>
-              </div>
-              <div class="sr themes-sr">
-                <label>保存当前</label>
-                <div class="flex-row">
-                  <input type="text" v-model="newThemeName" placeholder="新主题名称" class="sn flex-1" style="width: auto;">
-                  <button @click="saveTheme" class="s-btn">保存</button>
-                </div>
-              </div>
-              <div class="sr themes-sr" v-if="customThemes.length > 0">
-                <label>自定义</label>
-                <div class="theme-list">
-                  <div v-for="t in customThemes" :key="t.id" class="theme-tag">
-                    <button @click="applyThemeConfig(t)" class="theme-n">{{ t.name }}</button>
-                    <button @click="deleteTheme(t.id)" class="theme-d">✕</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- Auto-Page panel -->
-          <Transition name="sf">
-            <div v-if="showAutoPage" class="sty-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">自动翻页</span><button @click="showAutoPage=false" class="px">✕</button></div>
-              <div class="sr">
-                <label>翻页速度</label>
-                <input type="range" min="1" max="30" step="1" v-model.number="autoPageSpeed" @change="saveTtsSettings" class="sl">
-                <input type="number" v-model.number="autoPageSpeed" @change="saveTtsSettings" class="sn"><span class="su">秒</span>
-              </div>
-              <div class="sr">
-                <label>动画耗时</label>
-                <div class="btn-group">
-                  <button @click="setFlipSpeed('fast')" :class="{active: flipSpeed==='fast'}">偏快</button>
-                  <button @click="setFlipSpeed('medium')" :class="{active: flipSpeed==='medium'}">默认</button>
-                  <button @click="setFlipSpeed('slow')" :class="{active: flipSpeed==='slow'}">偏慢</button>
-                </div>
-              </div>
-              <div class="flex justify-center mt-4">
-                <button @click="toggleAutoPage" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg" :class="autoPageActive ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 border border-indigo-500/30'">
-                  {{ autoPageActive ? '⏹ 停止自动翻页' : '▶ 开始自动翻页' }}
-                </button>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- TTS panel -->
-          <Transition name="sf">
-            <div v-if="showTts" class="sty-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">听书设置</span><button @click="showTts=false" class="px">✕</button></div>
-              <div class="sr">
-                <label>选择引擎</label>
-                <div class="btn-group">
-                  <button @click="ttsEngine='edge'; saveTtsSettings()" :class="{active: ttsEngine==='edge'}">Edge 云端</button>
-                  <button @click="ttsEngine='system'; saveTtsSettings()" :class="{active: ttsEngine==='system'}">本地系统</button>
-                  <button @click="ttsEngine='mimo'; saveTtsSettings()" :class="{active: ttsEngine==='mimo'}">小米 MiMo</button>
-                </div>
-              </div>
-              <div class="sr">
-                <label>发音人</label>
-                <select v-if="ttsEngine==='edge'" v-model="ttsVoice" @change="saveTtsSettings" class="ss">
-                  <option value="">随机/默认 (Xiaoxiao)</option>
-                  <option v-for="v in edgeVoices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
-                </select>
-                <select v-else-if="ttsEngine==='system'" v-model="ttsVoice" @change="saveTtsSettings" class="ss">
-                  <option value="">跟随系统默认</option>
-                  <option v-for="v in systemVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
-                </select>
-                <div v-else class="ss-info">固定 mimo-v2-tts / mimo_default</div>
-              </div>
-              <div class="sr">
-                <label>语速</label>
-                <input type="range" min="0.5" max="2.0" step="0.1" v-model.number="ttsRate" @change="saveTtsSettings" class="sl">
-                <input type="number" v-model.number="ttsRate" step="0.1" @change="saveTtsSettings" class="sn"><span class="su">x</span>
-              </div>
-              <div class="sr">
-                <label>高亮颜色</label>
-                <input type="color" v-model="highlightColor" @change="saveTtsSettings" class="sc"><input type="text" v-model="highlightColor" @change="saveTtsSettings" class="sn w72">
-              </div>
-              <div class="sp-divider"></div>
-              <div class="flex justify-center mt-4 mb-2">
-                <button @click="startTts" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 hover:text-violet-300 border border-violet-500/30" v-if="!ttsActive">
-                  ▶ 开始听书
-                </button>
-                <button @click="stopTts" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-red-500/20 text-red-500 hover:bg-red-500/30" v-else>
-                  ⏹ 停止听书
-                </button>
-              </div>
-            </div>
-          </Transition>
-
-          <!-- HUD Settings panel -->
-          <Transition name="sf">
-            <div v-if="showHudSettings" class="sty-p hud-conf-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">HUD 显示设置</span><button @click="showHudSettings=false" class="px">✕</button></div>
-              <div class="hud-grid">
-                <div class="hud-item">
-                  <label>左上</label>
-                  <select v-model="hudTopLeft" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-                <div class="hud-item">
-                  <label>中上</label>
-                  <select v-model="hudTopCenter" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-                <div class="hud-item">
-                  <label>右上</label>
-                  <select v-model="hudTopRight" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-                <div class="hud-item">
-                  <label>左下</label>
-                  <select v-model="hudBottomLeft" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-                <div class="hud-item">
-                  <label>中下</label>
-                  <select v-model="hudBottomCenter" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-                <div class="hud-item">
-                  <label>右下</label>
-                  <select v-model="hudBottomRight" @change="saveAllStyling()" class="ss">
-                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
-                </div>
-              </div>
-              <p class="text-[10px] opacity-40 mt-4 text-center">修改后将自动保存并应用</p>
-            </div>
-          </Transition>
-
-          <!-- Reader Options panel -->
-          <Transition name="sf">
-            <div v-if="showReaderOptions" class="reader-options-p" @click.stop @wheel.stop>
-              <div class="ph"><span class="pt">阅读选项</span><button @click="showReaderOptions=false" class="px">✕</button></div>
-              <div class="sr">
-                <label>进度调节</label>
-                <div class="btn-group">
-                  <button @click="sliderMode='book'" :class="{active: sliderMode==='book'}">全书章节</button>
-                  <button @click="sliderMode='chapter'" :class="{active: sliderMode==='chapter'}">本章页数</button>
-                </div>
-              </div>
-              <div class="sr">
-                <label>翻页效果</label>
-                <div class="btn-group">
-                  <button @click="setFlipMode('slide')" :class="{active: flipMode==='slide'}">平移</button>
-                  <button @click="setFlipMode('cover')" :class="{active: flipMode==='cover'}">覆盖</button>
-                  <button @click="setFlipMode('curl')" :class="{active: flipMode==='curl'}">仿真</button>
-                </div>
-              </div>
-              <div class="sp-divider"></div>
-              <div class="flex justify-center mt-4">
-                <button @click="showHudSettings=true" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30">
-                  ⚙️ HUD 显示设置
-                </button>
-              </div>
-            </div>
-          </Transition>
-
-        </div>
+        <ReaderMenu 
+          v-if="showMenu"
+          :book="book" :isAlwaysOnTop="isAlwaysOnTop" :isImmersive="props.isImmersive"
+          :showSearch="showSearch" :showRules="showRules" :showStyling="showStyling"
+          :showAutoPage="showAutoPage" :autoPageActive="autoPageActive"
+          :showTts="showTts" :ttsActive="ttsActive"
+          :showToc="showToc" :showReaderOptions="showReaderOptions"
+          :currentChapterIndex="currentChapterIndex" :chapters="chapters"
+          :currentPage="currentPage" :totalPages="totalPages"
+          :sliderMax="sliderMax" :sliderValue="sliderValue"
+          :currentChapterTitle="currentChapterData?.title || ''"
+          @back="handleGoBack" @toggle-always-on-top="toggleAlwaysOnTop"
+          @toggle-immersive="toggleImmersiveMode" @open-panel="openPanel"
+          @go-to-chapter="(idx) => goToChapter(idx, true)"
+          @slider-input="(val) => { if(sliderMode==='book') goToChapter(val, true); else currentPage=val; }"
+        >
+          <Transition name="sf"><SearchPanel v-if="showSearch" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
+          <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { goToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
+          <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(); recalc(); }" /></Transition>
+          <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
+          <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
+          <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>
+          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" @close="showReaderOptions=false" /></Transition>
+        </ReaderMenu>
       </Transition>
 
       <!-- Copy Modal -->
       <Transition name="fade">
         <div v-if="showCopyModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6" @click.stop="showCopyModal = false">
           <div class="copy-modal bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 shadow-2xl flex flex-col gap-4 max-h-[80vh]" @click.stop>
-            <div class="flex items-center justify-between">
-              <h3 class="text-slate-200 font-bold">文字提取与复制</h3>
-              <button @click="showCopyModal = false" class="text-slate-400 hover:text-white px-2">✕</button>
-            </div>
+            <div class="flex items-center justify-between"><h3 class="text-slate-200 font-bold">文字提取与复制</h3><button @click="showCopyModal = false" class="text-slate-400 hover:text-white px-2">✕</button></div>
             <textarea v-model="selectedText" class="w-full flex-1 min-h-[150px] bg-slate-800 text-slate-300 resize-none rounded-xl p-4 outline-none border border-slate-700/50 focus:border-blue-500" style="user-select: text;"></textarea>
-            <div class="flex justify-end gap-3 mt-2">
-              <button @click="showCopyModal = false" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-medium transition-colors">取消</button>
-              <button @click="copyToClipboard" class="px-5 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 font-bold shadow-lg shadow-blue-500/20 transition-colors">复制全文</button>
-            </div>
+            <div class="flex justify-end gap-3 mt-2"><button @click="showCopyModal = false" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-medium">取消</button><button @click="copyToClipboard" class="px-5 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 font-bold shadow-lg shadow-blue-500/20">复制全文</button></div>
           </div>
         </div>
       </Transition>
@@ -939,249 +516,46 @@ onUnmounted(() => {
 .spinner { width:40px; height:40px; border:2px solid rgba(59,130,246,0.2); border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg) } }
 
-/* Reveal Transition Overlay */
 .snapshot-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
-/* Cover mode animations */
 .snapshot-layer.left:not(.is-curl) { animation: clipLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .snapshot-layer.right:not(.is-curl) { animation: clipRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-@keyframes clipLeft {
-  from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
-  to { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); }
-}
-@keyframes clipRight {
-  from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
-  to { clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); }
-}
+@keyframes clipLeft { from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } to { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); } }
+@keyframes clipRight { from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } to { clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); } }
 
 .sweep-line { position: absolute; top: 0; bottom: 0; width: 40px; z-index: 21; pointer-events: none; background: linear-gradient(to right, transparent, rgba(0,0,0,0.15), rgba(0,0,0,0.4), transparent); }
-.theme-n .sweep-line { background: linear-gradient(to right, transparent, rgba(255,255,255,0.05), rgba(255,255,255,0.15), transparent); }
 .sweep-line.left:not(.is-curl) { animation: sweepLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .sweep-line.right:not(.is-curl) { animation: sweepRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 @keyframes sweepLeft { from { transform: translateX(100vw); } to { transform: translateX(-40px); } }
 @keyframes sweepRight { from { transform: translateX(-40px); } to { transform: translateX(100vw); } }
 
-/* Curl mode animations */
-.sweep-line.is-curl {
-  width: 120px;
-  background: linear-gradient(to right, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%);
-  transform-origin: center;
-}
-.theme-n .sweep-line.is-curl {
-  background: linear-gradient(to right, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 40%, transparent 100%);
-}
-
+.sweep-line.is-curl { width: 120px; background: linear-gradient(to right, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); transform-origin: center; }
 .sweep-line.is-curl.left { animation: curlSweepLeft var(--dur-curl) ease-in-out forwards; }
-@keyframes curlSweepLeft {
-  0% { transform: translateX(100vw) rotate(15deg) scaleX(1); opacity: 1; }
-  100% { transform: translateX(-50vw) rotate(15deg) scaleX(2.5); opacity: 0; }
-}
-
+@keyframes curlSweepLeft { 0% { transform: translateX(100vw) rotate(15deg) scaleX(1); opacity: 1; } 100% { transform: translateX(-50vw) rotate(15deg) scaleX(2.5); opacity: 0; } }
 .sweep-line.is-curl.right { animation: curlSweepRight var(--dur-curl) ease-in-out forwards; background: linear-gradient(to left, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); }
-.theme-n .sweep-line.is-curl.right { background: linear-gradient(to left, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 40%, transparent 100%); }
-@keyframes curlSweepRight {
-  0% { transform: translateX(-50vw) rotate(-15deg) scaleX(1); opacity: 1; }
-  100% { transform: translateX(100vw) rotate(-15deg) scaleX(2.5); opacity: 0; }
-}
-
+@keyframes curlSweepRight { 0% { transform: translateX(-50vw) rotate(-15deg) scaleX(1); opacity: 1; } 100% { transform: translateX(100vw) rotate(-15deg) scaleX(2.5); opacity: 0; } }
 .snapshot-layer.is-curl.left { animation: curlClipLeft var(--dur-curl) ease-in-out forwards; }
-@keyframes curlClipLeft {
-  0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
-  100% { clip-path: polygon(0 0, -20% 0, -50% 100%, 0 100%); }
-}
-
+@keyframes curlClipLeft { 0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } 100% { clip-path: polygon(0 0, -20% 0, -50% 100%, 0 100%); } }
 .snapshot-layer.is-curl.right { animation: curlClipRight var(--dur-curl) ease-in-out forwards; }
-@keyframes curlClipRight {
-  0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
-  100% { clip-path: polygon(100% 0, 120% 0, 150% 100%, 100% 100%); }
-}
+@keyframes curlClipRight { 0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } 100% { clip-path: polygon(100% 0, 120% 0, 150% 100%, 100% 100%); } }
 
-/* Carousel */
 .carousel { display:flex; width:300vw; height:100%; transform:translateX(-100vw); z-index:1; }
 .carousel.sliding { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .slide { width:100vw; height:100%; flex-shrink:0; overflow:hidden; }
-
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
 .pg-ct { height:100%; column-fill:auto; }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
-
 .ch-title { font-weight:700; margin-bottom:1.5em; opacity:0.85; }
 .ch-body { height:100%; }
 .ch-body :deep(p) { text-indent:2em; margin-bottom:0.8em; }
-.ch-body :deep(p:first-child) { text-indent:2em; }
-.ch-body :deep(> *:first-child) { text-indent:2em; }
+/* kbd style */
+.kbd { padding: 0.25rem 0.5rem; background-color: rgba(255, 255, 255, 0.1); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
-/* HUD Styles */
-.hud { position: fixed; left: 0; right: 0; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; z-index: 50; transition: opacity 0.3s; }
-.hud-t { top: 0; }
-.hud-b { bottom: 0; }
-.hs { flex: 1; display: flex; align-items: center; }
-.hs-l { justify-content: flex-start; }
-.hs-c { justify-content: center; }
-.hs-r { justify-content: flex-end; }
-.hp { padding: 4px 12px; background: rgba(0,0,0,0.25); backdrop-filter: blur(8px); border-radius: 100px; font-size: 11px; color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.05); }
-.hp.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-
-/* HUD Settings Panel */
-.hud-conf-p { width: 340px !important; }
-.hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
-.hud-item { display: flex; flex-direction: column; gap: 4px; }
-.hud-item label { font-size: 11px; opacity: 0.6; padding-left: 4px; }
-.hud-item .ss { width: 100%; height: 32px; font-size: 12px; }
-
-/* Menu */
-.menu-ov { position:absolute; inset:0; z-index:50; display:flex; flex-direction:column; }
-.m-top { display:flex; align-items:center; gap:10px; padding:16px 24px; height:auto; min-height:64px; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); border-bottom:1px solid rgba(255,255,255,0.06); flex-wrap:wrap; }
-.m-back { background:none; border:1px solid rgba(255,255,255,0.15); color:white; font-size:14px; font-weight:600; cursor:pointer; padding:8px 16px; border-radius:10px; transition:all .2s; white-space:nowrap; }
-.m-back:hover { background:rgba(255,255,255,0.1); }
-.m-title { font-weight:700; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:25%; opacity:0.8; min-width:0; }
-.m-acts { flex:1; display:flex; justify-content:flex-end; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
-.m-capsule-btn { display:flex; align-items:center; gap:5px; padding:5px 10px; border-radius:30px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.7); cursor:pointer; font-size:12px; font-weight:700; transition:all .2s; }
-.m-capsule-btn:hover { background:rgba(255,255,255,0.15); color:white; }
-.m-capsule-btn.is-active { background:rgba(59,130,246,0.15); border-color:#3b82f6; color:#60a5fa; }
-.m-capsule-btn .mc-track { position:relative; width:28px; height:16px; border-radius:10px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.2); transition:all .2s; }
-.m-capsule-btn.is-active .mc-track { background:#3b82f6; border-color:#3b82f6; }
-.m-capsule-btn .mc-thumb { position:absolute; left:2px; top:2px; width:10px; height:10px; border-radius:50%; background:white; transition:all .2s; }
-.m-capsule-btn.is-active .mc-thumb { transform:translateX(12px); }
-.m-btn { padding:8px 14px; border-radius:10px; font-size:13px; font-weight:700; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:white; cursor:pointer; transition:all .2s; white-space:nowrap; }
-.m-btn:hover { background:rgba(59,130,246,0.2); }
-.m-btn.active { background:#3b82f6; border-color:#3b82f6; box-shadow:0 4px 12px rgba(59,130,246,0.3); }
-.m-bot { margin-top:auto; display:flex; align-items:center; gap:16px; padding:16px 24px; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); border-top:1px solid rgba(255,255,255,0.06); flex-wrap:wrap; }
-.m-ch { padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:white; cursor:pointer; white-space:nowrap; transition:all .2s; }
-.m-ch:hover:not(:disabled) { background:rgba(59,130,246,0.2); }
-.m-ch:disabled { opacity:0.25; cursor:default; }
-.m-prog { flex:1; display:flex; flex-direction:column; align-items:center; gap:8px; min-width:100px; }
-.m-slider { width:100%; height:8px; -webkit-appearance:none; appearance:none; background:rgba(255,255,255,0.1); border-radius:4px; outline:none; cursor:pointer; }
-.m-slider::-webkit-slider-thumb { -webkit-appearance:none; width:20px; height:20px; background:white; border:3px solid #3b82f6; border-radius:50%; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.3); }
-.m-pct { font-size:12px; font-family:monospace; color:rgba(255,255,255,0.5); }
-.m-info { display:flex; align-items:center; padding:10px 24px 20px; font-size:12px; color:rgba(255,255,255,0.4); font-weight:600; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); gap:12px; flex-wrap:wrap; }
-
-/* Flip mode toggle */
-.flip-toggle { display:flex; align-items:center; gap:8px; margin-left:auto; }
-.ft-btn { padding:6px 16px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:rgba(255,255,255,0.4); font-size:12px; font-weight:700; cursor:pointer; transition:all .15s; }
-.ft-btn:hover { color:rgba(255,255,255,0.7); }
-.ftActive { background:#3b82f6!important; border-color:#3b82f6!important; color:white!important; }
-
-/* Search panel */
-.search-p { position:absolute; left:20px; top:60px; max-height: calc(100% - 180px); width:360px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; touch-action: pan-y; }
-.search-input-row { display:flex; gap:8px; margin-bottom:12px; }
-.search-input { flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:8px 14px; font-size:13px; color:white; outline:none; transition:border-color .2s; }
-.search-input:focus { border-color:#3b82f6; }
-.search-input::placeholder { color:rgba(255,255,255,0.3); }
-.search-go { padding:8px 16px; border-radius:10px; font-size:12px; font-weight:700; background:#3b82f6; border:none; color:white; cursor:pointer; transition:all .2s; white-space:nowrap; }
-.search-go:hover { background:#2563eb; }
-.search-go:disabled { opacity:0.5; }
-.search-count { font-size:11px; color:rgba(255,255,255,0.4); margin-bottom:8px; font-weight:600; }
-.search-count.empty { color:rgba(255,255,255,0.25); }
-.search-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
-.search-list::-webkit-scrollbar { width:4px; }
-.search-list::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
-.search-item { display:flex; flex-direction:column; gap:4px; padding:10px 12px; border-radius:10px; border:none; background:transparent; color:rgba(255,255,255,0.7); font-size:12px; cursor:pointer; text-align:left; transition:all .15s; }
-.search-item:hover { background:rgba(59,130,246,0.12); color:white; }
-.sr-ch { font-weight:700; font-size:12px; color:#60a5fa; }
-.sr-snip { font-size:11px; opacity:0.6; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* TOC */
-.toc-p { position:absolute; left:20px; top:60px; max-height: calc(100% - 180px); width:300px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; touch-action: pan-y; }
-.toc-l { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:2px; -webkit-overflow-scrolling: touch; }
-.toc-l::-webkit-scrollbar { width:4px; }
-.toc-l::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
-.toc-i { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; border:none; background:transparent; color:rgba(255,255,255,0.6); font-size:13px; cursor:pointer; text-align:left; transition:all .15s; }
-.toc-i:hover { background:rgba(255,255,255,0.06); color:white; }
-.toc-active { background:rgba(59,130,246,0.15)!important; color:#60a5fa!important; font-weight:700; }
-.ti { font-size:10px; opacity:0.4; min-width:24px; font-family:monospace; }
-.tn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* Replacement rules panel */
-.rules-p { position:absolute; right:20px; top:60px; max-height: calc(100% - 180px); width:380px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; overflow:hidden; touch-action: pan-y; }
-.rule-form { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
-.rule-input { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:8px 14px; font-size:13px; color:white; outline:none; transition:border-color .2s; }
-.rule-input:focus { border-color:#3b82f6; }
-.rule-input::placeholder { color:rgba(255,255,255,0.3); }
-.rule-opts { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-.rule-scope-opt, .rule-regex-opt { font-size:12px; color:rgba(255,255,255,0.5); display:flex; align-items:center; gap:4px; cursor:pointer; }
-.rule-scope-opt input, .rule-regex-opt input { accent-color:#3b82f6; }
-.rule-add-btn { margin-left:auto; padding:6px 16px; border-radius:8px; font-size:12px; font-weight:700; background:#3b82f6; border:none; color:white; cursor:pointer; transition:all .2s; }
-.rule-add-btn:hover { background:#2563eb; }
-.rule-add-btn:disabled { opacity:0.3; cursor:default; }
-.rules-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
-.rules-list::-webkit-scrollbar { width:4px; }
-.rules-list::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
-.rules-empty { text-align:center; padding:24px; font-size:12px; color:rgba(255,255,255,0.2); }
-.rule-item { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:10px 12px; transition:all .15s; }
-.rule-item.inactive { opacity:0.4; }
-.rule-content { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px; }
-.rule-pattern { color:#f59e0b; font-weight:600; word-break:break-all; }
-.rule-arrow { color:rgba(255,255,255,0.2); font-size:12px; flex-shrink:0; }
-.rule-repl { color:#34d399; font-weight:600; word-break:break-all; }
-.rule-meta { display:flex; align-items:center; gap:6px; }
-.rule-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:6px; }
-.rule-badge.global { background:rgba(139,92,246,0.15); color:#a78bfa; }
-.rule-badge.book { background:rgba(59,130,246,0.15); color:#60a5fa; }
-.rule-badge.regex { background:rgba(245,158,11,0.15); color:#fbbf24; }
-.rule-toggle { background:none; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.4); font-size:12px; cursor:pointer; padding:2px 8px; border-radius:6px; margin-left:auto; transition:all .15s; }
-.rule-toggle:hover { color:white; border-color:rgba(255,255,255,0.3); }
-.rule-del { background:none; border:none; color:rgba(239,68,68,0.5); font-size:14px; cursor:pointer; padding:2px 6px; transition:all .15s; }
-.rule-del:hover { color:#ef4444; }
-
-/* Styling */
-.sty-p { position:absolute; right:20px; top:60px; max-height: calc(100% - 180px); width:340px; overflow-y:auto; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:20px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); touch-action: pan-y; -webkit-overflow-scrolling: touch; }
-.sty-p::-webkit-scrollbar { width:4px; }
-.sty-p::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
-.ph { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
-.pt { font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.15em; opacity:0.5; }
-.px { background:none; border:none; color:rgba(255,255,255,0.4); cursor:pointer; font-size:16px; }
-.px:hover { color:white; }
-.sr { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
-.sr label { font-size:12px; font-weight:600; opacity:0.6; min-width:56px; flex-shrink:0; }
-.sl { flex:1; height:4px; -webkit-appearance:none; appearance:none; background:rgba(255,255,255,0.1); border-radius:2px; outline:none; min-width:80px; }
-.sl::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; background:white; border:2px solid #3b82f6; border-radius:50%; cursor:pointer; }
-.sn { width:52px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:4px 6px; text-align:center; font-size:12px; font-family:monospace; color:white; outline:none; }
-.sn:focus { border-color:#3b82f6; }
-.sn.w72 { width:72px; }
-.su { font-size:10px; opacity:0.3; font-family:monospace; min-width:20px; }
-.ss { flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:8px 12px; font-size:13px; color:white; outline:none; cursor:pointer; }
-.ss option { background:#0f172a; color:white; }
-.sc { width:36px; height:30px; border:1px solid rgba(255,255,255,0.15); border-radius:8px; background:transparent; cursor:pointer; padding:2px; }
-.ss-info { flex:1; padding:8px 12px; font-size:12px; color:rgba(255,255,255,0.4); font-style:italic; }
-.sw-note { font-size:10px; color:rgba(255,255,255,0.3); margin-left:4px; }
-.sp-divider { height:1px; background:rgba(255,255,255,0.06); margin:20px 0; }
-.btn-group { display:flex; gap:6px; flex:1; }
-.btn-group button { flex:1; padding:6px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:white; font-size:12px; cursor:pointer; transition:all .2s; }
-.btn-group button:hover { background:rgba(255,255,255,0.1); }
-.btn-group button.active { background:#3b82f6; border-color:#3b82f6; font-weight:700; }
-.theme-btns { flex-wrap:wrap; }
-.theme-btns button { min-width:30%; }
-.themes-sr { align-items:flex-start; }
-.themes-sr label { margin-top:6px; }
-.flex-row { display:flex; gap:8px; flex:1; }
-.flex-1 { flex:1; }
-.s-btn { padding:6px 12px; border-radius:8px; background:#3b82f6; border:none; color:white; font-size:12px; font-weight:700; cursor:pointer; transition:all .2s; }
-.s-btn:hover { background:#2563eb; }
-.theme-list { display:flex; flex-wrap:wrap; gap:8px; flex:1; }
-.theme-tag { display:flex; align-items:center; background:rgba(255,255,255,0.08); border-radius:6px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); }
-.theme-n { padding:4px 8px; font-size:11px; color:white; background:none; border:none; cursor:pointer; }
-.theme-n:hover { background:rgba(255,255,255,0.1); }
-.theme-d { padding:4px 6px; font-size:10px; color:rgba(239,68,68,0.7); background:none; border:none; border-left:1px solid rgba(255,255,255,0.1); cursor:pointer; }
-.theme-d:hover { background:rgba(239,68,68,0.2); color:#ef4444; }
-
-/* Transitions */
 .fade-enter-active,.fade-leave-active { transition:opacity .25s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
 .sf-enter-active,.sf-leave-active { transition:all .3s ease; }
 .sf-enter-from { opacity:0; transform:translateY(12px); }
 .sf-leave-to { opacity:0; transform:translateY(12px); }
 
-/* Menu Slide Transition */
 .menu-slide-enter-active, .menu-slide-leave-active { transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
 .menu-slide-enter-from, .menu-slide-leave-to { opacity: 0; }
-.m-top { transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-.menu-slide-enter-from .m-top, .menu-slide-leave-to .m-top { transform: translateY(-100%); }
-.m-bot, .m-info { transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-.menu-slide-enter-from .m-bot, .menu-slide-leave-to .m-bot,
-.menu-slide-enter-from .m-info, .menu-slide-leave-to .m-info { transform: translateY(100%); }
-
-/* Reader Options panel */
-.reader-options-p { position:absolute; right:20px; bottom:80px; width:300px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.15); border-radius:16px; padding:20px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
-.reader-options-p .sr { margin-bottom: 20px; }
-.reader-options-p .sr:last-child { margin-bottom: 0; }
 </style>
