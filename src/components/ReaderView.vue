@@ -29,6 +29,21 @@ const showRules = ref(false)
 const showAutoPage = ref(false)
 const showTts = ref(false)
 const autoPageActive = ref(false)
+const sliderMode = ref<'book' | 'chapter'>('book')
+const showReaderOptions = ref(false)
+const showHudSettings = ref(false)
+const hudOptions = [
+  { value: 'none', label: '隐藏' },
+  { value: 'bookTitle', label: '书名' },
+  { value: 'chapterTitle', label: '章节名' },
+  { value: 'titleOrChapter', label: '书名/章节名' },
+  { value: 'currentTime', label: '现在时间' },
+  { value: 'batteryLevel', label: '系统电量' },
+  { value: 'chapterPage', label: '本章页数' },
+  { value: 'bookProgress', label: '全书进度' },
+  { value: 'pageAndProgress', label: '页数及进度' },
+  { value: 'timeAndBattery', label: '时间及电量' },
+]
 const showCopyModal = ref(false)
 const selectedText = ref('')
 const tocListRef = ref<HTMLElement | null>(null)
@@ -50,6 +65,9 @@ const {
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   customThemes, systemFonts,
+  hudTopLeft, hudTopCenter, hudTopRight,
+  hudBottomLeft, hudBottomCenter, hudBottomRight,
+  chapterTitleDisplay,
   loadAllSettings, saveAllStyling, saveTtsSettings,
 } = settings
 
@@ -171,6 +189,9 @@ const {
   recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
 } = pagination
 
+const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
+const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
+
 // ---- Theme (composable) ----
 const theme = useTheme({
   bgImage, coverColor, fontColor, fontFamily, fontSize, lineHeight,
@@ -190,6 +211,44 @@ const textStyle = computed(() => ({
   fontWeight: String(fontWeight.value), color: fontColor.value,
   textAlign: textAlign.value as any,
 }))
+
+// ---- HUD Logic ----
+const currentTime = ref('')
+const batteryLevel = ref('-%')
+let hudTimer: any = null
+let batteryObj: any = null
+
+const updateHUDTime = () => {
+  const d = new Date()
+  currentTime.value = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+const initBattery = async () => {
+  if ((navigator as any).getBattery) {
+    try {
+      batteryObj = await (navigator as any).getBattery()
+      const updateCharge = () => { batteryLevel.value = Math.round(batteryObj.level * 100) + '%' }
+      updateCharge()
+      batteryObj.addEventListener('levelchange', updateCharge)
+    } catch (e) { console.error('Battery API err:', e) }
+  }
+}
+
+const getHudContent = (type: string) => {
+  if (!type || type === 'none') return ''
+  if (type === 'bookTitle') return book.value?.title || ''
+  if (type === 'chapterTitle') return currentChapterData.value?.title || ''
+  if (type === 'titleOrChapter') {
+    return (currentChapterIndex.value === 0 && pagination.currentPage.value === 0) ? (book.value?.title || '') : (currentChapterData.value?.title || '')
+  }
+  if (type === 'currentTime') return currentTime.value
+  if (type === 'batteryLevel') return batteryLevel.value
+  if (type === 'chapterPage') return `${pagination.currentPage.value + 1} / ${pagination.totalPages.value}`
+  if (type === 'bookProgress') return `第 ${currentChapterIndex.value + 1} / ${chapters.value.length} 章`
+  if (type === 'pageAndProgress') return `${pagination.currentPage.value + 1} / ${pagination.totalPages.value} (${progressPercent.value}%)`
+  if (type === 'timeAndBattery') return `${currentTime.value}  ${batteryLevel.value}`
+  return ''
+}
 
 // ---- TTS (composable) ----
 const tts = useTTS({
@@ -277,13 +336,17 @@ const downloadProgressFromWebdav = async () => {
 }
 
 // ---- Interaction ----
-const closeAll = () => { showMenu.value = false; showStyling.value = false; showToc.value = false; showSearch.value = false; showRules.value = false; showAutoPage.value = false; showTts.value = false }
+const closeAll = () => {
+  showMenu.value = false; showStyling.value = false; showToc.value = false;
+  showSearch.value = false; showRules.value = false; showAutoPage.value = false;
+  showTts.value = false; showReaderOptions.value = false; showHudSettings.value = false
+}
 const closeKeyHints = () => { showKeyHints.value = false }
 const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
 
 const handleClick = (e: MouseEvent) => {
   const t = e.target as HTMLElement
-  if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') || t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal')) return
+  if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') || t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal') || t.closest('.reader-options-p')) return
   if (showMenu.value) { closeAll(); return }
   const x = e.clientX, y = e.clientY
   if (handleTtsClick(x, y)) return
@@ -331,16 +394,21 @@ const toggleImmersiveMode = () => {
 }
 const handleGoBack = () => { saveProgress(); closeAll(); emit('go-back') }
 const handleProgressSlider = (e: Event) => {
-  const p = parseInt((e.target as HTMLInputElement).value)
-  goToChapter(Math.min(Math.floor((p / 100) * chapters.value.length), chapters.value.length - 1), true)
+  const v = parseInt((e.target as HTMLInputElement).value)
+  if (sliderMode.value === 'book') {
+    goToChapter(v, true)
+  } else {
+    currentPage.value = v
+  }
 }
-const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 'tts') => {
+const openPanel = (panel: 'toc' | 'styling' | 'search' | 'rules' | 'autopage' | 'tts' | 'readerOptions') => {
   showToc.value = panel === 'toc' ? !showToc.value : false
   showStyling.value = panel === 'styling' ? !showStyling.value : false
   showSearch.value = panel === 'search' ? !showSearch.value : false
   showRules.value = panel === 'rules' ? !showRules.value : false
   showAutoPage.value = panel === 'autopage' ? !showAutoPage.value : false
   showTts.value = panel === 'tts' ? !showTts.value : false
+  showReaderOptions.value = panel === 'readerOptions' ? !showReaderOptions.value : false
 }
 watch(showToc, (v) => {
   if (v) nextTick(() => { const el = tocListRef.value?.querySelector('.toc-active') as HTMLElement; if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }) })
@@ -352,7 +420,13 @@ watch(currentPage, () => saveProgress())
 // ---- Lifecycle ----
 onMounted(async () => {
   window.electronAPI.win.setControlsVisible(false)
-  await loadAllSettings(); await fetchBook(); await fetchChapters(); await fetchRules()
+  await loadAllSettings()
+  await fetchBook()
+  await fetchChapters()
+  await fetchRules()
+  updateHUDTime()
+  hudTimer = setInterval(updateHUDTime, 30000)
+  initBattery()
   if (book.value) currentPage.value = book.value.progress_offset || 0
   await downloadProgressFromWebdav()
   loading.value = false
@@ -363,6 +437,7 @@ onMounted(async () => {
   injectHighlightStyles()
 })
 onUnmounted(() => {
+  if (hudTimer) clearInterval(hudTimer)
   stopTts(); stopAutoPage()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
@@ -412,7 +487,7 @@ onUnmounted(() => {
               columnGap: `${marginX * 2}px`, columnFill: 'auto',
               alignContent: alignBottom ? 'end' : 'start'
             }" v-if="prevChapterData">
-              <h2 class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor }">{{ prevChapterData.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
               <div v-html="prevBody" class="ch-body"></div>
             </div>
           </div>
@@ -428,7 +503,7 @@ onUnmounted(() => {
               columnGap: `${marginX * 2}px`, columnFill: 'auto',
               alignContent: alignBottom ? 'end' : 'start'
             }">
-              <h2 class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor }">{{ currentChapterData?.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
             </div>
           </div>
@@ -438,7 +513,7 @@ onUnmounted(() => {
         <div class="slide">
           <div class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div class="pg-ct" :style="textStyle" v-if="nextChapterData">
-              <h2 class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor }">{{ nextChapterData.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ nextChapterData.title }}</h2>
               <div v-html="nextBody" class="ch-body"></div>
             </div>
           </div>
@@ -485,10 +560,20 @@ onUnmounted(() => {
       </Transition>
 
       <!-- HUD -->
-      <div v-if="!showMenu" class="hud">
-        <span class="hp">{{ currentPage === 0 ? book?.title : currentChapterData?.title }}</span>
-        <span class="hp mono">{{ progressPercent }}%</span>
-      </div>
+      <template v-if="!showMenu">
+        <!-- Top HUD -->
+        <div class="hud hud-t">
+          <div class="hs hs-l"><span v-if="getHudContent(hudTopLeft)" class="hp">{{ getHudContent(hudTopLeft) }}</span></div>
+          <div class="hs hs-c"><span v-if="getHudContent(hudTopCenter)" class="hp text-center">{{ getHudContent(hudTopCenter) }}</span></div>
+          <div class="hs hs-r"><span v-if="getHudContent(hudTopRight)" class="hp text-right">{{ getHudContent(hudTopRight) }}</span></div>
+        </div>
+        <!-- Bottom HUD -->
+        <div class="hud hud-b">
+          <div class="hs hs-l"><span v-if="getHudContent(hudBottomLeft)" class="hp">{{ getHudContent(hudBottomLeft) }}</span></div>
+          <div class="hs hs-c"><span v-if="getHudContent(hudBottomCenter)" class="hp text-center">{{ getHudContent(hudBottomCenter) }}</span></div>
+          <div class="hs hs-r"><span v-if="getHudContent(hudBottomRight)" class="hp text-right">{{ getHudContent(hudBottomRight) }}</span></div>
+        </div>
+      </template>
 
       <!-- MENU -->
       <Transition name="menu-slide">
@@ -511,7 +596,7 @@ onUnmounted(() => {
           </div>
           <div class="m-bot" @click.stop>
             <button @click="goToChapter(currentChapterIndex-1,true)" :disabled="currentChapterIndex===0" class="m-ch">⏮ 上一章</button>
-            <div class="m-prog"><input type="range" min="0" max="100" :value="progressPercent" @input="handleProgressSlider" class="m-slider"></div>
+            <div class="m-prog"><input type="range" min="0" :max="sliderMax" :value="sliderValue" @input="handleProgressSlider" class="m-slider"></div>
             <button @click="goToChapter(currentChapterIndex+1,true)" :disabled="currentChapterIndex>=chapters.length-1" class="m-ch">下一章 ⏭</button>
           </div>
           <div class="m-info" style="pointer-events: auto;" @click.stop>
@@ -526,13 +611,7 @@ onUnmounted(() => {
             </div>
 
             <div class="flex items-center justify-end">
-              <!-- Flip mode toggle -->
-              <span class="flip-toggle">
-                翻页:
-                <button @click="setFlipMode('slide')" class="ft-btn" :class="{ftActive: flipMode==='slide'}">平移</button>
-                <button @click="setFlipMode('cover')" class="ft-btn" :class="{ftActive: flipMode==='cover'}">覆盖</button>
-                <button @click="setFlipMode('curl')" class="ft-btn" :class="{ftActive: flipMode==='curl'}">仿真</button>
-              </span>
+              <button @click="openPanel('readerOptions')" class="m-btn" :class="{active:showReaderOptions}">⚙️ 设置</button>
             </div>
           </div>
 
@@ -696,9 +775,8 @@ onUnmounted(() => {
                   <button @click="setFlipSpeed('slow')" :class="{active: flipSpeed==='slow'}">偏慢</button>
                 </div>
               </div>
-              <div class="sp-divider"></div>
-              <div class="flex justify-center mt-4 mb-2">
-                <button @click="toggleAutoPage" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg" :class="autoPageActive ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 hover:text-indigo-300 border border-indigo-500/30'">
+              <div class="flex justify-center mt-4">
+                <button @click="toggleAutoPage" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg" :class="autoPageActive ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 border border-indigo-500/30'">
                   {{ autoPageActive ? '⏹ 停止自动翻页' : '▶ 开始自动翻页' }}
                 </button>
               </div>
@@ -745,6 +823,80 @@ onUnmounted(() => {
                 </button>
                 <button @click="stopTts" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-red-500/20 text-red-500 hover:bg-red-500/30" v-else>
                   ⏹ 停止听书
+                </button>
+              </div>
+            </div>
+          </Transition>
+
+          <!-- HUD Settings panel -->
+          <Transition name="sf">
+            <div v-if="showHudSettings" class="sty-p hud-conf-p" @click.stop @wheel.stop>
+              <div class="ph"><span class="pt">HUD 显示设置</span><button @click="showHudSettings=false" class="px">✕</button></div>
+              <div class="hud-grid">
+                <div class="hud-item">
+                  <label>左上</label>
+                  <select v-model="hudTopLeft" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+                <div class="hud-item">
+                  <label>中上</label>
+                  <select v-model="hudTopCenter" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+                <div class="hud-item">
+                  <label>右上</label>
+                  <select v-model="hudTopRight" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+                <div class="hud-item">
+                  <label>左下</label>
+                  <select v-model="hudBottomLeft" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+                <div class="hud-item">
+                  <label>中下</label>
+                  <select v-model="hudBottomCenter" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+                <div class="hud-item">
+                  <label>右下</label>
+                  <select v-model="hudBottomRight" @change="saveAllStyling()" class="ss">
+                    <option v-for="opt in hudOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
+                </div>
+              </div>
+              <p class="text-[10px] opacity-40 mt-4 text-center">修改后将自动保存并应用</p>
+            </div>
+          </Transition>
+
+          <!-- Reader Options panel -->
+          <Transition name="sf">
+            <div v-if="showReaderOptions" class="reader-options-p" @click.stop @wheel.stop>
+              <div class="ph"><span class="pt">阅读选项</span><button @click="showReaderOptions=false" class="px">✕</button></div>
+              <div class="sr">
+                <label>进度调节</label>
+                <div class="btn-group">
+                  <button @click="sliderMode='book'" :class="{active: sliderMode==='book'}">全书章节</button>
+                  <button @click="sliderMode='chapter'" :class="{active: sliderMode==='chapter'}">本章页数</button>
+                </div>
+              </div>
+              <div class="sr">
+                <label>翻页效果</label>
+                <div class="btn-group">
+                  <button @click="setFlipMode('slide')" :class="{active: flipMode==='slide'}">平移</button>
+                  <button @click="setFlipMode('cover')" :class="{active: flipMode==='cover'}">覆盖</button>
+                  <button @click="setFlipMode('curl')" :class="{active: flipMode==='curl'}">仿真</button>
+                </div>
+              </div>
+              <div class="sp-divider"></div>
+              <div class="flex justify-center mt-4">
+                <button @click="showHudSettings=true" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30">
+                  ⚙️ HUD 显示设置
                 </button>
               </div>
             </div>
@@ -850,10 +1002,23 @@ onUnmounted(() => {
 .ch-body :deep(p:first-child) { text-indent:2em; }
 .ch-body :deep(> *:first-child) { text-indent:2em; }
 
-/* HUD */
-.hud { position:absolute; bottom:16px; left:24px; right:24px; display:flex; justify-content:space-between; pointer-events:none; z-index:10; }
-.hp { font-size:11px; font-weight:600; background:rgba(15,23,42,0.5); backdrop-filter:blur(8px); padding:4px 12px; border-radius:20px; border:1px solid rgba(255,255,255,0.06); opacity:0.7; }
-.hp.mono { font-family:'Consolas',monospace; }
+/* HUD Styles */
+.hud { position: fixed; left: 0; right: 0; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; z-index: 50; transition: opacity 0.3s; }
+.hud-t { top: 0; }
+.hud-b { bottom: 0; }
+.hs { flex: 1; display: flex; align-items: center; }
+.hs-l { justify-content: flex-start; }
+.hs-c { justify-content: center; }
+.hs-r { justify-content: flex-end; }
+.hp { padding: 4px 12px; background: rgba(0,0,0,0.25); backdrop-filter: blur(8px); border-radius: 100px; font-size: 11px; color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.05); }
+.hp.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+/* HUD Settings Panel */
+.hud-conf-p { width: 340px !important; }
+.hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.hud-item { display: flex; flex-direction: column; gap: 4px; }
+.hud-item label { font-size: 11px; opacity: 0.6; padding-left: 4px; }
+.hud-item .ss { width: 100%; height: 32px; font-size: 12px; }
 
 /* Menu */
 .menu-ov { position:absolute; inset:0; z-index:50; display:flex; flex-direction:column; }
@@ -1006,4 +1171,9 @@ onUnmounted(() => {
 .m-bot, .m-info { transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
 .menu-slide-enter-from .m-bot, .menu-slide-leave-to .m-bot,
 .menu-slide-enter-from .m-info, .menu-slide-leave-to .m-info { transform: translateY(100%); }
+
+/* Reader Options panel */
+.reader-options-p { position:absolute; right:20px; bottom:80px; width:300px; background:rgba(15,23,42,0.95); backdrop-filter:blur(24px); border:1px solid rgba(255,255,255,0.15); border-radius:16px; padding:20px; z-index:60; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
+.reader-options-p .sr { margin-bottom: 20px; }
+.reader-options-p .sr:last-child { margin-bottom: 0; }
 </style>

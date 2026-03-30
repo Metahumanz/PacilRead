@@ -28,6 +28,17 @@ export function useSettings() {
   const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
   const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
 
+  // HUD settings
+  const hudTopLeft = ref('none')
+  const hudTopCenter = ref('none')
+  const hudTopRight = ref('none')
+  const hudBottomLeft = ref('titleOrChapter')
+  const hudBottomCenter = ref('none')
+  const hudBottomRight = ref('pageAndProgress')
+
+  // Chapter title settings
+  const chapterTitleDisplay = ref<'left' | 'center' | 'none'>('left')
+
   // Auto-page
   const autoPageSpeed = ref(10)
 
@@ -113,6 +124,13 @@ export function useSettings() {
           if (s.key === 'custom_themes') {
             try { customThemes.value = JSON.parse(s.value) || [] } catch (_) {}
           }
+          if (s.key === 'hud_tl') hudTopLeft.value = s.value
+          if (s.key === 'hud_tc') hudTopCenter.value = s.value
+          if (s.key === 'hud_tr') hudTopRight.value = s.value
+          if (s.key === 'hud_bl') hudBottomLeft.value = s.value
+          if (s.key === 'hud_bc') hudBottomCenter.value = s.value
+          if (s.key === 'hud_br') hudBottomRight.value = s.value
+          if (s.key === 'chapterTitleDisplay') chapterTitleDisplay.value = s.value as any || 'left'
         })
       }
       try { systemFonts.value = await window.electronAPI.font.getSystemFonts() } catch (_) { systemFonts.value = [] }
@@ -134,6 +152,13 @@ export function useSettings() {
     saveSetting('reader_blurAmount', blurAmount.value)
     saveSetting('reader_textAlign', textAlign.value)
     saveSetting('reader_alignBottom', alignBottom.value ? 'true' : 'false')
+    saveSetting('hud_tl', hudTopLeft.value)
+    saveSetting('hud_tc', hudTopCenter.value)
+    saveSetting('hud_tr', hudTopRight.value)
+    saveSetting('hud_bl', hudBottomLeft.value)
+    saveSetting('hud_bc', hudBottomCenter.value)
+    saveSetting('hud_br', hudBottomRight.value)
+    saveSetting('chapterTitleDisplay', chapterTitleDisplay.value)
   }
 
   const saveTtsSettings = () => {
@@ -163,6 +188,10 @@ export function useSettings() {
     webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
     // Themes
     customThemes, systemFonts,
+    // HUD
+    hudTopLeft, hudTopCenter, hudTopRight,
+    hudBottomLeft, hudBottomCenter, hudBottomRight,
+    chapterTitleDisplay,
     // Methods
     loadAllSettings, saveAllStyling, saveTtsSettings,
   }
