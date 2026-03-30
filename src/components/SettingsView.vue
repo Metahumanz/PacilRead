@@ -507,6 +507,19 @@ onMounted(async () => {
             <div class="pb-4 pt-2">
               <div class="flex items-center gap-2 mb-2">
                 <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+                <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.3</span>
+                <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
+              </div>
+              <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+                <li>阅读界面 HUD 模块化增强：支持 6 个自定义展示槽位（顶部/底部、左/中/右）</li>
+                <li>HUD 内容高度自定义：支持显示时间、电量、章节名、页数及全书进度等 10 种组合</li>
+                <li>章节标题显示优化：正文前章节名支持靠左对齐、居中对齐或完全隐藏</li>
+                <li>集成系统电池电量实时监听与分钟级时钟更新</li>
+              </ul>
+            </div>
+
+            <div class="py-4 border-t border-white/[0.04]">
+              <div class="flex items-center gap-2 mb-2">
                 <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.2</span>
                 <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-29</span>
               </div>
