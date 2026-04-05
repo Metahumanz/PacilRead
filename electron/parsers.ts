@@ -21,7 +21,10 @@ function linesToHtml(text: string): string {
 
 export function splitTextIntoChapters(content: string): Chapter[] {
   const rules = [
-    /^[ \t　]{0,8}(?:序章|楔子|引子|番外|第\s{0,4}[0-9一二三四五六七八九十百千万零两]+?\s{0,4}(?:章|节(?!课)|卷|回|部|篇|季)|卷\s{0,4}[0-9一二三四五六七八九十百千万零两]+?).{0,30}$/gm,
+    // "第xx章/节/卷/回/部/篇/季" or "卷xx" — require a separator before any title text
+    // Matches: "第一回"  "第一回 风云再起"  "第一回——起源"  "第一回：风起"
+    // Rejects: "第一回看到这种景象" (no separator after keyword, likely body text)
+    /^[ \t　]{0,8}(?:序章|楔子|引子|番外|第\s{0,4}[0-9一二三四五六七八九十百千万零两]+?\s{0,4}(?:章|节(?!课)|卷|回|部|篇|季)|卷\s{0,4}[0-9一二三四五六七八九十百千万零两]+?)(?:[\s:：;；\-—─━~·、,.，。　]+.{0,30})?$/gm,
     /^[ \t　]{0,4}\d{1,5}[:：,.， 、_—\-].{1,30}$/gm,
     /^[ \t　]*[【〔〖「『〈［\[](?:第|[Cc]hapter).*?[章节].{0,20}$/gm
   ]

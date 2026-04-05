@@ -438,7 +438,7 @@ onUnmounted(() => {
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
           <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>
-          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" @close="showReaderOptions=false" /></Transition>
+          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" :book="book" @close="showReaderOptions=false" @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }" /></Transition>
         </ReaderMenu>
       </Transition>
 

@@ -85,13 +85,13 @@ const { silentUpdate } = settings
             <div class="flex items-center gap-2 mb-2">
               <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
               <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.6</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-31</span>
+              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-04-05</span>
             </div>
             <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>WebDAV 增量同步模式：支持仅同步设置、规则与书籍列表，大幅降低备份体积</li>
-              <li>智能文件秒传：书籍与封面上传前自动探测云端状态，避免重复传输消耗流量</li>
-              <li>同步性能优化：通过内存库克隆与 VACUUM 压缩，确保备份数据的极致精简</li>
-              <li>体验增强：同步操作区清晰划分“增量”与“全量”模块，支持颗粒化数据恢复</li>
+              <li>章节识别算法升级：优化“第xx回/卷”匹配逻辑，增加分隔符校验，彻底杜绝正文误判</li>
+              <li>阅读器功能增强：面板顶部新增书名及作者名编辑功能，支持自动保存并即时生效</li>
+              <li>HUD 设置体验优化：移除设置折叠开关，显示方位配置直接呈现，操作更直观</li>
+              <li>UI 交互打磨：阅读选项面板支持滚动条，优化了在小窗口模式下的设置项展示效果</li>
             </ul>
           </div>
           <div class="py-4 border-t border-white/[0.04]">
