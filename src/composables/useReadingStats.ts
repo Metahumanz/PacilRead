@@ -78,6 +78,7 @@ const UI_SETTINGS_KEYS = [
   'reader_ttsRate',
   'reader_highlightColor',
   'reader_ttsMiMoApiKey',
+  'reader_ttsMiMoVoice',
   'reader_alwaysOnTop',
   'reader_sliderMode',
   'sidebarCollapsed',

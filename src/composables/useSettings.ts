@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 
 // ---- Persistence helpers ----
 export const saveSetting = async (k: string, v: any) => {
@@ -53,6 +54,7 @@ const ttsVoice = ref('')
 const ttsRate = ref(1.0)
 const highlightColor = ref('#3b82f6')
 const ttsMiMoApiKey = ref('')
+const ttsMiMoVoice = ref(MIMO_TTS_DEFAULT_VOICE)
 
 // Navigation keys
 const nextKeys = ref<string[]>([...DEFAULT_NEXT_KEYS])
@@ -137,6 +139,7 @@ function resetSettingsState() {
   ttsRate.value = 1.0
   highlightColor.value = '#3b82f6'
   ttsMiMoApiKey.value = ''
+  ttsMiMoVoice.value = MIMO_TTS_DEFAULT_VOICE
 
   nextKeys.value = [...DEFAULT_NEXT_KEYS]
   prevKeys.value = [...DEFAULT_PREV_KEYS]
@@ -199,6 +202,9 @@ export function useSettings() {
           if (s.key === 'reader_ttsRate') ttsRate.value = parseFloat(s.value) || 1.0
           if (s.key === 'reader_highlightColor') highlightColor.value = s.value || '#3b82f6'
           if (s.key === 'reader_ttsMiMoApiKey') ttsMiMoApiKey.value = s.value || ''
+          if (s.key === 'reader_ttsMiMoVoice') {
+            ttsMiMoVoice.value = isMimoTtsVoiceId(s.value) ? s.value : MIMO_TTS_DEFAULT_VOICE
+          }
           if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
           if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
           if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
@@ -294,6 +300,7 @@ export function useSettings() {
     saveSetting('reader_ttsRate', ttsRate.value)
     saveSetting('reader_highlightColor', highlightColor.value)
     saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value)
+    saveSetting('reader_ttsMiMoVoice', ttsMiMoVoice.value)
   }
 
   return {
@@ -306,7 +313,7 @@ export function useSettings() {
     // Auto-page
     autoPageSpeed,
     // TTS
-    ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
+    ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
     // Keys
     nextKeys, prevKeys,
     // UI

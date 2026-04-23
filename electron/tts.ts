@@ -16,6 +16,9 @@ export const EDGE_VOICES: EdgeVoice[] = [
   { name: 'Xiaorui (Female - senior)', shortName: 'zh-CN-XiaoruiNeural' }
 ]
 
+const MIMO_TTS_DEFAULT_VOICE = '冰糖'
+const MIMO_TTS_VOICES = new Set(['冰糖', '茉莉', '苏打', '白桦'])
+
 // Constants matching edge-tts Python library (rany2/edge-tts)
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const CHROMIUM_FULL_VERSION = '143.0.3650.75'
@@ -144,22 +147,24 @@ export async function synthesizeEdgeTTS(
 export async function synthesizeMimoStreaming(
   text: string,
   apiKey: string,
+  voice: string | undefined,
   onChunk: (chunk: Buffer) => void,
   onDone: () => void,
   onError: (err: any) => void,
   signal?: AbortSignal
 ) {
   try {
+    const mimoVoice = voice && MIMO_TTS_VOICES.has(voice) ? voice : MIMO_TTS_DEFAULT_VOICE
     const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'api-key': apiKey
       },
       body: JSON.stringify({
-        model: 'mimo-v2-tts',
+        model: 'mimo-v2.5-tts',
         messages: [{ role: 'assistant', content: text }],
-        audio: { format: 'pcm16', voice: 'mimo_default' },
+        audio: { format: 'pcm16', voice: mimoVoice },
         stream: true
       }),
       signal

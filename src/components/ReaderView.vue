@@ -60,7 +60,7 @@ const {
   fontFamily, fontColor, coverColor, bgImage, blurAmount,
   textAlign, alignBottom, pageMode, doublePageStep,
   flipMode, flipSpeed, autoPageSpeed,
-  ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
+  ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   readingTimeTrackingEnabled, readingTimeStatsHidden,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
@@ -207,7 +207,7 @@ const tts = useTTS({
   contentRef, containerWidth,
   ttsEngine, ttsVoice, ttsRate, highlightColor,
   flipDurationMs: computed(() => flipDurationMap.value.ms),
-  ttsMiMoApiKey,
+  ttsMiMoApiKey, ttsMiMoVoice,
   nextPage: trackedNextPage, slideToNextChapter: trackedSlideToNextChapter,
 })
 const { ttsActive, edgeVoices, systemVoices, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts

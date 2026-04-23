@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.4.8',
+    date: '2026-04-23',
+    changes: [
+      'MiMo 听书升级至 v2.5：阅读面板支持冰糖、茉莉、苏打、白桦 4 种中文内置音色',
+      '设置页语音朗读增强：保留朗读引擎选择与 MiMo API Key，并新增测试朗读',
+      '测试朗读支持当前引擎、语速与 MiMo 音色，便于快速确认听书效果'
+    ]
+  },
+  {
     version: '0.4.7',
     date: '2026-04-23',
     changes: [

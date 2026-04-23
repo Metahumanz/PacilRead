@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tts: {
     getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
     synthesize: (text: string, voice?: string, rate?: number) => ipcRenderer.invoke('tts:synthesize', { text, voice, rate }),
-    startMimo: (text: string, apiKey: string) => ipcRenderer.invoke('tts:start-mimo', { text, apiKey }),
+    startMimo: (text: string, apiKey: string, voice?: string) => ipcRenderer.invoke('tts:start-mimo', { text, apiKey, voice }),
     stopMimo: () => ipcRenderer.invoke('tts:stop-mimo'),
     onMimoChunk: (cb: (chunk: Uint8Array) => void) => {
       const listener = (_: any, chunk: Uint8Array) => cb(chunk)

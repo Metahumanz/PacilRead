@@ -13,6 +13,7 @@ export function useTTS(opts: {
   highlightColor: Ref<string>
   flipDurationMs: Ref<number>
   ttsMiMoApiKey: Ref<string>
+  ttsMiMoVoice: Ref<string>
   nextPage: () => void
   slideToNextChapter: () => void
 }) {
@@ -239,7 +240,7 @@ export function useTTS(opts: {
       })
 
       const cleanedText = originalText.replace(/[\(\)\[\]（））【】]/g, '"')
-      ;(window as any).electronAPI.tts.startMimo(cleanedText, opts.ttsMiMoApiKey.value)
+      ;(window as any).electronAPI.tts.startMimo(cleanedText, opts.ttsMiMoApiKey.value, opts.ttsMiMoVoice.value)
     })
   }
 

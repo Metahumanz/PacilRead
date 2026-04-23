@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useSettings } from '../../../composables/useSettings'
+import { MIMO_TTS_VOICES } from '../../../data/mimoTts'
 
 defineProps<{
   ttsActive: boolean
@@ -14,7 +15,7 @@ defineEmits<{
 }>()
 
 const settings = useSettings()
-const { ttsEngine, ttsVoice, ttsRate, highlightColor, saveTtsSettings } = settings
+const { ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoVoice, saveTtsSettings } = settings
 </script>
 
 <template>
@@ -38,7 +39,9 @@ const { ttsEngine, ttsVoice, ttsRate, highlightColor, saveTtsSettings } = settin
         <option value="">跟随系统默认</option>
         <option v-for="v in systemVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
       </select>
-      <div v-else class="ss-info">固定 mimo-v2-tts / mimo_default</div>
+      <select v-else v-model="ttsMiMoVoice" @change="saveTtsSettings" class="ss">
+        <option v-for="v in MIMO_TTS_VOICES" :key="v.id" :value="v.id">{{ v.name }} ({{ v.gender }})</option>
+      </select>
     </div>
     <div class="sr">
       <label>语速</label>

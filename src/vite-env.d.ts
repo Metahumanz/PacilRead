@@ -56,7 +56,7 @@ export interface ElectronAPI {
   tts: {
     getEdgeVoices: () => Promise<any[]>
     synthesize: (text: string, voice?: string, rate?: number) => Promise<{ success: boolean; audioBuffer?: Uint8Array; error?: string }>
-    startMimo: (text: string, apiKey: string) => Promise<void>
+    startMimo: (text: string, apiKey: string, voice?: string) => Promise<void>
     stopMimo: () => Promise<void>
     onMimoChunk: (cb: (chunk: Uint8Array) => void) => () => void
     onMimoDone: (cb: () => void) => () => void

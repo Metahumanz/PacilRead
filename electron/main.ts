@@ -606,13 +606,14 @@ ipcMain.handle('tts:synthesize', async (_, args: { text: string; voice?: string;
   }
 })
 
-ipcMain.handle('tts:start-mimo', async (event, args: { text: string; apiKey: string }) => {
+ipcMain.handle('tts:start-mimo', async (event, args: { text: string; apiKey: string; voice?: string }) => {
   if (mimoAbortController) mimoAbortController.abort()
   mimoAbortController = new AbortController()
 
   synthesizeMimoStreaming(
     args.text,
     args.apiKey,
+    args.voice,
     (chunk) => {
       event.sender.send('tts:mimo-chunk', new Uint8Array(chunk))
     },
