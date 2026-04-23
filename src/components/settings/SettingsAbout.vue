@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { changelogItems } from '../../data/changelog'
 import { useSettings } from '../../composables/useSettings'
 
 const {
@@ -81,68 +82,20 @@ const { silentUpdate } = settings
           <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">版本演进日志</div>
         </div>
         <div class="divide-y divide-black/5 dark:divide-white/[0.04] max-h-[400px] overflow-y-auto changelog-scroll pr-2">
-          <div class="pb-4 pt-2">
+          <div
+            v-for="(entry, index) in changelogItems"
+            :key="entry.version"
+            :class="index === 0 ? 'pb-4 pt-2' : 'py-4'"
+          >
             <div class="flex items-center gap-2 mb-2">
-              <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.7</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-04-23</span>
+              <span v-if="index === 0" class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v{{ entry.version }}</span>
+              <span v-if="entry.date" class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">{{ entry.date }}</span>
             </div>
             <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>新增桌面端阅读时长统计：支持今日、本周、本年概览，以及全局排行和单书统计详情</li>
-              <li>阅读页新增活动计时：自动处理空闲截断、跨天拆分、失焦保存，并支持 WebDAV 多设备统计合并</li>
-              <li>WebDAV 设置同步升级：新增桌面设置专用子目录，排版、主题与背景文件改为独立 JSON 真源</li>
-              <li>同步恢复安全性增强：WebDAV 凭据、设备 ID 与桌面设置目录保持本地专属，避免被远端备份覆盖</li>
+              <li v-for="change in entry.changes" :key="change">{{ change }}</li>
             </ul>
           </div>
-          <div class="py-4 border-t border-white/[0.04]">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.6</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-04-05</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>章节识别算法升级：优化“第xx回/卷”匹配逻辑，增加分隔符校验，彻底杜绝正文误判</li>
-              <li>阅读器功能增强：面板顶部新增书名及作者名编辑功能，支持自动保存并即时生效</li>
-              <li>HUD 设置体验优化：移除设置折叠开关，显示方位配置直接呈现，操作更直观</li>
-              <li>UI 交互打磨：阅读选项面板支持滚动条，优化了在小窗口模式下的设置项展示效果</li>
-            </ul>
-          </div>
-          <div class="py-4 border-t border-white/[0.04]">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.5</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>核心 UI 组件化重构：完成 ReaderView 与 SettingsView 的深度拆分，显著提升代码可维护性</li>
-              <li>状态管理架构升级：引入全局单例 useSettings，实现跨组件实时同步与高效状态共享</li>
-              <li>健壮性优化：修复重构引入的类型错误、样式冲突及快捷键响应异常，提升系统稳定性</li>
-              <li>阅读体验：优化阅读器翻页性能，修复 HUD 模块化后的渲染层级问题</li>
-            </ul>
-          </div>
-          <div class="py-4 border-t border-white/[0.04]">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.4</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>WebDAV 全量同步：支持书架、书籍、设置、主题及背景的一键备份与恢复</li>
-              <li>同步颗粒化控制：新增“胶囊开关”，支持自定义同步内容，保护多端偏好一致性</li>
-              <li>导入增强：开启 PDF 拖放导入支持，实现基于路径的自动去重逻辑</li>
-              <li>底层架构升级：支持数据库二进制导出/导入，提升同步效率</li>
-            </ul>
-          </div>
-          <div class="py-4 border-t border-white/[0.04]">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.3</span>
-              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-03-30</span>
-            </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
-              <li>阅读界面 HUD 模块化增强：支持 6 个自定义展示槽位（顶部/底部、左/中/右）</li>
-              <li>HUD 内容高度自定义：支持显示时间、电量、章节名、页数及全书进度等 10 种组合</li>
-              <li>章节标题显示优化：正文前章节名支持靠左对齐、居中对齐或完全隐藏</li>
-              <li>集成系统电池电量实时监听与分钟级时钟更新</li>
-            </ul>
-          </div>
-          <!-- More log items can be added or truncated for brevity in this initial split -->
         </div>
       </div>
     </div>
