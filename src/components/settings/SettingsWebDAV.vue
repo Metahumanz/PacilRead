@@ -29,7 +29,8 @@ const settings = useSettings()
 const {
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync
+  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
+  webdavDesktopSettingsDir
 } = settings
 </script>
 
@@ -54,7 +55,7 @@ const {
             </div>
 
             <div class="space-y-3 bg-black/10 p-4 rounded-lg border border-black/5 dark:border-white/5">
-              <div class="grid grid-cols-[2fr_1fr] gap-3">
+              <div class="grid grid-cols-1 md:grid-cols-[2fr_1fr_1fr] gap-3">
                 <div>
                   <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">主线服务器 URL (需尾随 /)</label>
                   <input type="text" v-model="webdavUrl" @change="saveWebdav" placeholder="https://dav.jianguoyun.com/dav/" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
@@ -62,6 +63,10 @@ const {
                 <div>
                   <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">子目录 (例如 Books)</label>
                   <input type="text" v-model="webdavDir" @change="saveWebdav" placeholder="Books" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">桌面设置目录</label>
+                  <input type="text" v-model="webdavDesktopSettingsDir" @change="saveWebdav" placeholder="desktop-settings" class="w-full bg-black/[0.03] dark:bg-black/30 border border-black/5 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
                 </div>
               </div>
               <div class="grid grid-cols-2 gap-3">
@@ -99,7 +104,7 @@ const {
                         <span>📥 恢复基础数据</span>
                       </button>
                     </div>
-                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">排除冗长的章节文本，仅同步设置、规则与书籍列表，速度极快。</p>
+                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">同步书架轻量库、桌面设置 JSON 与阅读统计快照，跳过章节正文，速度更快。</p>
                   </div>
 
                   <!-- Full Sync (Snapshot) -->
@@ -116,7 +121,7 @@ const {
                         <span>📥 恢复全量镜像</span>
                       </button>
                     </div>
-                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">保存完整的数据库快照（含章节缓存），体积随书籍量增长。</p>
+                    <p class="mt-2 text-[10px] text-slate-500 dark:text-white/20">保存完整数据库镜像，同时配套上传桌面设置 JSON 与阅读统计目录。</p>
                   </div>
                 </div>
 

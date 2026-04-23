@@ -3,6 +3,7 @@ import { join, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync } from 'fs'
+import { createHash } from 'crypto'
 import { parseTxt, parseEpub, parsePdf } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
@@ -238,6 +239,95 @@ function parseBookNameAndAuthor(rawName: string): { title: string, author: strin
   return { title, author }
 }
 
+function normalizeReadingStatsComponent(value: string | null | undefined): string {
+  return (value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function buildReadingStatsKey(title: string, author: string | null): string {
+  const normalizedTitle = normalizeReadingStatsComponent(title)
+  const normalizedAuthor = normalizeReadingStatsComponent(author)
+  return createHash('sha256')
+    .update(`${normalizedTitle}\n${normalizedAuthor}`, 'utf8')
+    .digest('hex')
+}
+
+function runDatabaseMigrations(database: Database): void {
+  database.run(`CREATE TABLE IF NOT EXISTS books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL, author TEXT, cover_path TEXT, path TEXT,
+    progress_index INTEGER DEFAULT 0, progress_offset INTEGER DEFAULT 0,
+    last_read DATETIME DEFAULT CURRENT_TIMESTAMP, source_id INTEGER,
+    pinned INTEGER DEFAULT 0, reading_stats_key TEXT NOT NULL DEFAULT ''
+  )`)
+  try { database.run('ALTER TABLE books ADD COLUMN pinned INTEGER DEFAULT 0') } catch (_) {}
+  try { database.run("ALTER TABLE books ADD COLUMN reading_stats_key TEXT NOT NULL DEFAULT ''") } catch (_) {}
+
+  database.run(`CREATE TABLE IF NOT EXISTS chapters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+    order_index INTEGER NOT NULL, link TEXT,
+    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
+  )`)
+
+  database.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`)
+  database.run(`CREATE TABLE IF NOT EXISTS replacement_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern TEXT NOT NULL, replacement TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'global', book_id INTEGER,
+    is_regex INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
+  )`)
+  try { database.run('ALTER TABLE replacement_rules ADD COLUMN book_id INTEGER') } catch (_) {}
+
+  database.run(`CREATE TABLE IF NOT EXISTS reading_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    source_device_id TEXT NOT NULL,
+    book_identity TEXT NOT NULL,
+    book_title TEXT NOT NULL,
+    book_author TEXT,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    char_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`)
+  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_stats_bucket ON reading_stats (source_device_id, date, book_identity)')
+  database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_date ON reading_stats (date)')
+  database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_identity ON reading_stats (book_identity)')
+
+  try {
+    const books = database.exec('SELECT id, title, author, reading_stats_key FROM books')
+    if (books.length > 0) {
+      const { values } = books[0]
+      for (const row of values) {
+        const id = row[0] as number
+        const oldTitle = row[1] as string
+        const oldAuthor = row[2] as string | null
+        const oldReadingStatsKey = row[3] as string | null
+
+        let nextTitle = oldTitle
+        let nextAuthor = oldAuthor
+
+        if (!oldAuthor || oldAuthor === '未知' || oldTitle.includes('作者') || oldTitle.includes('《') || oldTitle.includes('(') || oldTitle.includes('（')) {
+          const parsed = parseBookNameAndAuthor(oldTitle)
+          if (parsed.title !== oldTitle || parsed.author) {
+            nextTitle = parsed.title
+            nextAuthor = parsed.author || oldAuthor
+          }
+        }
+
+        const nextReadingStatsKey = oldReadingStatsKey || buildReadingStatsKey(nextTitle, nextAuthor)
+
+        if (nextTitle !== oldTitle || nextAuthor !== oldAuthor || nextReadingStatsKey !== oldReadingStatsKey) {
+          database.run(
+            'UPDATE books SET title = ?, author = ?, reading_stats_key = ? WHERE id = ?',
+            [nextTitle, nextAuthor, nextReadingStatsKey, id]
+          )
+        }
+      }
+    }
+  } catch (_) {}
+}
+
 async function initDatabase(): Promise<void> {
   const wasmPath = getWasmPath()
   const wasmBuffer = readFileSync(wasmPath)
@@ -245,49 +335,7 @@ async function initDatabase(): Promise<void> {
   dbPath = join(app.getPath('userData'), 'reader.db')
   db = existsSync(dbPath) ? new SQL.Database(readFileSync(dbPath)) : new SQL.Database()
 
-  db.run(`CREATE TABLE IF NOT EXISTS books (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL, author TEXT, cover_path TEXT, path TEXT,
-    progress_index INTEGER DEFAULT 0, progress_offset INTEGER DEFAULT 0,
-    last_read DATETIME DEFAULT CURRENT_TIMESTAMP, source_id INTEGER,
-    pinned INTEGER DEFAULT 0
-  )`)
-  // Migration: add pinned column if missing (existing DBs)
-  try { db.run('ALTER TABLE books ADD COLUMN pinned INTEGER DEFAULT 0') } catch (_) {}
-  db.run(`CREATE TABLE IF NOT EXISTS chapters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    book_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
-    order_index INTEGER NOT NULL, link TEXT,
-    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
-  )`)
-  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`)
-  db.run(`CREATE TABLE IF NOT EXISTS replacement_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern TEXT NOT NULL, replacement TEXT NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'global', book_id INTEGER,
-    is_regex INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
-    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
-  )`)
-  // Migration: add book_id column if missing (existing DBs)
-  try { db.run('ALTER TABLE replacement_rules ADD COLUMN book_id INTEGER') } catch (_) {}
-  // Migration: clean up existing titles and extract authors
-  try {
-    const books = db.exec('SELECT id, title, author FROM books')
-    if (books.length > 0) {
-      const { values } = books[0]
-      for (const row of values) {
-        const id = row[0] as number
-        const oldTitle = row[1] as string
-        const oldAuthor = row[2] as string | null
-        if (!oldAuthor || oldAuthor === '未知' || oldTitle.includes('作者') || oldTitle.includes('《') || oldTitle.includes('(') || oldTitle.includes('（')) {
-           const parsed = parseBookNameAndAuthor(oldTitle)
-           if (parsed.title !== oldTitle || parsed.author) {
-              db.run('UPDATE books SET title = ?, author = ? WHERE id = ?', [parsed.title, parsed.author || oldAuthor, id])
-           }
-        }
-      }
-    }
-  } catch(_) {}
+  runDatabaseMigrations(db)
 
   saveDatabase()
 }
@@ -371,8 +419,14 @@ ipcMain.handle('db:importBook', async (_, filePath: string) => {
   try {
     const ext = extname(filePath).toLowerCase()
     const fileName = filePath.split(/[/\\]/).pop() || 'Unknown'
-    const title = fileName.replace(/\.[^/.]+$/, '')
-    db.run('INSERT INTO books (title, path, last_read) VALUES (?, ?, ?)', [title, filePath, new Date().toISOString()])
+    const parsed = parseBookNameAndAuthor(fileName)
+    const title = parsed.title || fileName.replace(/\.[^/.]+$/, '')
+    const author = parsed.author
+    const readingStatsKey = buildReadingStatsKey(title, author)
+    db.run(
+      'INSERT INTO books (title, author, path, last_read, reading_stats_key) VALUES (?, ?, ?, ?, ?)',
+      [title, author, filePath, new Date().toISOString(), readingStatsKey]
+    )
     const result = db.exec('SELECT last_insert_rowid() as id')
     const bookId = result[0].values[0][0] as number
     let chapters: { title: string; body: string; orderIndex: number }[]
@@ -489,6 +543,7 @@ ipcMain.handle('db:importFromFile', async (_, filePath: string) => {
   if (!SQL) throw new Error('SQL.js not initialized')
   const data = readFileSync(filePath)
   db = new SQL.Database(data)
+  runDatabaseMigrations(db)
   saveDatabase()
 })
 

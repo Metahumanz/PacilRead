@@ -4,6 +4,7 @@ interface Chapter { id: number; title: string }
 
 defineProps<{
   book: Book | null
+  canOpenStats: boolean
   isAlwaysOnTop: boolean
   isImmersive: boolean
   showSearch: boolean
@@ -26,6 +27,7 @@ defineProps<{
 
 defineEmits<{
   (e: 'back'): void
+  (e: 'open-book-stats'): void
   (e: 'toggle-always-on-top'): void
   (e: 'toggle-immersive'): void
   (e: 'open-panel', panel: string): void
@@ -38,7 +40,15 @@ defineEmits<{
   <div class="menu-ov">
     <div class="m-top" @click.stop>
       <button @click="$emit('back')" class="m-back">← 书架</button>
-      <div class="m-title">{{ book?.title }}</div>
+      <button
+        v-if="canOpenStats"
+        @click="$emit('open-book-stats')"
+        class="m-title is-link"
+        title="查看这本书的阅读统计"
+      >
+        {{ book?.title }}
+      </button>
+      <div v-else class="m-title">{{ book?.title }}</div>
       <div class="m-acts">
         <button @click="$emit('toggle-always-on-top')" class="m-capsule-btn" :class="{ 'is-active': isAlwaysOnTop }">
           <div class="mc-track"><div class="mc-thumb"></div></div>
@@ -88,6 +98,8 @@ defineEmits<{
 .m-back { background:none; border:1px solid rgba(255,255,255,0.15); color:white; font-size:14px; font-weight:600; cursor:pointer; padding:8px 16px; border-radius:10px; transition:all .2s; white-space:nowrap; }
 .m-back:hover { background:rgba(255,255,255,0.1); }
 .m-title { font-weight:700; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:25%; opacity:0.8; min-width:0; }
+.m-title.is-link { background:none; border:none; color:inherit; cursor:pointer; text-align:left; padding:0; }
+.m-title.is-link:hover { color:#60a5fa; opacity:1; }
 .m-acts { flex:1; display:flex; justify-content:flex-end; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
 .m-capsule-btn { display:flex; align-items:center; gap:5px; padding:5px 10px; border-radius:30px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.7); cursor:pointer; font-size:12px; font-weight:700; transition:all .2s; }
 .m-capsule-btn:hover { background:rgba(255,255,255,0.15); color:white; }

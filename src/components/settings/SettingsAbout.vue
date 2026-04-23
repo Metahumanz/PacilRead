@@ -84,6 +84,18 @@ const { silentUpdate } = settings
           <div class="pb-4 pt-2">
             <div class="flex items-center gap-2 mb-2">
               <span class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
+              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.7</span>
+              <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-04-23</span>
+            </div>
+            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+              <li>新增桌面端阅读时长统计：支持今日、本周、本年概览，以及全局排行和单书统计详情</li>
+              <li>阅读页新增活动计时：自动处理空闲截断、跨天拆分、失焦保存，并支持 WebDAV 多设备统计合并</li>
+              <li>WebDAV 设置同步升级：新增桌面设置专用子目录，排版、主题与背景文件改为独立 JSON 真源</li>
+              <li>同步恢复安全性增强：WebDAV 凭据、设备 ID 与桌面设置目录保持本地专属，避免被远端备份覆盖</li>
+            </ul>
+          </div>
+          <div class="py-4 border-t border-white/[0.04]">
+            <div class="flex items-center gap-2 mb-2">
               <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v0.4.6</span>
               <span class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">2026-04-05</span>
             </div>

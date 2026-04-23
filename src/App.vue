@@ -5,14 +5,19 @@ import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
 import SettingsView from './components/SettingsView.vue'
 import TypographyView from './components/TypographyView.vue'
+import ReadingStatsView from './components/ReadingStatsView.vue'
 
-type View = 'bookshelf' | 'reader' | 'settings' | 'typography'
+type View = 'bookshelf' | 'reader' | 'settings' | 'typography' | 'stats'
+type NonStatsView = Exclude<View, 'stats'>
 
 const settings = useSettings()
 const { sidebarCollapsed, autoOpenLastRead, loadAllSettings, saveSetting } = settings
 
 const currentView = ref<View>('bookshelf')
 const selectedBookId = ref<number | null>(null)
+const statsBookId = ref<number | null>(null)
+const statsReturnView = ref<NonStatsView>('settings')
+const statsCanReturnToGlobal = ref(false)
 const isImmersive = ref(false)
 const showQuitConfirm = ref(false)
 const isWindowMaximized = ref(false)
@@ -35,7 +40,47 @@ const goBack = () => {
   window.electronAPI.win.setControlsVisible(true)
 }
 
+const exitReaderShellForStats = async () => {
+  isImmersive.value = false
+  await window.electronAPI.win.setFullScreen(false)
+  await window.electronAPI.win.setControlsVisible(true)
+}
 
+const openGlobalStats = async () => {
+  if (currentView.value === 'reader') {
+    statsReturnView.value = 'reader'
+    await exitReaderShellForStats()
+  } else {
+    statsReturnView.value = currentView.value as NonStatsView
+  }
+  statsBookId.value = null
+  statsCanReturnToGlobal.value = false
+  currentView.value = 'stats'
+}
+
+const openBookStatsFromReader = async (bookId: number) => {
+  statsReturnView.value = 'reader'
+  statsBookId.value = bookId
+  statsCanReturnToGlobal.value = false
+  await exitReaderShellForStats()
+  currentView.value = 'stats'
+}
+
+const openStatsBook = (bookId: number) => {
+  statsBookId.value = bookId
+  statsCanReturnToGlobal.value = true
+}
+
+const closeStats = () => {
+  if (statsBookId.value !== null && statsCanReturnToGlobal.value) {
+    statsBookId.value = null
+    statsCanReturnToGlobal.value = false
+    return
+  }
+  statsBookId.value = null
+  statsCanReturnToGlobal.value = false
+  currentView.value = statsReturnView.value
+}
 
 const toggleImmersive = async (val: boolean) => {
   isImmersive.value = val
@@ -58,6 +103,10 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
       goBack()
       return
     }
+    if (currentView.value === 'stats') {
+      closeStats()
+      return
+    }
     if (currentView.value === 'bookshelf') {
       showQuitConfirm.value = true
       return
@@ -76,7 +125,8 @@ const handleTouchStart = (e: TouchEvent) => { touchStartX = e.changedTouches[0].
 const handleTouchEnd = (e: TouchEvent) => {
   touchEndX = e.changedTouches[0].screenX
   if (touchEndX - touchStartX > 80 && currentView.value !== 'bookshelf' && currentView.value !== 'reader') {
-    goBack()
+    if (currentView.value === 'stats') closeStats()
+    else goBack()
   }
 }
 
@@ -142,6 +192,7 @@ onUnmounted(() => {
         :is-immersive="isImmersive"
         @toggle-immersive="toggleImmersive"
         @go-back="goBack"
+        @open-book-stats="openBookStatsFromReader"
       />
       
       <!-- PowerToys Style App Layout -->
@@ -225,7 +276,15 @@ onUnmounted(() => {
               <SettingsView
                 v-else-if="currentView === 'settings'"
                 @back="currentView = 'bookshelf'"
+                @open-reading-stats="openGlobalStats"
                 @refresh-settings="() => {}"
+                class="fade-element max-w-5xl mx-auto"
+              />
+              <ReadingStatsView
+                v-else-if="currentView === 'stats'"
+                :book-id="statsBookId"
+                @back="closeStats"
+                @open-book-stats="openStatsBook"
                 class="fade-element max-w-5xl mx-auto"
               />
               <TypographyView

@@ -8,6 +8,10 @@ export const saveSetting = async (k: string, v: any) => {
   )
 }
 
+const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
+const DEFAULT_PREV_KEYS = ['ArrowLeft', 'PageUp']
+const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
+
 // ---- Singleton State ----
 const fontSize = ref(20)
 const lineHeight = ref(1.8)
@@ -51,8 +55,8 @@ const highlightColor = ref('#3b82f6')
 const ttsMiMoApiKey = ref('')
 
 // Navigation keys
-const nextKeys = ref<string[]>(['ArrowRight', 'PageDown', ' '])
-const prevKeys = ref<string[]>(['ArrowLeft', 'PageUp'])
+const nextKeys = ref<string[]>([...DEFAULT_NEXT_KEYS])
+const prevKeys = ref<string[]>([...DEFAULT_PREV_KEYS])
 
 // UI hints
 const showKeyHints = ref(true)
@@ -80,6 +84,12 @@ const webdavSyncThemes = ref(true)
 const webdavSyncBackgrounds = ref(true)
 const webdavLastSync = ref('')
 const webdavLastLiteSync = ref('')
+const webdavDesktopSettingsDir = ref(DEFAULT_DESKTOP_SETTINGS_DIR)
+
+// Reading stats
+const readingTimeTrackingEnabled = ref(false)
+const readingTimeStatsHidden = ref(false)
+const readingStatsDeviceId = ref('')
 
 // Custom themes
 interface CustomTheme {
@@ -92,10 +102,78 @@ const customThemes = ref<CustomTheme[]>([])
 // System fonts
 const systemFonts = ref<string[]>([])
 
+function resetSettingsState() {
+  fontSize.value = 20
+  lineHeight.value = 1.8
+  letterSpacing.value = 0
+  fontWeight.value = 400
+  marginX.value = 60
+  marginY.value = 40
+  fontFamily.value = 'system-ui'
+  fontColor.value = '#e2e8f0'
+  coverColor.value = '#0f172a'
+  bgImage.value = ''
+  blurAmount.value = 0
+  textAlign.value = 'left'
+  alignBottom.value = false
+  pageMode.value = 'single'
+  doublePageStep.value = 2
+  flipMode.value = 'slide'
+  flipSpeed.value = 'medium'
+  pIndent.value = 2
+  pSpacing.value = 0.8
+
+  hudTopLeft.value = 'none'
+  hudTopCenter.value = 'none'
+  hudTopRight.value = 'none'
+  hudBottomLeft.value = 'titleOrChapter'
+  hudBottomCenter.value = 'none'
+  hudBottomRight.value = 'pageAndProgress'
+  chapterTitleDisplay.value = 'left'
+
+  autoPageSpeed.value = 10
+  ttsEngine.value = 'edge'
+  ttsVoice.value = ''
+  ttsRate.value = 1.0
+  highlightColor.value = '#3b82f6'
+  ttsMiMoApiKey.value = ''
+
+  nextKeys.value = [...DEFAULT_NEXT_KEYS]
+  prevKeys.value = [...DEFAULT_PREV_KEYS]
+  showKeyHints.value = true
+  isAlwaysOnTop.value = false
+  autoOpenLastRead.value = false
+  silentUpdate.value = false
+  sliderMode.value = 'book'
+  sidebarCollapsed.value = false
+  viewMode.value = 'grid'
+
+  webdavUrl.value = ''
+  webdavDir.value = 'Books'
+  webdavUser.value = ''
+  webdavPass.value = ''
+  webdavSync.value = false
+  webdavSyncBookshelf.value = true
+  webdavSyncFiles.value = true
+  webdavSyncUISettings.value = true
+  webdavSyncThemes.value = true
+  webdavSyncBackgrounds.value = true
+  webdavLastSync.value = ''
+  webdavLastLiteSync.value = ''
+  webdavDesktopSettingsDir.value = DEFAULT_DESKTOP_SETTINGS_DIR
+
+  readingTimeTrackingEnabled.value = false
+  readingTimeStatsHidden.value = false
+  readingStatsDeviceId.value = ''
+
+  customThemes.value = []
+}
+
 // ---- Reader styling refs (shared across views) ----
 export function useSettings() {
   const loadAllSettings = async () => {
     try {
+      resetSettingsState()
       const r = await window.electronAPI.db.query('SELECT * FROM settings')
       if (Array.isArray(r)) {
         r.forEach((s: any) => {
@@ -145,6 +223,7 @@ export function useSettings() {
           if (s.key === 'webdavSyncBackgrounds') webdavSyncBackgrounds.value = s.value !== 'false'
           if (s.key === 'webdavLastSync') webdavLastSync.value = s.value || ''
           if (s.key === 'webdavLastLiteSync') webdavLastLiteSync.value = s.value || ''
+          if (s.key === 'webdavDesktopSettingsDir') webdavDesktopSettingsDir.value = s.value || DEFAULT_DESKTOP_SETTINGS_DIR
           if (s.key === 'autoOpenLastRead') autoOpenLastRead.value = s.value === 'true'
           if (s.key === 'silentUpdate') silentUpdate.value = s.value === 'true'
           if (s.key === 'reader_sliderMode') sliderMode.value = s.value === 'chapter' ? 'chapter' : 'book'
@@ -162,7 +241,18 @@ export function useSettings() {
           if (s.key === 'viewMode') viewMode.value = s.value as any || 'grid'
           if (s.key === 'reader_pIndent') pIndent.value = parseFloat(s.value) || 2
           if (s.key === 'reader_pSpacing') pSpacing.value = parseFloat(s.value) || 0.8
+          if (s.key === 'readingTimeTrackingEnabled') readingTimeTrackingEnabled.value = s.value === 'true'
+          if (s.key === 'readingTimeStatsHidden') readingTimeStatsHidden.value = s.value === 'true'
+          if (s.key === 'readingStatsDeviceId') readingStatsDeviceId.value = s.value || ''
         })
+      }
+      if (!readingStatsDeviceId.value) {
+        readingStatsDeviceId.value = crypto.randomUUID()
+        await saveSetting('readingStatsDeviceId', readingStatsDeviceId.value)
+      }
+      if (!webdavDesktopSettingsDir.value) {
+        webdavDesktopSettingsDir.value = DEFAULT_DESKTOP_SETTINGS_DIR
+        await saveSetting('webdavDesktopSettingsDir', webdavDesktopSettingsDir.value)
       }
       try { systemFonts.value = await window.electronAPI.font.getSystemFonts() } catch (_) { systemFonts.value = [] }
     } catch (e) { console.error(e) }
@@ -178,6 +268,8 @@ export function useSettings() {
     saveSetting('reader_fontFamily', fontFamily.value)
     saveSetting('reader_fontColor', fontColor.value)
     saveSetting('reader_coverColor', coverColor.value)
+    saveSetting('bgImage', bgImage.value)
+    saveSetting('reader_flipMode', flipMode.value)
     saveSetting('reader_pageMode', pageMode.value)
     saveSetting('reader_doublePageStep', doublePageStep.value)
     saveSetting('reader_blurAmount', blurAmount.value)
@@ -220,10 +312,12 @@ export function useSettings() {
     // UI
     showKeyHints, isAlwaysOnTop,
     autoOpenLastRead, silentUpdate,
+    readingTimeTrackingEnabled, readingTimeStatsHidden, readingStatsDeviceId,
     // WebDAV
     webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
     webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
     webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
+    webdavDesktopSettingsDir,
     // Themes
     customThemes, systemFonts,
     // HUD

@@ -1,18 +1,39 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
+import {
+  buildPacilReadBaseUrl,
+  clearLocalReadingStats,
+  fetchReadingStatsOverview,
+  getCurrentDesktopSettingsSnapshot,
+  getAllLocalReadingStatsRows,
+  deleteRemoteReadingStatsFiles,
+  getLocalOnlySettingsSnapshot,
+  hasReadingStatsHistory,
+  mergeRemoteReadingStats,
+  restoreDesktopSettingsSnapshot,
+  restoreDesktopSettingsValues,
+  restoreLocalOnlySettings,
+  restoreReadingStatsRows,
+  sanitizeWebdavDirectorySegment,
+  uploadDesktopSettingsSnapshot,
+  uploadReadingStatsSnapshot,
+  type ReadingStatsOverview,
+} from '../composables/useReadingStats'
 
 // Sub-components
 import SettingsDisplay from './settings/SettingsDisplay.vue'
 import SettingsReading from './settings/SettingsReading.vue'
+import SettingsReadingStats from './settings/SettingsReadingStats.vue'
 import SettingsWebDAV from './settings/SettingsWebDAV.vue'
 import SettingsTTS from './settings/SettingsTTS.vue'
 import SettingsRules from './settings/SettingsRules.vue'
 import SettingsAbout from './settings/SettingsAbout.vue'
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'back'): void
   (e: 'refresh-settings'): void
+  (e: 'open-reading-stats'): void
 }>()
 
 interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
@@ -26,7 +47,8 @@ const {
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
   webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
   autoOpenLastRead, silentUpdate, ttsMiMoApiKey,
-  bgImage
+  webdavDesktopSettingsDir,
+  readingTimeTrackingEnabled, readingTimeStatsHidden
 } = settings
 
 // Update related state
@@ -42,6 +64,11 @@ const webdavTestResult = ref('')
 const webdavTesting = ref(false)
 const webdavSyncing = ref(false)
 const webdavSyncStatus = ref('')
+const readingStatsLoading = ref(false)
+const readingStatsHasHistory = ref(false)
+const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, year: 0 })
+const showReadingStatsDisableModal = ref(false)
+const readingStatsActionBusy = ref(false)
 
 // Rules related state
 const allRules = ref<ReplacementRule[]>([])
@@ -59,6 +86,7 @@ const saveWebdav = async () => {
   if (dir.startsWith('/')) dir = dir.substring(1)
   if (dir && !dir.endsWith('/')) dir += '/'
   webdavDir.value = dir
+  webdavDesktopSettingsDir.value = sanitizeWebdavDirectorySegment(webdavDesktopSettingsDir.value)
   await saveSetting('webdavUrl', url)
   await saveSetting('webdavDir', dir)
   await saveSetting('webdavUser', webdavUser.value.trim())
@@ -69,6 +97,7 @@ const saveWebdav = async () => {
   await saveSetting('webdavSyncUISettings', webdavSyncUISettings.value ? 'true' : 'false')
   await saveSetting('webdavSyncThemes', webdavSyncThemes.value ? 'true' : 'false')
   await saveSetting('webdavSyncBackgrounds', webdavSyncBackgrounds.value ? 'true' : 'false')
+  await saveSetting('webdavDesktopSettingsDir', webdavDesktopSettingsDir.value)
 }
 
 const testWebdav = async () => {
@@ -83,12 +112,17 @@ const testWebdav = async () => {
   if (res.error) webdavTestResult.value = '❌ 连接异常: ' + res.error
   else if (res.status && res.status >= 200 && res.status < 300) {
     webdavTestResult.value = '✅ 连接成功！'
-    let baseURL = webdavUrl.value
-    if (webdavDir.value) baseURL += webdavDir.value
+    let syncBaseURL = webdavUrl.value
+    if (webdavDir.value) syncBaseURL += webdavDir.value
+    const pacilReadBaseUrl = buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
     if (webdavDir.value) {
-      await window.electronAPI.webdav.request({ url: baseURL, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: syncBaseURL, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     }
-    await window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: syncBaseURL + 'bookProgress/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: pacilReadBaseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}readingStats/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
   }
   else webdavTestResult.value = `❌失败(HTTP ${res.status}): ` + (res.data ? res.data.substring(0, 30) : '')
   webdavTesting.value = false
@@ -186,24 +220,114 @@ const toggleRuleActive = async (rule: ReplacementRule) => {
   } catch (e) { console.error(e) }
 }
 
+const getCurrentPacilReadBaseUrl = () => buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
+
+const refreshReadingStatsSummary = async () => {
+  readingStatsLoading.value = true
+  try {
+    readingStatsHasHistory.value = await hasReadingStatsHistory()
+    if (readingTimeTrackingEnabled.value || readingStatsHasHistory.value) {
+      readingStatsOverview.value = await fetchReadingStatsOverview()
+    } else {
+      readingStatsOverview.value = { today: 0, week: 0, year: 0 }
+    }
+  } catch (error) {
+    console.error('Refresh reading stats summary failed:', error)
+  } finally {
+    readingStatsLoading.value = false
+  }
+}
+
+const finishDisableReadingStats = async (hidden: boolean) => {
+  readingTimeTrackingEnabled.value = false
+  readingTimeStatsHidden.value = hidden
+  await saveSetting('readingTimeTrackingEnabled', 'false')
+  await saveSetting('readingTimeStatsHidden', hidden ? 'true' : 'false')
+  showReadingStatsDisableModal.value = false
+  await refreshReadingStatsSummary()
+}
+
+const enableReadingStats = async () => {
+  readingTimeTrackingEnabled.value = true
+  readingTimeStatsHidden.value = false
+  await saveSetting('readingTimeTrackingEnabled', 'true')
+  await saveSetting('readingTimeStatsHidden', 'false')
+  await refreshReadingStatsSummary()
+}
+
+const openReadingStats = () => emit('open-reading-stats')
+
+const handleToggleReadingStats = async () => {
+  if (!readingTimeTrackingEnabled.value) {
+    await enableReadingStats()
+    return
+  }
+
+  const hasHistory = await hasReadingStatsHistory()
+  if (!hasHistory) {
+    await finishDisableReadingStats(false)
+    return
+  }
+
+  showReadingStatsDisableModal.value = true
+}
+
+const hideReadingStats = async () => {
+  readingStatsActionBusy.value = true
+  try {
+    await finishDisableReadingStats(true)
+  } finally {
+    readingStatsActionBusy.value = false
+  }
+}
+
+const cancelDisableReadingStats = () => {
+  showReadingStatsDisableModal.value = false
+}
+
+const clearReadingStatsHistory = async () => {
+  readingStatsActionBusy.value = true
+  const localSnapshot = await getAllLocalReadingStatsRows()
+  try {
+    await clearLocalReadingStats()
+    try {
+      await deleteRemoteReadingStatsFiles()
+    } catch (error) {
+      await restoreReadingStatsRows(localSnapshot)
+      throw error
+    }
+
+    readingTimeTrackingEnabled.value = false
+    readingTimeStatsHidden.value = false
+    await saveSetting('readingTimeTrackingEnabled', 'false')
+    await saveSetting('readingTimeStatsHidden', 'false')
+    showReadingStatsDisableModal.value = false
+    await refreshReadingStatsSummary()
+  } catch (error: any) {
+    alert(`清空阅读统计失败：${error?.message || '网络错误'}`)
+  } finally {
+    readingStatsActionBusy.value = false
+  }
+}
+
 const fullBackup = async () => {
   if (!webdavUrl.value) return
   try {
+    await saveWebdav()
     webdavSyncing.value = true
     webdavSyncStatus.value = '准备备份...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let baseUrl = webdavUrl.value
-    if (webdavDir.value) baseUrl += webdavDir.value
-    if (!baseUrl.endsWith('/')) baseUrl += '/'
-    baseUrl += 'PacilRead/'
+    const baseUrl = getCurrentPacilReadBaseUrl()
 
     webdavSyncStatus.value = '创建云端目录...'
     await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'backgrounds/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'readingStats/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
 
-    if (webdavSyncBookshelf.value || webdavSyncUISettings.value || webdavSyncThemes.value) {
+    if (webdavSyncBookshelf.value) {
       webdavSyncStatus.value = '导出数据库...'
       const dbPath = await window.electronAPI.db.export()
       webdavSyncStatus.value = '上传数据库...'
@@ -228,11 +352,13 @@ const fullBackup = async () => {
       }
     }
 
-    if (webdavSyncBackgrounds.value && bgImage.value?.startsWith('file:///')) {
-      const fileName = bgImage.value.split(/[\\/]/).pop()
-      webdavSyncStatus.value = '上传自定义背景...'
-      await window.electronAPI.webdav.uploadFile(appDataPath + '/backgrounds/' + fileName, baseUrl + 'backgrounds/' + fileName, auth)
+    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
+      webdavSyncStatus.value = '上传桌面设置...'
+      await uploadDesktopSettingsSnapshot()
     }
+
+    webdavSyncStatus.value = '上传阅读统计...'
+    await uploadReadingStatsSnapshot()
 
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
@@ -246,22 +372,45 @@ const fullBackup = async () => {
 const fullRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动。')) return
   try {
+    await saveWebdav()
     webdavSyncing.value = true
-    webdavSyncStatus.value = '下载数据库快照...'
+    const preservedSettings = await getLocalOnlySettingsSnapshot()
+    const preservedDesktopSettings = await getCurrentDesktopSettingsSnapshot()
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let baseUrl = webdavUrl.value
-    if (webdavDir.value) baseUrl += webdavDir.value
-    if (!baseUrl.endsWith('/')) baseUrl += '/'
-    baseUrl += 'PacilRead/'
+    const baseUrl = getCurrentPacilReadBaseUrl()
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
     const dstPath = appDataPath + '/reader.db.restore'
+    webdavSyncStatus.value = '下载数据库快照...'
     const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader.db', dstPath, auth)
-    if (dl.error) throw new Error('云端无备份数据: ' + dl.error)
+    if (!dl.error) {
+      webdavSyncStatus.value = '应用数据库...'
+      await window.electronAPI.db.importFromFile(dstPath)
+      await restoreLocalOnlySettings(preservedSettings)
+    }
 
-    webdavSyncStatus.value = '应用数据库...'
-    await window.electronAPI.db.importFromFile(dstPath)
-    alert('数据库已成功从云端恢复！')
+    webdavSyncStatus.value = '应用桌面设置...'
+    const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
+    if (!desktopSettingsRestore.applied && desktopSettingsRestore.message) {
+      await restoreDesktopSettingsValues(preservedDesktopSettings)
+      await loadAllSettings()
+      webdavSyncStatus.value = desktopSettingsRestore.message
+    }
+
+    webdavSyncStatus.value = '合并阅读统计...'
+    await mergeRemoteReadingStats()
+    await loadAllSettings()
+    await fetchAllRules()
+    await fetchBooks()
+    await refreshReadingStatsSummary()
+
+    if (dl.error && !desktopSettingsRestore.applied) {
+      throw new Error(`云端无备份数据: ${dl.error}`)
+    }
+
+    alert(dl.error
+      ? '桌面设置与阅读统计已从云端恢复，数据库快照不存在。'
+      : '数据库、桌面设置与阅读统计已成功从云端恢复！')
     webdavSyncStatus.value = '从云端恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
@@ -271,20 +420,21 @@ const fullRestore = async () => {
 const incrementalBackup = async () => {
   if (!webdavUrl.value) return
   try {
+    await saveWebdav()
     webdavSyncing.value = true
     webdavSyncStatus.value = '准备增量同步...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let baseUrl = webdavUrl.value
-    if (webdavDir.value) baseUrl += webdavDir.value
-    if (!baseUrl.endsWith('/')) baseUrl += '/'
-    baseUrl += 'PacilRead/'
+    const baseUrl = getCurrentPacilReadBaseUrl()
 
     // Make sure dirs exist
     await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: baseUrl + 'readingStats/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
 
-    if (webdavSyncBookshelf.value || webdavSyncUISettings.value || webdavSyncThemes.value) {
+    if (webdavSyncBookshelf.value) {
       webdavSyncStatus.value = '处理增量数据库...'
       const litePath = await (window.electronAPI.db as any).exportLite()
       webdavSyncStatus.value = '上传增量数据库...'
@@ -318,10 +468,18 @@ const incrementalBackup = async () => {
       }
     }
 
+    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
+      webdavSyncStatus.value = '上传桌面设置...'
+      await uploadDesktopSettingsSnapshot()
+    }
+
+    webdavSyncStatus.value = '上传阅读统计...'
+    await uploadReadingStatsSnapshot()
+
     webdavLastLiteSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
     webdavSyncStatus.value = '增量同步成功'
-    alert('增量同步已完成！（仅包含设置、规则与书籍元数据）')
+    alert('增量同步已完成！（书架元数据、桌面设置与阅读统计已更新）')
   } catch (e: any) {
     webdavSyncStatus.value = '同步失败: ' + (e.message || '网络错误')
   } finally { webdavSyncing.value = false }
@@ -330,22 +488,44 @@ const incrementalBackup = async () => {
 const incrementalRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端增量恢复吗？这将覆盖您的书架列表与设置，但不会删除现有的本地缓存章节。')) return
   try {
+    await saveWebdav()
     webdavSyncing.value = true
-    webdavSyncStatus.value = '下载增量快照...'
+    const preservedSettings = await getLocalOnlySettingsSnapshot()
+    const preservedDesktopSettings = await getCurrentDesktopSettingsSnapshot()
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let baseUrl = webdavUrl.value
-    if (webdavDir.value) baseUrl += webdavDir.value
-    if (!baseUrl.endsWith('/')) baseUrl += '/'
-    baseUrl += 'PacilRead/'
+    const baseUrl = getCurrentPacilReadBaseUrl()
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
     const dstPath = appDataPath + '/reader_lite.db.restore'
+    webdavSyncStatus.value = '下载增量快照...'
     const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader_lite.db', dstPath, auth)
-    if (dl.error) throw new Error('云端无增量备份数据，请考虑全量恢复: ' + dl.error)
+    if (!dl.error) {
+      webdavSyncStatus.value = '应用增量数据库...'
+      await window.electronAPI.db.importFromFile(dstPath)
+      await restoreLocalOnlySettings(preservedSettings)
+    }
 
-    webdavSyncStatus.value = '应用增量数据库...'
-    await window.electronAPI.db.importFromFile(dstPath)
-    alert('增量数据已恢复！\n注意：如果书籍未下载或章节被清空，请点击书籍或手动重新解析。')
+    webdavSyncStatus.value = '应用桌面设置...'
+    const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
+    if (!desktopSettingsRestore.applied) {
+      await restoreDesktopSettingsValues(preservedDesktopSettings)
+      await loadAllSettings()
+    }
+
+    webdavSyncStatus.value = '合并阅读统计...'
+    await mergeRemoteReadingStats()
+    await loadAllSettings()
+    await fetchAllRules()
+    await fetchBooks()
+    await refreshReadingStatsSummary()
+
+    if (dl.error && !desktopSettingsRestore.applied) {
+      throw new Error('云端无增量备份数据，请考虑全量恢复: ' + dl.error)
+    }
+
+    alert(dl.error
+      ? '桌面设置与阅读统计已恢复，增量数据库快照不存在。'
+      : '增量数据、桌面设置与阅读统计已恢复！\n注意：如果书籍未下载或章节被清空，请点击书籍或手动重新解析。')
     webdavSyncStatus.value = '增量恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
@@ -353,9 +533,10 @@ const incrementalRestore = async () => {
 }
 
 onMounted(async () => {
-  loadAllSettings()
-  fetchAllRules()
-  fetchBooks()
+  await loadAllSettings()
+  await fetchAllRules()
+  await fetchBooks()
+  await refreshReadingStatsSummary()
   try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
   window.electronAPI.updater.onStatus((data) => {
     switch (data.status) {
@@ -387,6 +568,16 @@ onMounted(async () => {
       :removeNextKey="removeNextKey"
       :addPrevKey="addPrevKey"
       :removePrevKey="removePrevKey"
+    />
+
+    <SettingsReadingStats
+      :trackingEnabled="readingTimeTrackingEnabled"
+      :hidden="readingTimeStatsHidden"
+      :hasHistory="readingStatsHasHistory"
+      :loading="readingStatsLoading"
+      :overview="readingStatsOverview"
+      :onToggleTracking="handleToggleReadingStats"
+      :onOpenStats="openReadingStats"
     />
 
     <SettingsWebDAV 
@@ -423,6 +614,45 @@ onMounted(async () => {
       :checkForUpdate="checkForUpdate"
       :toggleSilentUpdate="toggleSilentUpdate"
     />
+
+    <Transition name="fade">
+      <div
+        v-if="showReadingStatsDisableModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[210] flex items-center justify-center p-6"
+        @click.self="cancelDisableReadingStats"
+      >
+        <div class="w-full max-w-md bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/5 shadow-2xl p-6">
+          <h3 class="text-[18px] font-semibold text-slate-800 dark:text-white/90">关闭阅读统计</h3>
+          <p class="mt-2 text-[13px] text-slate-500 dark:text-white/50 leading-6">
+            检测到你已经有阅读统计历史。你可以只关闭记录并隐藏入口，也可以清空本地与云端的全部统计数据。
+          </p>
+
+          <div class="mt-6 grid grid-cols-1 gap-3">
+            <button
+              @click="hideReadingStats"
+              :disabled="readingStatsActionBusy"
+              class="w-full px-4 py-3 rounded-xl bg-[#005fb8] text-white text-[13px] font-medium hover:bg-[#005fb8]/90 disabled:opacity-50 transition-colors"
+            >
+              只隐藏
+            </button>
+            <button
+              @click="clearReadingStatsHistory"
+              :disabled="readingStatsActionBusy"
+              class="w-full px-4 py-3 rounded-xl bg-red-500/15 hover:bg-red-500/20 text-red-500 text-[13px] font-medium disabled:opacity-50 transition-colors"
+            >
+              清空历史
+            </button>
+            <button
+              @click="cancelDisableReadingStats"
+              :disabled="readingStatsActionBusy"
+              class="w-full px-4 py-3 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-white/80 text-[13px] font-medium disabled:opacity-50 transition-colors"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 

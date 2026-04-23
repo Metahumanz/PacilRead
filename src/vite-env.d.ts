@@ -11,6 +11,7 @@ export interface ElectronAPI {
     query: (sql: string, params?: any[]) => Promise<any>
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
     export: () => Promise<string>
+    exportLite: () => Promise<string>
     importFromFile: (filePath: string) => Promise<void>
   }
   dialog: {

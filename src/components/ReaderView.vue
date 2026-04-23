@@ -7,6 +7,7 @@ import { usePagination } from '../composables/usePagination'
 import { useRules } from '../composables/useRules'
 import { useHUD } from '../composables/useHUD'
 import { useSync } from '../composables/useSync'
+import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -20,12 +21,13 @@ import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
 
 interface Chapter { id: number; title: string; body: string; order_index: number }
-interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string }
+interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string; reading_stats_key: string }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean }>()
 const emit = defineEmits<{
   (e: 'toggle-immersive', isFull: boolean): void
   (e: 'go-back'): void
+  (e: 'open-book-stats', bookId: number): void
 }>()
 
 // ---- Core data ----
@@ -60,6 +62,7 @@ const {
   flipMode, flipSpeed, autoPageSpeed,
   ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
+  readingTimeTrackingEnabled, readingTimeStatsHidden,
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
@@ -71,6 +74,17 @@ const {
 const { rules, fetchRules, applyReplacements } = useRules()
 const { startHUD, stopHUD, formatHUD } = useHUD()
 const { uploadProgressToWebdav } = useSync()
+const readingTimeTracker = useReadingTimeTracker({
+  enabled: readingTimeTrackingEnabled,
+  book: computed(() => {
+    if (!book.value) return null
+    return {
+      title: book.value.title,
+      author: book.value.author,
+      reading_stats_key: book.value.reading_stats_key,
+    }
+  }),
+})
 
 const toggleAlwaysOnTop = () => {
   isAlwaysOnTop.value = !isAlwaysOnTop.value
@@ -142,6 +156,37 @@ const {
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
 
+const recordReadingActivity = () => {
+  readingTimeTracker.signalActivity().catch((error) => {
+    console.error('Record reading activity failed:', error)
+  })
+}
+
+const trackedNextPage = () => {
+  recordReadingActivity()
+  nextPage()
+}
+
+const trackedPrevPage = () => {
+  recordReadingActivity()
+  prevPage()
+}
+
+const trackedSlideToNextChapter = () => {
+  recordReadingActivity()
+  slideToNextChapter()
+}
+
+const trackedGoToChapter = (idx: number, keepMenu = false) => {
+  recordReadingActivity()
+  goToChapter(idx, keepMenu)
+}
+
+const trackedSetCurrentPage = (page: number) => {
+  recordReadingActivity()
+  currentPage.value = page
+}
+
 // ---- Theme (composable) ----
 const theme = useTheme({
   onStyleChanged: () => { saveAllStyling(); recalc() },
@@ -163,7 +208,7 @@ const tts = useTTS({
   ttsEngine, ttsVoice, ttsRate, highlightColor,
   flipDurationMs: computed(() => flipDurationMap.value.ms),
   ttsMiMoApiKey,
-  nextPage, slideToNextChapter,
+  nextPage: trackedNextPage, slideToNextChapter: trackedSlideToNextChapter,
 })
 const { ttsActive, edgeVoices, systemVoices, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts
 
@@ -183,7 +228,7 @@ let autoPageTimer: number | null = null
 const startAutoPage = () => {
   if (autoPageTimer) clearInterval(autoPageTimer)
   autoPageActive.value = true
-  autoPageTimer = window.setInterval(() => { if (!showMenu.value) nextPage() }, autoPageSpeed.value * 1000)
+  autoPageTimer = window.setInterval(() => { if (!showMenu.value) trackedNextPage() }, autoPageSpeed.value * 1000)
 }
 const stopAutoPage = () => { if (autoPageTimer) clearInterval(autoPageTimer); autoPageTimer = null; autoPageActive.value = false }
 const toggleAutoPage = () => { if (autoPageActive.value) stopAutoPage(); else startAutoPage() }
@@ -227,6 +272,7 @@ const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKey
 const handleClick = (e: MouseEvent) => {
   const t = e.target as HTMLElement
   if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') || t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal') || t.closest('.reader-options-p')) return
+  recordReadingActivity()
   if (showMenu.value) { closeAll(); return }
   const x = e.clientX, y = e.clientY
   if (handleTtsClick(x, y)) return
@@ -234,17 +280,23 @@ const handleClick = (e: MouseEvent) => {
   const isCenterCol = x > w / 3 && x < (w / 3) * 2
   const isCenterRow = y > h / 3 && y < (h / 3) * 2
   if (isCenterCol && isCenterRow) showMenu.value = true
-  else if (x < w / 3 || (isCenterCol && y < h / 3)) prevPage()
-  else nextPage()
+  else if (x < w / 3 || (isCenterCol && y < h / 3)) trackedPrevPage()
+  else trackedNextPage()
 }
 let touchStartX = 0, touchStartY = 0
-const handleTouchStart = (e: TouchEvent) => { if (!showMenu.value) { touchStartX = e.changedTouches[0].screenX; touchStartY = e.changedTouches[0].screenY } }
+const handleTouchStart = (e: TouchEvent) => {
+  if (!showMenu.value) {
+    recordReadingActivity()
+    touchStartX = e.changedTouches[0].screenX
+    touchStartY = e.changedTouches[0].screenY
+  }
+}
 const handleTouchEnd = (e: TouchEvent) => {
   if (showMenu.value) return
   const endX = e.changedTouches[0].screenX, endY = e.changedTouches[0].screenY
   if (Math.abs(endX - touchStartX) > Math.abs(endY - touchStartY) * 1.5) {
     const diff = endX - touchStartX
-    if (diff < -50) nextPage(); else if (diff > 50) prevPage()
+    if (diff < -50) trackedNextPage(); else if (diff > 50) trackedPrevPage()
   }
 }
 const handleContextMenu = (e: MouseEvent) => {
@@ -253,7 +305,14 @@ const handleContextMenu = (e: MouseEvent) => {
   if (p && p.textContent && p.textContent.trim().length > 0) { selectedText.value = p.textContent.trim(); showCopyModal.value = true }
 }
 const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false }
-const handleWheel = (e: WheelEvent) => { if (showMenu.value) return; if (Math.abs(e.deltaY) < 10) return; e.preventDefault(); if (e.deltaY > 0) nextPage(); else prevPage() }
+const handleWheel = (e: WheelEvent) => {
+  if (showMenu.value) return
+  if (Math.abs(e.deltaY) < 10) return
+  e.preventDefault()
+  recordReadingActivity()
+  if (e.deltaY > 0) trackedNextPage()
+  else trackedPrevPage()
+}
 const handleKeydown = (e: KeyboardEvent) => {
   const k = e.key, c = e.code
   if (k === 'Escape') {
@@ -265,14 +324,23 @@ const handleKeydown = (e: KeyboardEvent) => {
     handleGoBack(); return
   }
   if (showMenu.value) return
-  if (nextKeys.value.includes(k) || nextKeys.value.includes(c)) { e.preventDefault(); nextPage() }
-  else if (prevKeys.value.includes(k) || prevKeys.value.includes(c)) { e.preventDefault(); prevPage() }
+  if (nextKeys.value.includes(k) || nextKeys.value.includes(c)) { e.preventDefault(); trackedNextPage() }
+  else if (prevKeys.value.includes(k) || prevKeys.value.includes(c)) { e.preventDefault(); trackedPrevPage() }
 }
 const toggleImmersiveMode = () => {
   emit('toggle-immersive', !props.isImmersive)
   if (props.isImmersive) { setTimeout(recalc, 400); setTimeout(recalc, 800) }
 }
-const handleGoBack = () => { saveProgress(); closeAll(); emit('go-back') }
+const handleGoBack = async () => {
+  await readingTimeTracker.stop()
+  saveProgress()
+  closeAll()
+  emit('go-back')
+}
+
+const openBookStats = () => {
+  emit('open-book-stats', props.bookId)
+}
 
 const openPanel = (panel: string) => {
   showToc.value = panel === 'toc' ? !showToc.value : false
@@ -284,7 +352,20 @@ const openPanel = (panel: string) => {
   showReaderOptions.value = panel === 'readerOptions' ? !showReaderOptions.value : false
 }
 
-const jumpToSearchResult = (idx: number) => { goToChapter(idx, true) }
+const jumpToSearchResult = (idx: number) => { trackedGoToChapter(idx, true) }
+
+const handleWindowBlur = () => {
+  readingTimeTracker.flush().catch((error) => {
+    console.error('Flush reading stats on blur failed:', error)
+  })
+}
+
+const handleVisibilityChange = () => {
+  if (!document.hidden) return
+  readingTimeTracker.flush().catch((error) => {
+    console.error('Flush reading stats on visibility change failed:', error)
+  })
+}
 
 watch(currentChapterIndex, () => recalc())
 watch([fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight], () => recalc())
@@ -300,21 +381,27 @@ onMounted(async () => {
   startHUD()
   if (book.value) currentPage.value = book.value.progress_offset || 0
   await downloadProgressFromWebdav()
+  await readingTimeTracker.start()
   loading.value = false
   setTimeout(calculatePages, 300)
   window.addEventListener('resize', recalc)
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('blur', handleWindowBlur)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   loadVoices()
   injectHighlightStyles()
 })
-onUnmounted(() => {
+onUnmounted(async () => {
   stopHUD()
   stopTts()
   stopAutoPage()
+  await readingTimeTracker.stop()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
   window.removeEventListener('resize', recalc)
   window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('blur', handleWindowBlur)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -418,7 +505,7 @@ onUnmounted(() => {
       <Transition name="menu-slide">
         <ReaderMenu 
           v-if="showMenu"
-          :book="book" :isAlwaysOnTop="isAlwaysOnTop" :isImmersive="props.isImmersive"
+          :book="book" :can-open-stats="!readingTimeStatsHidden" :isAlwaysOnTop="isAlwaysOnTop" :isImmersive="props.isImmersive"
           :showSearch="showSearch" :showRules="showRules" :showStyling="showStyling"
           :showAutoPage="showAutoPage" :autoPageActive="autoPageActive"
           :showTts="showTts" :ttsActive="ttsActive"
@@ -427,13 +514,13 @@ onUnmounted(() => {
           :currentPage="currentPage" :totalPages="totalPages"
           :sliderMax="sliderMax" :sliderValue="sliderValue"
           :currentChapterTitle="currentChapterData?.title || ''"
-          @back="handleGoBack" @toggle-always-on-top="toggleAlwaysOnTop"
+          @back="handleGoBack" @open-book-stats="openBookStats" @toggle-always-on-top="toggleAlwaysOnTop"
           @toggle-immersive="toggleImmersiveMode" @open-panel="openPanel"
-          @go-to-chapter="(idx) => goToChapter(idx, true)"
-          @slider-input="(val) => { if(sliderMode==='book') goToChapter(val, true); else currentPage=val; }"
+          @go-to-chapter="(idx) => trackedGoToChapter(idx, true)"
+          @slider-input="(val) => { if(sliderMode==='book') trackedGoToChapter(val, true); else trackedSetCurrentPage(val); }"
         >
           <Transition name="sf"><SearchPanel v-if="showSearch" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
-          <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { goToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
+          <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
