@@ -23,6 +23,7 @@ import {
 
 // Sub-components
 import SettingsDisplay from './settings/SettingsDisplay.vue'
+import SettingsAppearance from './settings/SettingsAppearance.vue'
 import SettingsReading from './settings/SettingsReading.vue'
 import SettingsReadingStats from './settings/SettingsReadingStats.vue'
 import SettingsWebDAV from './settings/SettingsWebDAV.vue'
@@ -499,9 +500,10 @@ const incrementalRestore = async () => {
     const dstPath = appDataPath + '/reader_lite.db.restore'
     webdavSyncStatus.value = '下载增量快照...'
     const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader_lite.db', dstPath, auth)
+    let liteRestore: Awaited<ReturnType<typeof window.electronAPI.db.importLiteFromFile>> | null = null
     if (!dl.error) {
       webdavSyncStatus.value = '应用增量数据库...'
-      await window.electronAPI.db.importFromFile(dstPath)
+      liteRestore = await window.electronAPI.db.importLiteFromFile(dstPath)
       await restoreLocalOnlySettings(preservedSettings)
     }
 
@@ -525,7 +527,7 @@ const incrementalRestore = async () => {
 
     alert(dl.error
       ? '桌面设置与阅读统计已恢复，增量数据库快照不存在。'
-      : '增量数据、桌面设置与阅读统计已恢复！\n注意：如果书籍未下载或章节被清空，请点击书籍或手动重新解析。')
+      : `增量数据、桌面设置与阅读统计已恢复！\n已保留本地缓存章节：${liteRestore?.currentChapters ?? 0}，重挂章节：${liteRestore?.remappedChapters ?? 0}。`)
     webdavSyncStatus.value = '增量恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
@@ -554,11 +556,13 @@ onMounted(async () => {
 <template>
   <div class="pt-2 pb-20">
     <div class="mb-10 px-1">
-      <h2 class="text-[22px] font-semibold text-slate-800 dark:text-white/90 tracking-wide">偏好设置</h2>
-      <p class="text-slate-500 dark:text-white/50 text-[13px] mt-1">定制 PacilRead 的各项核心行为与界面特质</p>
+      <h2 class="app-title text-[22px] font-semibold">偏好设置</h2>
+      <p class="app-muted text-[13px] mt-1">定制 PacilRead 的各项核心行为与界面特质</p>
     </div>
 
     <!-- Sub-sections -->
+    <SettingsAppearance />
+
     <SettingsDisplay :setAspectRatio="setAspectRatio" />
     
     <SettingsReading 
@@ -618,12 +622,12 @@ onMounted(async () => {
     <Transition name="fade">
       <div
         v-if="showReadingStatsDisableModal"
-        class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[210] flex items-center justify-center p-6"
+        class="fixed inset-0 app-modal-backdrop z-[210] flex items-center justify-center p-6"
         @click.self="cancelDisableReadingStats"
       >
-        <div class="w-full max-w-md bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/5 shadow-2xl p-6">
-          <h3 class="text-[18px] font-semibold text-slate-800 dark:text-white/90">关闭阅读统计</h3>
-          <p class="mt-2 text-[13px] text-slate-500 dark:text-white/50 leading-6">
+        <div class="w-full max-w-md app-card app-card-strong p-6">
+          <h3 class="text-[18px] font-semibold app-title">关闭阅读统计</h3>
+          <p class="mt-2 text-[13px] app-muted leading-6">
             检测到你已经有阅读统计历史。你可以只关闭记录并隐藏入口，也可以清空本地与云端的全部统计数据。
           </p>
 
@@ -631,21 +635,21 @@ onMounted(async () => {
             <button
               @click="hideReadingStats"
               :disabled="readingStatsActionBusy"
-              class="w-full px-4 py-3 rounded-xl bg-[#005fb8] text-white text-[13px] font-medium hover:bg-[#005fb8]/90 disabled:opacity-50 transition-colors"
+              class="app-button app-button-primary w-full px-4 py-3 text-[13px] disabled:opacity-50"
             >
               只隐藏
             </button>
             <button
               @click="clearReadingStatsHistory"
               :disabled="readingStatsActionBusy"
-              class="w-full px-4 py-3 rounded-xl bg-red-500/15 hover:bg-red-500/20 text-red-500 text-[13px] font-medium disabled:opacity-50 transition-colors"
+              class="app-button app-button-danger w-full px-4 py-3 text-[13px] disabled:opacity-50"
             >
               清空历史
             </button>
             <button
               @click="cancelDisableReadingStats"
               :disabled="readingStatsActionBusy"
-              class="w-full px-4 py-3 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-white/80 text-[13px] font-medium disabled:opacity-50 transition-colors"
+              class="app-button w-full px-4 py-3 text-[13px] disabled:opacity-50"
             >
               取消
             </button>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useSettings } from './composables/useSettings'
+import { useAppTheme } from './composables/useAppTheme'
 import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
 import SettingsView from './components/SettingsView.vue'
@@ -12,6 +13,7 @@ type NonStatsView = Exclude<View, 'stats'>
 
 const settings = useSettings()
 const { sidebarCollapsed, autoOpenLastRead, loadAllSettings, saveSetting } = settings
+const { appThemeStyle } = useAppTheme()
 
 const currentView = ref<View>('bookshelf')
 const selectedBookId = ref<number | null>(null)
@@ -169,16 +171,21 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-transparent text-slate-800 dark:text-white selection:bg-blue-500/30 overflow-hidden font-['Segoe_UI',_sans-serif]">
+  <div
+    :style="appThemeStyle"
+    :class="currentView === 'reader'
+      ? 'min-h-screen bg-transparent text-slate-800 dark:text-white selection:bg-blue-500/30 overflow-hidden font-sans'
+      : 'app-shell'"
+  >
     <!-- Quit Confirmation Modal -->
     <Transition name="fade">
-      <div v-if="showQuitConfirm" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center" @click.self="cancelQuit">
-        <div class="bg-white dark:bg-[#2d2d2d] p-6 rounded-xl max-w-sm w-full shadow-2xl border border-black/5 dark:border-white/5 text-center">
-          <h3 class="text-xl font-bold mb-2 text-slate-800 dark:text-white">退出阅读器</h3>
-          <p class="text-sm text-slate-500 dark:text-slate-300 mb-6">确定要退出 PacilRead 吗？</p>
+      <div v-if="showQuitConfirm" class="fixed inset-0 app-modal-backdrop z-[200] flex items-center justify-center" @click.self="cancelQuit">
+        <div class="app-card app-card-strong p-6 max-w-sm w-full text-center">
+          <h3 class="text-xl font-bold mb-2 app-title">退出阅读器</h3>
+          <p class="text-sm app-muted mb-6">确定要退出 PacilRead 吗？</p>
           <div class="flex gap-3">
-            <button @click="cancelQuit" class="flex-1 py-2 rounded-lg bg-black/5 hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10 transition-colors font-semibold border border-black/5 dark:border-white/5 text-slate-700 dark:text-white">取消</button>
-            <button @click="confirmQuit" class="flex-1 py-2 rounded-lg bg-red-500 hover:bg-red-600 transition-colors font-semibold text-white">退出 (ESC/Enter)</button>
+            <button @click="cancelQuit" class="app-button flex-1 py-2">取消</button>
+            <button @click="confirmQuit" class="app-button app-button-danger flex-1 py-2">退出 (ESC/Enter)</button>
           </div>
         </div>
       </div>
@@ -200,22 +207,22 @@ onUnmounted(() => {
         <!-- Custom Window Controls moved to Content Pane -->
 
         <!-- Sidebar -->
-        <aside :class="['bg-slate-50 dark:bg-[#1e1e1e] flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-black/5 dark:border-white/5', sidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
+        <aside :class="['app-sidebar flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]', sidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
           <div class="px-4 mb-6 flex items-center window-drag relative min-h-[32px]">
-            <button @click="toggleSidebar" class="absolute left-4 w-9 h-9 rounded-md hover:bg-black/5 dark:hover:bg-white/10 flex items-center justify-center text-lg active:scale-95 transition-colors no-drag cursor-pointer z-50 text-slate-600 hover:text-slate-800 dark:text-white/80 dark:hover:text-white" title="折叠导航栏">
+            <button @click="toggleSidebar" class="app-icon-button absolute left-4 w-9 h-9 flex items-center justify-center text-lg active:scale-95 no-drag cursor-pointer z-50" title="折叠导航栏">
               ☰
             </button>
             <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="sidebarCollapsed ? 'opacity-0' : 'opacity-100'">
-              <div class="w-8 h-8 rounded-md bg-[#005fb8] flex items-center justify-center font-bold text-lg shadow-sm font-italic text-white">P</div>
-              <h1 class="text-[15px] font-semibold tracking-wide text-slate-800 dark:text-white/90">PacilRead</h1>
+              <div class="app-logo w-8 h-8 flex items-center justify-center font-bold text-lg italic">P</div>
+              <h1 class="app-brand text-[15px] font-semibold">PacilRead</h1>
             </div>
           </div>
           
           <nav class="flex-1 px-3 space-y-1">
             <button @click="currentView = 'bookshelf'" 
-                    :class="currentView === 'bookshelf' ? 'bg-black/5 dark:bg-white/[0.08] relative' : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04] hover:-translate-y-0.5 hover:shadow-lg'"
-                    class="w-full text-left p-2.5 rounded-md transition-all duration-300 flex items-center group">
-              <div v-if="currentView === 'bookshelf'" class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-[#005fb8] rounded-r-full"></div>
+                    :class="currentView === 'bookshelf' ? 'is-active relative' : ''"
+                    class="app-nav-button flex items-center group">
+              <div v-if="currentView === 'bookshelf'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">📚</span>
               </div>
@@ -223,9 +230,9 @@ onUnmounted(() => {
             </button>
 
             <button @click="currentView = 'typography'" 
-                    :class="currentView === 'typography' ? 'bg-black/5 dark:bg-white/[0.08] relative' : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04] hover:-translate-y-0.5 hover:shadow-lg'"
-                    class="w-full text-left p-2.5 rounded-md transition-all duration-300 flex items-center group mt-1">
-              <div v-if="currentView === 'typography'" class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-[#005fb8] rounded-r-full"></div>
+                    :class="currentView === 'typography' ? 'is-active relative' : ''"
+                    class="app-nav-button flex items-center group mt-1">
+              <div v-if="currentView === 'typography'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">✨</span>
               </div>
@@ -235,9 +242,9 @@ onUnmounted(() => {
 
           <div class="px-3 pb-6">
             <button @click="currentView = 'settings'" 
-                    :class="currentView === 'settings' ? 'bg-black/5 dark:bg-white/[0.08] relative' : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04] hover:-translate-y-0.5 hover:shadow-lg'"
-                    class="w-full text-left p-2.5 rounded-md transition-all duration-300 flex items-center group">
-              <div v-if="currentView === 'settings'" class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-[#005fb8] rounded-r-full"></div>
+                    :class="currentView === 'settings' ? 'is-active relative' : ''"
+                    class="app-nav-button flex items-center group">
+              <div v-if="currentView === 'settings'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
               <div class="w-8 flex justify-center shrink-0">
                 <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">⚙️</span>
               </div>
@@ -251,16 +258,16 @@ onUnmounted(() => {
           <!-- Draggable Top Bar Area with Controls -->
           <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative pr-0">
             <div class="flex items-center h-10 no-drag">
-              <button @click="minimizeWindow" class="w-12 h-10 flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-colors group cursor-pointer">
+              <button @click="minimizeWindow" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
                 <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
               </button>
-              <button @click="toggleMaximize" class="w-12 h-10 flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-colors group cursor-pointer">
+              <button @click="toggleMaximize" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
                 <Transition name="icon-fade" mode="out-in">
                   <span v-if="!isWindowMaximized" key="max" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
                   <span v-else key="restore" class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
                 </Transition>
               </button>
-              <button @click="closeWindow" class="w-12 h-10 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors group cursor-pointer">
+              <button @click="closeWindow" class="app-window-button app-window-close w-12 h-10 flex items-center justify-center group cursor-pointer">
                 <span class="text-[16px] opacity-70 group-hover:opacity-100">✕</span>
               </button>
             </div>

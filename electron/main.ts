@@ -539,12 +539,186 @@ ipcMain.handle('db:exportLite', async () => {
   return tempPath
 })
 
+function quoteIdentifier(name: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`Invalid database identifier: ${name}`)
+  }
+  return `"${name}"`
+}
+
+function tableExists(database: Database, tableName: string): boolean {
+  const result = database.exec(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [tableName]
+  )
+  return result.length > 0 && result[0].values.length > 0
+}
+
+function countRows(database: Database, tableName: string): number {
+  if (!tableExists(database, tableName)) return 0
+  const result = database.exec(`SELECT COUNT(*) as count FROM ${quoteIdentifier(tableName)}`)
+  return Number(result[0]?.values[0]?.[0] || 0)
+}
+
+function queryRows(database: Database, sql: string, params?: any[]): any[] {
+  const result = database.exec(sql, params || [])
+  if (result.length === 0) return []
+  const { columns, values } = result[0]
+  return values.map(row => {
+    const item: any = {}
+    columns.forEach((column, index) => { item[column] = row[index] })
+    return item
+  })
+}
+
+function getTableColumns(database: Database, tableName: string): string[] {
+  const result = database.exec(`PRAGMA table_info(${quoteIdentifier(tableName)})`)
+  if (result.length === 0) return []
+  const nameIndex = result[0].columns.indexOf('name')
+  return result[0].values.map(row => String(row[nameIndex]))
+}
+
+function readTableRows(database: Database, tableName: string, columns: string[]): any[][] {
+  if (columns.length === 0) return []
+  const columnSql = columns.map(quoteIdentifier).join(', ')
+  const result = database.exec(`SELECT ${columnSql} FROM ${quoteIdentifier(tableName)}`)
+  return result[0]?.values || []
+}
+
+function replaceTableFromDatabase(targetDb: Database, sourceDb: Database, tableName: string): number {
+  if (!tableExists(sourceDb, tableName) || !tableExists(targetDb, tableName)) return 0
+  const targetColumns = getTableColumns(targetDb, tableName)
+  const sourceColumns = getTableColumns(sourceDb, tableName)
+  const commonColumns = targetColumns.filter(column => sourceColumns.includes(column))
+  if (commonColumns.length === 0) return 0
+
+  const rows = readTableRows(sourceDb, tableName, commonColumns)
+  targetDb.run(`DELETE FROM ${quoteIdentifier(tableName)}`)
+  if (rows.length === 0) return 0
+
+  const columnSql = commonColumns.map(quoteIdentifier).join(', ')
+  const placeholders = commonColumns.map(() => '?').join(', ')
+  const insertSql = `INSERT INTO ${quoteIdentifier(tableName)} (${columnSql}) VALUES (${placeholders})`
+  for (const row of rows) {
+    targetDb.run(insertSql, row)
+  }
+  return rows.length
+}
+
+function normalizeBookIdentityPart(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function bookFallbackIdentity(book: any): string {
+  return `${normalizeBookIdentityPart(book.title)}\n${normalizeBookIdentityPart(book.author)}`
+}
+
+function countChaptersForBook(database: Database, bookId: number): number {
+  const result = database.exec('SELECT COUNT(*) AS count FROM chapters WHERE book_id = ?', [bookId])
+  return Number(result[0]?.values[0]?.[0] || 0)
+}
+
+function detachCachedChapters(database: Database, previousBooks: any[]): number {
+  if (!tableExists(database, 'chapters')) return 0
+  let detachedChapters = 0
+  for (const book of previousBooks) {
+    const bookId = Number(book.id)
+    if (!Number.isFinite(bookId) || countChaptersForBook(database, bookId) === 0) continue
+    database.run('UPDATE chapters SET book_id = ? WHERE book_id = ?', [-bookId, bookId])
+    detachedChapters += database.getRowsModified()
+  }
+  return detachedChapters
+}
+
+function countDetachedChaptersForBook(database: Database, bookId: number): number {
+  const result = database.exec('SELECT COUNT(*) AS count FROM chapters WHERE book_id = ?', [-bookId])
+  return Number(result[0]?.values[0]?.[0] || 0)
+}
+
+function restoreUnmatchedDetachedChapters(database: Database): number {
+  if (!tableExists(database, 'chapters')) return 0
+  database.run('UPDATE chapters SET book_id = ABS(book_id) WHERE book_id < 0')
+  return database.getRowsModified()
+}
+
+function remapCachedChaptersToImportedBooks(database: Database, previousBooks: any[]): number {
+  if (!tableExists(database, 'chapters')) return 0
+  const booksByStatsKey = new Map<string, any>()
+  const booksByFallback = new Map<string, any>()
+  for (const book of previousBooks) {
+    if (book.reading_stats_key) booksByStatsKey.set(String(book.reading_stats_key), book)
+    booksByFallback.set(bookFallbackIdentity(book), book)
+  }
+
+  const importedBooks = queryRows(database, 'SELECT id, title, author, reading_stats_key FROM books')
+  const usedPreviousBookIds = new Set<number>()
+  let movedChapters = 0
+  for (const importedBook of importedBooks) {
+    const previousBook = (importedBook.reading_stats_key && booksByStatsKey.get(String(importedBook.reading_stats_key))) ||
+      booksByFallback.get(bookFallbackIdentity(importedBook))
+    if (!previousBook || usedPreviousBookIds.has(previousBook.id)) continue
+    if (countDetachedChaptersForBook(database, Number(previousBook.id)) === 0) continue
+    database.run('UPDATE chapters SET book_id = ? WHERE book_id = ?', [importedBook.id, -Number(previousBook.id)])
+    movedChapters += database.getRowsModified()
+    usedPreviousBookIds.add(previousBook.id)
+  }
+  return movedChapters
+}
+
+function assertFullDatabaseHasReadableContent(database: Database): void {
+  const bookCount = countRows(database, 'books')
+  const chapterCount = countRows(database, 'chapters')
+  if (bookCount > 0 && chapterCount === 0) {
+    throw new Error('导入文件包含书籍列表但没有章节正文。已阻止覆盖本地数据库；请使用增量恢复或选择完整备份。')
+  }
+}
+
 ipcMain.handle('db:importFromFile', async (_, filePath: string) => {
   if (!SQL) throw new Error('SQL.js not initialized')
   const data = readFileSync(filePath)
-  db = new SQL.Database(data)
-  runDatabaseMigrations(db)
+  const nextDb = new SQL.Database(data)
+  runDatabaseMigrations(nextDb)
+  assertFullDatabaseHasReadableContent(nextDb)
+  const oldDb = db
+  db = nextDb
+  try { oldDb?.close() } catch {}
   saveDatabase()
+})
+
+ipcMain.handle('db:importLiteFromFile', async (_, filePath: string) => {
+  if (!db || !SQL) throw new Error('Database not initialized')
+  const data = readFileSync(filePath)
+  const liteDb = new SQL.Database(data)
+  try {
+    runDatabaseMigrations(liteDb)
+    runDatabaseMigrations(db)
+
+    const preservedChapters = countRows(db, 'chapters')
+    const importedBookCount = countRows(liteDb, 'books')
+    const previousBooks = queryRows(db, 'SELECT id, title, author, reading_stats_key FROM books')
+
+    db.run('PRAGMA foreign_keys = OFF')
+    db.run('BEGIN TRANSACTION')
+    try {
+      const detachedChapters = detachCachedChapters(db, previousBooks)
+      const imported = {
+        books: replaceTableFromDatabase(db, liteDb, 'books'),
+        settings: replaceTableFromDatabase(db, liteDb, 'settings'),
+        replacementRules: replaceTableFromDatabase(db, liteDb, 'replacement_rules'),
+        readingStats: replaceTableFromDatabase(db, liteDb, 'reading_stats')
+      }
+      const remappedChapters = remapCachedChaptersToImportedBooks(db, previousBooks)
+      const unmatchedChapters = restoreUnmatchedDetachedChapters(db)
+      db.run('COMMIT')
+      saveDatabase()
+      return { ...imported, importedBookCount, preservedChapters, currentChapters: countRows(db, 'chapters'), detachedChapters, remappedChapters, unmatchedChapters }
+    } catch (error) {
+      try { db.run('ROLLBACK') } catch {}
+      throw error
+    }
+  } finally {
+    liteDb.close()
+  }
 })
 
 ipcMain.handle('webdav:uploadFile', async (_, localPath: string, remoteUrl: string, auth: string) => {

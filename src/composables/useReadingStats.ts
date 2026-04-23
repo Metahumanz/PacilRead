@@ -83,6 +83,10 @@ const UI_SETTINGS_KEYS = [
   'reader_sliderMode',
   'sidebarCollapsed',
   'viewMode',
+  'app_theme_mode',
+  'app_light_style_variant',
+  'app_dark_style_variant',
+  'glass_opacity_percent',
   'readingTimeTrackingEnabled',
   'readingTimeStatsHidden',
 ]

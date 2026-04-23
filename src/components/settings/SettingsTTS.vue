@@ -196,37 +196,37 @@ onUnmounted(() => {
 
 <template>
   <div class="mb-8">
-    <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">语音朗读</h3>
-    <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400 divide-y divide-white/[0.04]">
-      <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+    <h3 class="app-section-label text-[14px] mb-3 px-1">语音朗读</h3>
+    <div class="app-card app-card-hover app-divide-y">
+      <div class="p-4 app-row">
         <div class="flex items-start gap-4">
           <span class="text-xl opacity-80 mt-0.5">🎙️</span>
           <div class="flex-1">
-            <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">朗读设置</div>
-            <div class="text-[12px] text-slate-500 dark:text-white/50 mt-0.5 mb-3">选择默认朗读引擎，并用短文本快速测试当前朗读效果</div>
-            <div class="bg-black/10 p-4 rounded-lg border border-black/5 dark:border-white/5 space-y-3">
+            <div class="text-[14px] font-medium app-title">朗读设置</div>
+            <div class="text-[12px] app-muted mt-0.5 mb-3">选择默认朗读引擎，并用短文本快速测试当前朗读效果</div>
+            <div class="app-card app-card-strong p-4 space-y-3">
               <div>
-                <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">朗读引擎</label>
-                <select v-model="ttsEngine" @change="saveTtsSettings" class="w-full bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors">
+                <label class="block text-[11px] app-muted mb-1">朗读引擎</label>
+                <select v-model="ttsEngine" @change="saveTtsSettings" class="app-select w-full px-3 py-1.5 text-[12px]">
                   <option value="edge">Edge 云端</option>
                   <option value="system">本地系统</option>
                   <option value="mimo">小米 MiMo</option>
                 </select>
               </div>
-              <label class="block text-[11px] text-slate-500 dark:text-white/50 mb-1">API Key</label>
+              <label class="block text-[11px] app-muted mb-1">API Key</label>
               <div class="flex gap-2">
-                <input type="password" v-model="ttsMiMoApiKey" @change="saveMiMoKey" placeholder="在此输入您的 API Key..." class="flex-1 bg-black/30 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[12px] focus:border-[#005fb8] outline-none transition-colors" />
-                <a href="https://platform.xiaomimimo.com/#/console/api-keys" target="_blank" class="px-3 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-white/20 text-white rounded-md text-[11px] transition-colors flex items-center border border-black/5 dark:border-white/5">获取 Key</a>
+                <input type="password" v-model="ttsMiMoApiKey" @change="saveMiMoKey" placeholder="在此输入您的 API Key..." class="app-input flex-1 px-3 py-1.5 text-[12px]" />
+                <a href="https://platform.xiaomimimo.com/#/console/api-keys" target="_blank" class="app-button px-3 py-1.5 text-[11px] flex items-center">获取 Key</a>
               </div>
               <div class="flex flex-wrap items-center gap-3 pt-1">
                 <button
                   @click="testTts"
                   :disabled="isTesting"
-                  class="px-4 py-1.5 bg-[#005fb8] hover:bg-[#005fb8]/90 disabled:bg-black/10 disabled:text-slate-400 text-white rounded-md text-[12px] transition-colors font-medium disabled:cursor-not-allowed"
+                  class="app-button app-button-primary px-4 py-1.5 text-[12px] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {{ isTesting ? '测试中...' : '测试朗读' }}
                 </button>
-                <span v-if="testStatus" class="text-[12px] text-slate-500 dark:text-white/50">{{ testStatus }}</span>
+                <span v-if="testStatus" class="text-[12px] app-muted">{{ testStatus }}</span>
               </div>
             </div>
           </div>

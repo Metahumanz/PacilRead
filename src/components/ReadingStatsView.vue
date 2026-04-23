@@ -89,27 +89,27 @@ onMounted(async () => {
         <div class="flex items-center gap-3 mb-2">
           <button
             @click="emit('back')"
-            class="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors text-[13px] font-medium"
+            class="app-button px-3 py-1.5 text-[13px]"
           >
             返回
           </button>
-          <h2 class="text-[22px] font-semibold text-slate-800 dark:text-white/90 tracking-wide">{{ headerTitle }}</h2>
+          <h2 class="app-title text-[22px] font-semibold">{{ headerTitle }}</h2>
         </div>
-        <p class="text-slate-500 dark:text-white/50 text-[13px]">{{ headerDescription }}</p>
+        <p class="app-muted text-[13px]">{{ headerDescription }}</p>
       </div>
 
       <button
         @click="syncAndReload"
         :disabled="syncing"
-        class="px-4 py-2 rounded-lg bg-[#005fb8] text-white text-[13px] font-medium hover:bg-[#005fb8]/90 disabled:opacity-50 transition-colors"
+        class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
       >
         {{ syncing ? '同步中...' : '同步云端统计' }}
       </button>
     </div>
 
-    <div v-if="bookDetail" class="mb-8 bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/[0.06] shadow-sm p-5">
+    <div v-if="bookDetail" class="app-card mb-8 p-5">
       <div class="flex items-center gap-4">
-        <div class="w-20 h-28 rounded-xl overflow-hidden bg-black/5 dark:bg-white/5 shrink-0 border border-black/5 dark:border-white/10">
+        <div class="app-book-cover w-20 h-28 rounded-[var(--app-radius-card)] overflow-hidden shrink-0 border border-[var(--app-border)]">
           <img
             v-if="bookDetail.coverPath"
             :src="bookDetail.coverPath"
@@ -119,9 +119,9 @@ onMounted(async () => {
           <div v-else class="w-full h-full flex items-center justify-center text-3xl opacity-50">📖</div>
         </div>
         <div class="min-w-0">
-          <div class="text-[18px] font-semibold text-slate-800 dark:text-white/90 truncate">{{ bookDetail.title }}</div>
-          <div class="text-[13px] text-slate-500 dark:text-white/50 mt-1">{{ bookDetail.author || '未知作者' }}</div>
-          <div class="flex flex-wrap gap-3 mt-4 text-[12px] text-slate-500 dark:text-white/45">
+          <div class="text-[18px] font-semibold app-title truncate">{{ bookDetail.title }}</div>
+          <div class="text-[13px] app-muted mt-1">{{ bookDetail.author || '未知作者' }}</div>
+          <div class="flex flex-wrap gap-3 mt-4 text-[12px] app-muted">
             <span>章节进度：第 {{ bookDetail.progressIndex + 1 }} 章</span>
             <span>最近阅读：{{ bookDetail.lastRead ? new Date(bookDetail.lastRead).toLocaleString() : '暂无' }}</span>
           </div>
@@ -147,66 +147,66 @@ onMounted(async () => {
     <div v-if="!props.bookId" class="mb-4 flex items-center gap-2">
       <button
         @click="selectedPeriod = 'today'"
-        :class="selectedPeriod === 'today' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-white/60 border-transparent'"
-        class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-colors"
+        :class="{ 'is-active': selectedPeriod === 'today' }"
+        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
       >
         今日排行
       </button>
       <button
         @click="selectedPeriod = 'week'"
-        :class="selectedPeriod === 'week' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-white/60 border-transparent'"
-        class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-colors"
+        :class="{ 'is-active': selectedPeriod === 'week' }"
+        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
       >
         本周排行
       </button>
       <button
         @click="selectedPeriod = 'year'"
-        :class="selectedPeriod === 'year' ? 'bg-[#005fb8] text-white border-[#005fb8]' : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-white/60 border-transparent'"
-        class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-colors"
+        :class="{ 'is-active': selectedPeriod === 'year' }"
+        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
       >
         本年排行
       </button>
     </div>
 
-    <div v-if="loading" class="py-16 text-center text-slate-500 dark:text-white/45">
+    <div v-if="loading" class="py-16 text-center app-muted">
       正在整理统计数据...
     </div>
 
     <div
       v-else-if="!props.bookId && ranking.length === 0"
-      class="bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/[0.06] shadow-sm p-10 text-center text-slate-500 dark:text-white/45"
+      class="app-card p-10 text-center app-muted"
     >
       暂无阅读统计数据，开启记录后读一会儿书就会在这里出现。
     </div>
 
     <div
       v-else-if="!props.bookId"
-      class="bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/[0.06] shadow-sm divide-y divide-black/5 dark:divide-white/[0.04]"
+      class="app-card app-divide-y overflow-hidden"
     >
       <button
         v-for="item in ranking"
         :key="item.bookIdentity"
-        class="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
+        class="app-row w-full flex items-center gap-4 px-5 py-4 text-left"
         @click="item.localBookId && emit('open-book-stats', item.localBookId)"
       >
-        <div class="w-12 h-16 rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 shrink-0 border border-black/5 dark:border-white/10">
+        <div class="app-book-cover w-12 h-16 rounded-[var(--app-radius-input)] overflow-hidden shrink-0 border border-[var(--app-border)]">
           <img v-if="item.coverPath" :src="item.coverPath" class="w-full h-full object-cover" alt="封面" />
           <div v-else class="w-full h-full flex items-center justify-center opacity-50">📖</div>
         </div>
         <div class="flex-1 min-w-0">
-          <div class="text-[14px] font-semibold text-slate-800 dark:text-white/90 truncate">{{ item.bookTitle || '未命名书籍' }}</div>
-          <div class="text-[12px] text-slate-500 dark:text-white/50 truncate mt-1">{{ item.bookAuthor || '未知作者' }}</div>
+          <div class="text-[14px] font-semibold app-title truncate">{{ item.bookTitle || '未命名书籍' }}</div>
+          <div class="text-[12px] app-muted truncate mt-1">{{ item.bookAuthor || '未知作者' }}</div>
         </div>
         <div class="text-right shrink-0">
-          <div class="text-[13px] font-semibold text-[#005fb8]">{{ formatDuration(item.totalSeconds) }}</div>
-          <div class="text-[11px] text-slate-400 dark:text-white/35 mt-1">{{ new Date(item.lastUpdatedAt).toLocaleString() }}</div>
+          <div class="text-[13px] font-semibold app-accent-text">{{ formatDuration(item.totalSeconds) }}</div>
+          <div class="text-[11px] app-muted mt-1">{{ new Date(item.lastUpdatedAt).toLocaleString() }}</div>
         </div>
       </button>
     </div>
 
     <div
       v-else
-      class="bg-white dark:bg-[#2d2d2d] rounded-2xl border border-black/5 dark:border-white/[0.06] shadow-sm p-8 text-center text-slate-500 dark:text-white/45"
+      class="app-card p-8 text-center app-muted"
     >
       这本书的累计阅读时长已经汇总在上面的周期卡片里。
     </div>
@@ -215,35 +215,24 @@ onMounted(async () => {
 
 <style scoped>
 .stats-card {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(15, 23, 42, 0.05);
-  border-radius: 1rem;
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
   padding: 1.25rem;
-  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
-}
-
-:global(.dark) .stats-card {
-  background: #2d2d2d;
-  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: var(--app-shadow);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
 }
 
 .stats-label {
   font-size: 12px;
-  color: rgba(100, 116, 139, 0.9);
+  color: var(--app-text-muted);
   margin-bottom: 0.5rem;
-}
-
-:global(.dark) .stats-label {
-  color: rgba(255, 255, 255, 0.45);
 }
 
 .stats-value {
   font-size: 24px;
   font-weight: 700;
-  color: #0f172a;
-}
-
-:global(.dark) .stats-value {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--app-text);
 }
 </style>

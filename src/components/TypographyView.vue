@@ -48,14 +48,14 @@ const clearBgImage = async () => {
 <template>
   <div class="pt-2 pb-20">
     <div class="mb-10 px-1">
-      <h2 class="text-[22px] font-semibold text-slate-800 dark:text-white/90 tracking-wide">排版与预览</h2>
-      <p class="text-slate-500 dark:text-white/50 text-[13px] mt-1">全局控制阅读引擎的文字排版、视觉主题与页面布局</p>
+      <h2 class="app-title text-[22px] font-semibold">排版与预览</h2>
+      <p class="app-muted text-[13px] mt-1">全局控制阅读引擎的文字排版、视觉主题与页面布局</p>
     </div>
 
     <!-- Preview Box -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">阅读引擎实时效果映射</h3>
-          <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm p-10 overflow-hidden relative"
+      <h3 class="app-section-label text-[14px] mb-3 px-1">阅读引擎实时效果映射</h3>
+          <div class="app-card p-10 overflow-hidden relative"
                :style="readerBgStyle">
          <div class="absolute inset-0 bg-white/40 dark:bg-black/40 backdrop-blur-[2px]" v-if="bgPreview && blurAmount > 0"></div>
          <div class="relative z-10 prose mx-auto break-words"
@@ -81,15 +81,15 @@ const clearBgImage = async () => {
 
     <!-- 背景壁纸 -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">阅读背景壁纸</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm p-4">
+      <h3 class="app-section-label text-[14px] mb-3 px-1">阅读背景壁纸</h3>
+      <div class="app-card p-4">
         <div class="flex gap-2 mb-3">
-          <input type="text" v-model="bgImage" placeholder="在此键入图片绝对路径..." class="flex-1 bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-3 py-1.5 text-[13px] focus:border-[#005fb8] outline-none transition-colors text-slate-800 dark:text-white/90" />
-          <button @click="browseImage" class="px-4 py-1.5 bg-black/5 dark:bg-black/20 hover:bg-black/10 dark:hover:bg-black/40 border border-black/5 dark:border-white/5 rounded-md text-[13px] transition-colors text-slate-800 dark:text-white/90">📂 浏览</button>
-          <button @click="applyBgImage" class="px-4 py-1.5 bg-[#005fb8] hover:bg-[#005fb8]/90 text-white rounded-md text-[13px] transition-colors font-medium">应用</button>
-          <button v-if="bgImage" @click="clearBgImage" class="px-4 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-md text-[13px] transition-colors">清除</button>
+          <input type="text" v-model="bgImage" placeholder="在此键入图片绝对路径..." class="app-input flex-1 px-3 py-1.5 text-[13px]" />
+          <button @click="browseImage" class="app-button px-4 py-1.5 text-[13px]">📂 浏览</button>
+          <button @click="applyBgImage" class="app-button app-button-primary px-4 py-1.5 text-[13px]">应用</button>
+          <button v-if="bgImage" @click="clearBgImage" class="app-button app-button-danger px-4 py-1.5 text-[13px]">清除</button>
         </div>
-        <div v-if="bgPreview" class="relative w-full max-w-sm h-32 rounded-lg overflow-hidden border border-black/10 dark:border-white/10">
+        <div v-if="bgPreview" class="relative w-full max-w-sm h-32 rounded-[var(--app-radius-input)] overflow-hidden border border-[var(--app-border)]">
           <img :src="bgPreview" class="w-full h-full object-cover" alt="背景预览" @error="bgPreview = ''" />
         </div>
       </div>
@@ -97,11 +97,11 @@ const clearBgImage = async () => {
 
     <!-- Controls -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">文字排版参数</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm divide-y divide-black/5 dark:divide-white/[0.04]">
+      <h3 class="app-section-label text-[14px] mb-3 px-1">文字排版参数</h3>
+      <div class="app-card app-divide-y">
          
          <!-- Font Size -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">A</span>
             <div class="flex-1 w-full max-w-md">
@@ -115,7 +115,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Font Weight -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">B</span>
             <div class="flex-1 w-full max-w-md">
@@ -129,7 +129,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Line Height -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">↕</span>
             <div class="flex-1 w-full max-w-md">
@@ -143,7 +143,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Letter Spacing -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">↔</span>
             <div class="flex-1 w-full max-w-md">
@@ -157,7 +157,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Paragraph Indent -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">⇥</span>
             <div class="flex-1 w-full max-w-md">
@@ -171,7 +171,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Paragraph Spacing -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">⤓</span>
             <div class="flex-1 w-full max-w-md">
@@ -185,7 +185,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Margin X -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">⇔</span>
             <div class="flex-1 w-full max-w-md">
@@ -199,7 +199,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Margin Y -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">⇕</span>
             <div class="flex-1 w-full max-w-md">
@@ -213,7 +213,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Blur -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-start gap-4">
             <span class="text-xl opacity-80 mt-0.5">🔅</span>
             <div class="flex-1 w-full max-w-md">
@@ -231,11 +231,11 @@ const clearBgImage = async () => {
 
     <!-- Color & Alignment -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">颜色与对齐</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm divide-y divide-black/5 dark:divide-white/[0.04]">
+      <h3 class="app-section-label text-[14px] mb-3 px-1">颜色与对齐</h3>
+      <div class="app-card app-divide-y">
 
          <!-- Font Color -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🎨</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">字体颜色</div>
@@ -245,7 +245,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Cover Color -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🖌️</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页底色</div>
@@ -255,7 +255,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Text Align -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">📐</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">文字对齐</div>
@@ -267,7 +267,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Chapter Title Align -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">🔖</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">章节标题</div>
@@ -280,7 +280,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Vertical Align -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">⬇️</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">垂直对齐</div>
@@ -296,11 +296,11 @@ const clearBgImage = async () => {
 
     <!-- Page Layout -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">页面布局</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm divide-y divide-black/5 dark:divide-white/[0.04]">
+      <h3 class="app-section-label text-[14px] mb-3 px-1">页面布局</h3>
+      <div class="app-card app-divide-y">
 
          <!-- Page Mode -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">📖</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">视图模式</div>
@@ -312,7 +312,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Flip Mode -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">📄</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页效果</div>
@@ -324,7 +324,7 @@ const clearBgImage = async () => {
          </div>
 
          <!-- Double Page Step -->
-         <div v-if="pageMode==='double'" class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div v-if="pageMode==='double'" class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">📑</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">翻页步长</div>
@@ -340,11 +340,11 @@ const clearBgImage = async () => {
 
     <!-- 自定义主题 -->
     <div class="mb-8">
-      <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">自定义主题</h3>
-      <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm divide-y divide-black/5 dark:divide-white/[0.04]">
+      <h3 class="app-section-label text-[14px] mb-3 px-1">自定义主题</h3>
+      <div class="app-card app-divide-y">
 
          <!-- Save current -->
-         <div class="p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+         <div class="p-4 app-row">
           <div class="flex items-center gap-4">
             <span class="text-xl opacity-80">💾</span>
             <div class="text-[14px] font-medium text-slate-800 dark:text-white/90 flex-1">保存当前配置为主题</div>

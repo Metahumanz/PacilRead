@@ -32,28 +32,28 @@ const { silentUpdate } = settings
 
 <template>
   <div class="mb-8">
-    <h3 class="text-[14px] font-semibold text-slate-700 dark:text-white/80 mb-3 px-1">关于与更新</h3>
-    <div class="bg-white dark:bg-[#2d2d2d] rounded-xl border border-black/5 dark:border-white/[0.06] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-400 divide-y divide-black/5 dark:divide-white/[0.04]">
+    <h3 class="app-section-label text-[14px] mb-3 px-1">关于与更新</h3>
+    <div class="app-card app-card-hover app-divide-y">
       
       <!-- 关于基础 -->
-      <div class="flex items-center justify-between p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors font-medium">
+      <div class="flex items-center justify-between p-4 app-row font-medium">
         <div class="flex items-center gap-4">
           <span class="text-xl opacity-80">🔄</span>
           <div>
-            <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">PacilRead 更新维护</div>
-            <div v-if="updateStatus" class="text-[12px] text-emerald-500 dark:text-emerald-400 mt-0.5">{{ updateStatus }} <span class="text-slate-400 dark:text-white/40">{{ updateDetail }}</span></div>
+            <div class="text-[14px] font-medium app-title">PacilRead 更新维护</div>
+            <div v-if="updateStatus" class="text-[12px] app-positive-text mt-0.5">{{ updateStatus }} <span class="app-muted">{{ updateDetail }}</span></div>
           </div>
         </div>
         <div class="flex items-center gap-3">
-           <span class="text-[12px] font-mono text-slate-500 dark:text-white/50 bg-black/5 dark:bg-white/5 px-2 py-1 rounded-md">v{{ appVersion }}</span>
+           <span class="app-badge text-[12px] font-mono px-2 py-1">v{{ appVersion }}</span>
           <template v-if="updateAvailable">
-            <button @click="downloadUpdate" class="px-4 py-1.5 bg-[#005fb8] hover:bg-[#005fb8]/90 text-white rounded-md text-[13px] transition-colors font-medium">后台下载最新版</button>
+            <button @click="downloadUpdate" class="app-button app-button-primary px-4 py-1.5 text-[13px]">后台下载最新版</button>
           </template>
-          <button v-else-if="updateReady" @click="installNow" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-[13px] transition-colors font-medium shadow-sm">立即安装</button>
-          <button v-else-if="isDownloading" disabled class="px-4 py-1.5 bg-black/5 dark:bg-white/5 text-slate-400 dark:text-white/40 rounded-md text-[13px] font-medium border border-transparent cursor-not-allowed">下载中...</button>
-          <button v-else @click="checkForUpdate" class="px-4 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-800 dark:text-white/90 rounded-md text-[13px] transition-colors font-medium border border-black/5 dark:border-white/5">检查更新</button>
+          <button v-else-if="updateReady" @click="installNow" class="app-button app-button-positive px-4 py-1.5 text-[13px]">立即安装</button>
+          <button v-else-if="isDownloading" disabled class="app-button px-4 py-1.5 text-[13px] cursor-not-allowed opacity-50">下载中...</button>
+          <button v-else @click="checkForUpdate" class="app-button px-4 py-1.5 text-[13px]">检查更新</button>
           
-          <a href="https://github.com/Metahumanz/PacilRead" target="_blank" class="px-4 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-800 dark:text-white/90 rounded-md text-[13px] transition-colors font-medium border border-black/5 dark:border-white/5 flex items-center gap-1.5">
+          <a href="https://github.com/Metahumanz/PacilRead" target="_blank" class="app-button px-4 py-1.5 text-[13px] flex items-center gap-1.5">
             <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
             GitHub
           </a>
@@ -61,38 +61,38 @@ const { silentUpdate } = settings
       </div>
 
       <!-- 行为控制 -->
-      <div class="flex items-center justify-between p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.01] transition-colors">
+      <div class="flex items-center justify-between p-4 app-row">
         <div class="flex items-center gap-4">
           <span class="text-xl opacity-80">🤫</span>
           <div>
-            <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">允许静默更新</div>
-            <div class="text-[12px] text-slate-500 dark:text-white/50 mt-0.5">开启后点击「立即安装」将直接覆盖安装并自动重启，无需再次确认</div>
+            <div class="text-[14px] font-medium app-title">允许静默更新</div>
+            <div class="text-[12px] app-muted mt-0.5">开启后点击「立即安装」将直接覆盖安装并自动重启，无需再次确认</div>
           </div>
         </div>
         <label class="flex items-center cursor-pointer relative">
           <input type="checkbox" v-model="silentUpdate" @change="toggleSilentUpdate" class="peer sr-only" />
-          <div class="w-10 h-5 bg-black/10 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-[20px] after:absolute after:top-1 after:left-1 after:bg-slate-600 dark:after:bg-white/80 peer-checked:after:bg-white after:rounded-full after:h-3 after:w-3 peer-checked:after:scale-125 after:transition-all peer-checked:bg-[#005fb8] border border-black/30 dark:border-white/30 peer-checked:border-[#005fb8]"></div>
+          <div class="app-switch"></div>
         </label>
       </div>
 
       <!-- 日志 -->
-      <div class="p-4 bg-black/5 dark:bg-black/10">
+      <div class="p-4">
         <div class="flex items-center gap-2 mb-3">
           <span class="text-xl opacity-80">📜</span>
-          <div class="text-[14px] font-medium text-slate-800 dark:text-white/90">版本演进日志</div>
+          <div class="text-[14px] font-medium app-title">版本演进日志</div>
         </div>
-        <div class="divide-y divide-black/5 dark:divide-white/[0.04] max-h-[400px] overflow-y-auto changelog-scroll pr-2">
+        <div class="app-divide-y max-h-[400px] overflow-y-auto changelog-scroll pr-2">
           <div
             v-for="(entry, index) in changelogItems"
             :key="entry.version"
             :class="index === 0 ? 'pb-4 pt-2' : 'py-4'"
           >
             <div class="flex items-center gap-2 mb-2">
-              <span v-if="index === 0" class="px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-500 rounded-full">最新</span>
-              <span class="text-[14px] font-bold text-slate-800 dark:text-white/90">v{{ entry.version }}</span>
-              <span v-if="entry.date" class="text-[11px] text-slate-400 dark:text-white/30 ml-auto">{{ entry.date }}</span>
+              <span v-if="index === 0" class="app-badge px-2 py-0.5 text-[11px] font-bold app-positive-text">最新</span>
+              <span class="text-[14px] font-bold app-title">v{{ entry.version }}</span>
+              <span v-if="entry.date" class="text-[11px] app-muted ml-auto">{{ entry.date }}</span>
             </div>
-            <ul class="text-[12px] text-slate-600 dark:text-white/60 space-y-1.5 pl-4 list-disc">
+            <ul class="text-[12px] app-muted space-y-1.5 pl-4 list-disc">
               <li v-for="change in entry.changes" :key="change">{{ change }}</li>
             </ul>
           </div>
@@ -104,6 +104,5 @@ const { silentUpdate } = settings
 
 <style scoped>
 .changelog-scroll::-webkit-scrollbar { width: 4px; }
-.changelog-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
-:is(.dark) .changelog-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); }
+.changelog-scroll::-webkit-scrollbar-thumb { background: var(--app-border-strong); border-radius: 2px; }
 </style>

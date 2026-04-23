@@ -13,6 +13,18 @@ export interface ElectronAPI {
     export: () => Promise<string>
     exportLite: () => Promise<string>
     importFromFile: (filePath: string) => Promise<void>
+    importLiteFromFile: (filePath: string) => Promise<{
+      books: number
+      settings: number
+      replacementRules: number
+      readingStats: number
+      importedBookCount: number
+      preservedChapters: number
+      currentChapters: number
+      detachedChapters: number
+      remappedChapters: number
+      unmatchedChapters: number
+    }>
   }
   dialog: {
     openFile: () => Promise<string | null>

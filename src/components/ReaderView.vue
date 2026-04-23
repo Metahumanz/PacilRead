@@ -106,6 +106,11 @@ const fetchChapters = async () => {
   try {
     const r = await window.electronAPI.db.query('SELECT * FROM chapters WHERE book_id = ? ORDER BY order_index', [props.bookId])
     chapters.value = r as Chapter[]
+    if (chapters.value.length > 0) {
+      currentChapterIndex.value = Math.min(Math.max(currentChapterIndex.value, 0), chapters.value.length - 1)
+    } else {
+      currentChapterIndex.value = 0
+    }
   } catch (e) { console.error(e) }
 }
 
@@ -424,6 +429,21 @@ onUnmounted(async () => {
     <div v-if="loading" class="load"><div class="spinner"></div><p>正在载入...</p></div>
 
     <template v-else>
+      <div v-if="!book || chapters.length === 0" class="empty-reader">
+        <div class="empty-reader-card">
+          <div class="empty-reader-icon">!</div>
+          <h2>{{ book ? '这本书暂无可读取正文' : '未找到书籍记录' }}</h2>
+          <p>
+            {{ book
+              ? '数据库里保留了书籍信息，但没有对应章节内容。请先从完整备份恢复，或重新导入这本书。'
+              : '当前书籍记录不存在，可能已被删除或同步数据不完整。'
+            }}
+          </p>
+          <button @click="handleGoBack">返回书架</button>
+        </div>
+      </div>
+
+      <template v-else>
       <!-- Reveal animation overlay -->
       <div v-if="showingCover" class="snapshot-layer" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']">
         <div class="absolute inset-0 pointer-events-none transform-gpu origin-center" 
@@ -539,6 +559,7 @@ onUnmounted(async () => {
           </div>
         </div>
       </Transition>
+      </template>
     </template>
   </div>
 </template>
@@ -548,6 +569,13 @@ onUnmounted(async () => {
 .load { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; color:rgba(255,255,255,0.5); z-index:1; }
 .spinner { width:40px; height:40px; border:2px solid rgba(59,130,246,0.2); border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg) } }
+.empty-reader { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:24px; color:rgba(255,255,255,0.88); }
+.empty-reader-card { width:min(460px, 100%); padding:28px; border:1px solid rgba(255,255,255,0.12); border-radius:22px; background:rgba(15,23,42,0.72); backdrop-filter:blur(24px); box-shadow:0 24px 80px rgba(0,0,0,0.35); text-align:center; }
+.empty-reader-icon { width:38px; height:38px; margin:0 auto 16px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(59,130,246,0.18); color:#93c5fd; font-weight:800; font-size:22px; }
+.empty-reader h2 { margin:0 0 10px; font-size:22px; font-weight:800; }
+.empty-reader p { margin:0 auto 22px; max-width:360px; color:rgba(226,232,240,0.72); line-height:1.7; font-size:14px; }
+.empty-reader button { padding:10px 18px; border-radius:12px; background:#2563eb; color:white; font-weight:700; border:0; cursor:pointer; }
+.empty-reader button:hover { background:#3b82f6; }
 
 .snapshot-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
 .snapshot-layer.left:not(.is-curl) { animation: clipLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }

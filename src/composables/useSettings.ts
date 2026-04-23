@@ -13,6 +13,13 @@ const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
 const DEFAULT_PREV_KEYS = ['ArrowLeft', 'PageUp']
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
 
+export type AppThemeMode = 'system' | 'light' | 'dark'
+export type AppLightStyleVariant = 'yaobai' | 'yunbai'
+export type AppDarkStyleVariant = 'yemu' | 'jiye'
+export type ResolvedAppStyle = AppLightStyleVariant | AppDarkStyleVariant
+
+const clampGlassOpacity = (value: number) => Math.max(20, Math.min(100, value))
+
 // ---- Singleton State ----
 const fontSize = ref(20)
 const lineHeight = ref(1.8)
@@ -72,6 +79,12 @@ const silentUpdate = ref(false)
 const sliderMode = ref<'book' | 'chapter'>('book')
 const sidebarCollapsed = ref(false)
 const viewMode = ref<'grid' | 'list' | 'icon'>('grid')
+
+// App chrome appearance
+const appThemeMode = ref<AppThemeMode>('system')
+const appLightStyleVariant = ref<AppLightStyleVariant>('yunbai')
+const appDarkStyleVariant = ref<AppDarkStyleVariant>('yemu')
+const glassOpacityPercent = ref(80)
 
 // WebDAV
 const webdavUrl = ref('')
@@ -150,6 +163,10 @@ function resetSettingsState() {
   sliderMode.value = 'book'
   sidebarCollapsed.value = false
   viewMode.value = 'grid'
+  appThemeMode.value = 'system'
+  appLightStyleVariant.value = 'yunbai'
+  appDarkStyleVariant.value = 'yemu'
+  glassOpacityPercent.value = 80
 
   webdavUrl.value = ''
   webdavDir.value = 'Books'
@@ -245,6 +262,18 @@ export function useSettings() {
           if (s.key === 'chapterTitleDisplay') chapterTitleDisplay.value = s.value as any || 'left'
           if (s.key === 'sidebarCollapsed') sidebarCollapsed.value = s.value === 'true'
           if (s.key === 'viewMode') viewMode.value = s.value as any || 'grid'
+          if (s.key === 'app_theme_mode') {
+            appThemeMode.value = s.value === 'light' || s.value === 'dark' ? s.value : 'system'
+          }
+          if (s.key === 'app_light_style_variant') {
+            appLightStyleVariant.value = s.value === 'yaobai' ? 'yaobai' : 'yunbai'
+          }
+          if (s.key === 'app_dark_style_variant') {
+            appDarkStyleVariant.value = s.value === 'jiye' ? 'jiye' : 'yemu'
+          }
+          if (s.key === 'glass_opacity_percent') {
+            glassOpacityPercent.value = clampGlassOpacity(parseInt(s.value) || 80)
+          }
           if (s.key === 'reader_pIndent') pIndent.value = parseFloat(s.value) || 2
           if (s.key === 'reader_pSpacing') pSpacing.value = parseFloat(s.value) || 0.8
           if (s.key === 'readingTimeTrackingEnabled') readingTimeTrackingEnabled.value = s.value === 'true'
@@ -332,6 +361,7 @@ export function useSettings() {
     hudBottomLeft, hudBottomCenter, hudBottomRight,
     chapterTitleDisplay,
     sliderMode, sidebarCollapsed, viewMode,
+    appThemeMode, appLightStyleVariant, appDarkStyleVariant, glassOpacityPercent,
     // Methods
     loadAllSettings, saveAllStyling, saveTtsSettings, saveSetting
   }
