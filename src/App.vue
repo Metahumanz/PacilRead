@@ -314,8 +314,22 @@ watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
       />
       
       <!-- PowerToys Style App Layout -->
-      <div v-else class="flex h-screen w-full relative">
-        <!-- Custom Window Controls moved to Content Pane -->
+      <div v-else class="flex h-screen w-full min-w-0 overflow-hidden relative">
+        <!-- Custom Window Controls -->
+        <div class="app-home-window-controls no-drag">
+          <button @click="minimizeWindow" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
+            <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
+          </button>
+          <button @click="toggleMaximize" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
+            <Transition name="icon-fade" mode="out-in">
+              <span v-if="!isWindowMaximized" key="max" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
+              <span v-else key="restore" class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
+            </Transition>
+          </button>
+          <button @click="closeWindow" class="app-window-button app-window-close w-12 h-10 flex items-center justify-center group cursor-pointer">
+            <span class="text-[16px] opacity-70 group-hover:opacity-100">✕</span>
+          </button>
+        </div>
 
         <!-- Sidebar -->
         <aside
@@ -371,27 +385,12 @@ watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
             isWindowMaximized || useBottomNav ? 'rounded-none mt-0' : 'rounded-tl-lg mt-1',
             useBottomNav ? 'home-main-bottom' : ''
           ]"
-          class="flex-1 bg-transparent relative z-0 flex flex-col maximize-ease"
+          class="flex-1 min-w-0 bg-transparent relative z-0 flex flex-col maximize-ease"
         >
           <!-- Draggable Top Bar Area with Controls -->
-          <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative pr-0">
-            <div class="flex items-center h-10 no-drag">
-              <button @click="minimizeWindow" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
-                <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
-              </button>
-              <button @click="toggleMaximize" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
-                <Transition name="icon-fade" mode="out-in">
-                  <span v-if="!isWindowMaximized" key="max" class="text-[12px] opacity-70 group-hover:opacity-100">⬜</span>
-                  <span v-else key="restore" class="text-[12px] opacity-70 group-hover:opacity-100">❐</span>
-                </Transition>
-              </button>
-              <button @click="closeWindow" class="app-window-button app-window-close w-12 h-10 flex items-center justify-center group cursor-pointer">
-                <span class="text-[16px] opacity-70 group-hover:opacity-100">✕</span>
-              </button>
-            </div>
-          </div>
+          <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg relative"></div>
           
-          <div :class="['flex-1 overflow-y-auto custom-scrollbar', useBottomNav ? 'px-4 sm:px-6 pb-28' : 'px-10 pb-10']">
+          <div :class="['flex-1 min-w-0 overflow-y-auto overflow-x-hidden custom-scrollbar', useBottomNav ? 'px-4 sm:px-6 pb-28' : 'px-10 pb-10']">
             <Transition name="fade" mode="out-in">
               <BookshelfView
                 v-if="currentView === 'bookshelf'"

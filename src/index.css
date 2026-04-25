@@ -554,8 +554,18 @@ body {
 }
 
 .app-window-button {
+  flex: 0 0 3rem;
   color: var(--app-text-secondary);
   transition: background var(--app-motion), color var(--app-motion);
+}
+
+.app-home-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 80;
+  display: flex;
+  height: 2.5rem;
 }
 
 .app-window-button:hover {
