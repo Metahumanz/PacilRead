@@ -18,11 +18,13 @@ export interface ElectronAPI {
       settings: number
       replacementRules: number
       readingStats: number
+      bookmarks: number
       importedBookCount: number
       preservedChapters: number
       currentChapters: number
       detachedChapters: number
       remappedChapters: number
+      remappedBookmarks: number
       unmatchedChapters: number
     }>
   }

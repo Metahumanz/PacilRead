@@ -29,7 +29,8 @@ const settings = useSettings()
 const {
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-  webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
+  webdavSyncThemes, webdavSyncBackgrounds, webdavSyncReadingStats,
+  webdavLastSync, webdavLastLiteSync,
   webdavDesktopSettingsDir
 } = settings
 </script>
@@ -87,6 +88,7 @@ const {
                   <button @click="webdavSyncUISettings = !webdavSyncUISettings; saveWebdav()" :class="{ 'is-active': webdavSyncUISettings }" class="app-chip px-3 py-1 text-[11px] font-medium transition-all">界面设置</button>
                   <button @click="webdavSyncThemes = !webdavSyncThemes; saveWebdav()" :class="{ 'is-active': webdavSyncThemes }" class="app-chip px-3 py-1 text-[11px] font-medium transition-all">阅读主题</button>
                   <button @click="webdavSyncBackgrounds = !webdavSyncBackgrounds; saveWebdav()" :class="{ 'is-active': webdavSyncBackgrounds }" class="app-chip px-3 py-1 text-[11px] font-medium transition-all">背景图片</button>
+                  <button @click="webdavSyncReadingStats = !webdavSyncReadingStats; saveWebdav()" :class="{ 'is-active': webdavSyncReadingStats }" class="app-chip px-3 py-1 text-[11px] font-medium transition-all">阅读统计</button>
                 </div>
                 
                 <div class="flex flex-col gap-4">

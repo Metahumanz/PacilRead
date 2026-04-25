@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import {
+  DESKTOP_DATABASE_DIR,
   buildPacilReadBaseUrl,
   clearLocalReadingStats,
   fetchReadingStatsOverview,
@@ -49,6 +50,7 @@ const {
   webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
   autoOpenLastRead, silentUpdate, ttsMiMoApiKey,
   webdavDesktopSettingsDir,
+  webdavSyncReadingStats,
   readingTimeTrackingEnabled, readingTimeStatsHidden
 } = settings
 
@@ -98,6 +100,7 @@ const saveWebdav = async () => {
   await saveSetting('webdavSyncUISettings', webdavSyncUISettings.value ? 'true' : 'false')
   await saveSetting('webdavSyncThemes', webdavSyncThemes.value ? 'true' : 'false')
   await saveSetting('webdavSyncBackgrounds', webdavSyncBackgrounds.value ? 'true' : 'false')
+  await saveSetting('webdav_sync_reading_stats', webdavSyncReadingStats.value ? 'true' : 'false')
   await saveSetting('webdavDesktopSettingsDir', webdavDesktopSettingsDir.value)
 }
 
@@ -124,6 +127,7 @@ const testWebdav = async () => {
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}readingStats/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/${DESKTOP_DATABASE_DIR}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
   }
   else webdavTestResult.value = `❌失败(HTTP ${res.status}): ` + (res.data ? res.data.substring(0, 30) : '')
   webdavTesting.value = false
@@ -222,6 +226,38 @@ const toggleRuleActive = async (rule: ReplacementRule) => {
 }
 
 const getCurrentPacilReadBaseUrl = () => buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
+const getDesktopPrivateBaseUrl = () => {
+  const desktopDir = sanitizeWebdavDirectorySegment(webdavDesktopSettingsDir.value)
+  return `${getCurrentPacilReadBaseUrl()}${desktopDir}/`
+}
+const getDesktopDatabaseBaseUrl = () => `${getDesktopPrivateBaseUrl()}${DESKTOP_DATABASE_DIR}/`
+
+const ensureWebdavCollection = async (url: string, auth: string) => {
+  await window.electronAPI.webdav.request({ url, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+}
+
+const ensureSyncDirectories = async (auth: string, options: { includeDesktopDatabase?: boolean } = {}) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  await ensureWebdavCollection(baseUrl, auth)
+  await ensureWebdavCollection(baseUrl + 'books/', auth)
+  await ensureWebdavCollection(baseUrl + 'covers/', auth)
+  await ensureWebdavCollection(baseUrl + 'readingStats/', auth)
+  await ensureWebdavCollection(getDesktopPrivateBaseUrl(), auth)
+  await ensureWebdavCollection(getDesktopPrivateBaseUrl() + 'backgrounds/', auth)
+  if (options.includeDesktopDatabase) {
+    await ensureWebdavCollection(getDesktopDatabaseBaseUrl(), auth)
+  }
+}
+
+const downloadFirstAvailable = async (remoteUrls: string[], dstPath: string, auth: string) => {
+  let lastError = ''
+  for (const remoteUrl of remoteUrls) {
+    const result = await window.electronAPI.webdav.downloadFile(remoteUrl, dstPath, auth)
+    if (!result.error) return { ...result, remoteUrl }
+    lastError = result.error || `无法读取 ${remoteUrl}`
+  }
+  return { success: false, error: lastError || '云端文件不存在', remoteUrl: remoteUrls[0] }
+}
 
 const refreshReadingStatsSummary = async () => {
   readingStatsLoading.value = true
@@ -243,6 +279,7 @@ const finishDisableReadingStats = async (hidden: boolean) => {
   readingTimeTrackingEnabled.value = false
   readingTimeStatsHidden.value = hidden
   await saveSetting('readingTimeTrackingEnabled', 'false')
+  await saveSetting('reading_time_tracking_enabled', 'false')
   await saveSetting('readingTimeStatsHidden', hidden ? 'true' : 'false')
   showReadingStatsDisableModal.value = false
   await refreshReadingStatsSummary()
@@ -252,6 +289,7 @@ const enableReadingStats = async () => {
   readingTimeTrackingEnabled.value = true
   readingTimeStatsHidden.value = false
   await saveSetting('readingTimeTrackingEnabled', 'true')
+  await saveSetting('reading_time_tracking_enabled', 'true')
   await saveSetting('readingTimeStatsHidden', 'false')
   await refreshReadingStatsSummary()
 }
@@ -301,6 +339,7 @@ const clearReadingStatsHistory = async () => {
     readingTimeTrackingEnabled.value = false
     readingTimeStatsHidden.value = false
     await saveSetting('readingTimeTrackingEnabled', 'false')
+    await saveSetting('reading_time_tracking_enabled', 'false')
     await saveSetting('readingTimeStatsHidden', 'false')
     showReadingStatsDisableModal.value = false
     await refreshReadingStatsSummary()
@@ -321,18 +360,13 @@ const fullBackup = async () => {
     const baseUrl = getCurrentPacilReadBaseUrl()
 
     webdavSyncStatus.value = '创建云端目录...'
-    await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'readingStats/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await ensureSyncDirectories(auth, { includeDesktopDatabase: true })
 
     if (webdavSyncBookshelf.value) {
       webdavSyncStatus.value = '导出数据库...'
       const dbPath = await window.electronAPI.db.export()
-      webdavSyncStatus.value = '上传数据库...'
-      await window.electronAPI.webdav.uploadFile(dbPath, baseUrl + 'reader.db', auth)
+      webdavSyncStatus.value = '上传 Win11 私有数据库...'
+      await window.electronAPI.webdav.uploadFile(dbPath, getDesktopDatabaseBaseUrl() + 'reader.db', auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -358,8 +392,10 @@ const fullBackup = async () => {
       await uploadDesktopSettingsSnapshot()
     }
 
-    webdavSyncStatus.value = '上传阅读统计...'
-    await uploadReadingStatsSnapshot()
+    if (webdavSyncReadingStats.value) {
+      webdavSyncStatus.value = '上传阅读统计...'
+      await uploadReadingStatsSnapshot()
+    }
 
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
@@ -383,7 +419,11 @@ const fullRestore = async () => {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     const dstPath = appDataPath + '/reader.db.restore'
     webdavSyncStatus.value = '下载数据库快照...'
-    const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader.db', dstPath, auth)
+    const dl = await downloadFirstAvailable(
+      [getDesktopDatabaseBaseUrl() + 'reader.db', baseUrl + 'reader.db'],
+      dstPath,
+      auth
+    )
     if (!dl.error) {
       webdavSyncStatus.value = '应用数据库...'
       await window.electronAPI.db.importFromFile(dstPath)
@@ -398,8 +438,10 @@ const fullRestore = async () => {
       webdavSyncStatus.value = desktopSettingsRestore.message
     }
 
-    webdavSyncStatus.value = '合并阅读统计...'
-    await mergeRemoteReadingStats()
+    if (webdavSyncReadingStats.value) {
+      webdavSyncStatus.value = '合并阅读统计...'
+      await mergeRemoteReadingStats()
+    }
     await loadAllSettings()
     await fetchAllRules()
     await fetchBooks()
@@ -427,19 +469,14 @@ const incrementalBackup = async () => {
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
 
-    // Make sure dirs exist
-    await window.electronAPI.webdav.request({ url: baseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'books/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'covers/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: baseUrl + 'readingStats/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${baseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    webdavSyncStatus.value = '创建云端目录...'
+    await ensureSyncDirectories(auth, { includeDesktopDatabase: true })
 
     if (webdavSyncBookshelf.value) {
       webdavSyncStatus.value = '处理增量数据库...'
       const litePath = await (window.electronAPI.db as any).exportLite()
-      webdavSyncStatus.value = '上传增量数据库...'
-      await window.electronAPI.webdav.uploadFile(litePath, baseUrl + 'reader_lite.db', auth)
+      webdavSyncStatus.value = '上传 Win11 私有增量数据库...'
+      await window.electronAPI.webdav.uploadFile(litePath, getDesktopDatabaseBaseUrl() + 'reader_lite.db', auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -474,8 +511,10 @@ const incrementalBackup = async () => {
       await uploadDesktopSettingsSnapshot()
     }
 
-    webdavSyncStatus.value = '上传阅读统计...'
-    await uploadReadingStatsSnapshot()
+    if (webdavSyncReadingStats.value) {
+      webdavSyncStatus.value = '上传阅读统计...'
+      await uploadReadingStatsSnapshot()
+    }
 
     webdavLastLiteSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
@@ -499,7 +538,11 @@ const incrementalRestore = async () => {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     const dstPath = appDataPath + '/reader_lite.db.restore'
     webdavSyncStatus.value = '下载增量快照...'
-    const dl = await window.electronAPI.webdav.downloadFile(baseUrl + 'reader_lite.db', dstPath, auth)
+    const dl = await downloadFirstAvailable(
+      [getDesktopDatabaseBaseUrl() + 'reader_lite.db', baseUrl + 'reader_lite.db'],
+      dstPath,
+      auth
+    )
     let liteRestore: Awaited<ReturnType<typeof window.electronAPI.db.importLiteFromFile>> | null = null
     if (!dl.error) {
       webdavSyncStatus.value = '应用增量数据库...'
@@ -514,8 +557,10 @@ const incrementalRestore = async () => {
       await loadAllSettings()
     }
 
-    webdavSyncStatus.value = '合并阅读统计...'
-    await mergeRemoteReadingStats()
+    if (webdavSyncReadingStats.value) {
+      webdavSyncStatus.value = '合并阅读统计...'
+      await mergeRemoteReadingStats()
+    }
     await loadAllSettings()
     await fetchAllRules()
     await fetchBooks()

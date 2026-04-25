@@ -17,6 +17,9 @@ export type AppThemeMode = 'system' | 'light' | 'dark'
 export type AppLightStyleVariant = 'yaobai' | 'yunbai'
 export type AppDarkStyleVariant = 'yemu' | 'jiye'
 export type ResolvedAppStyle = AppLightStyleVariant | AppDarkStyleVariant
+export type ReaderAutoNightPolicy = 'preserve' | 'override'
+export type HomeNavMode = 'sidebar' | 'bottom' | 'drawer'
+export type HomeManualNavMode = 'sidebar' | 'bottom'
 
 const clampGlassOpacity = (value: number) => Math.max(20, Math.min(100, value))
 
@@ -79,12 +82,26 @@ const silentUpdate = ref(false)
 const sliderMode = ref<'book' | 'chapter'>('book')
 const sidebarCollapsed = ref(false)
 const viewMode = ref<'grid' | 'list' | 'icon'>('grid')
+const bookshelfShowAddEntry = ref(true)
+
+// Home navigation preferences are desktop-private WebDAV settings.
+const homeNavAutoSwitchEnabled = ref(true)
+const homeNavManualMode = ref<HomeManualNavMode>('sidebar')
+const homeBottomNavStyle = ref('compact')
+const homeNavPortraitMode = ref<HomeNavMode>('bottom')
+const homeNavLandscapeMode = ref<HomeNavMode>('sidebar')
+const homeSidebarPresentation = ref('fixed')
+const homeFixedSidebarStyle = ref('expanded')
 
 // App chrome appearance
 const appThemeMode = ref<AppThemeMode>('system')
 const appLightStyleVariant = ref<AppLightStyleVariant>('yunbai')
 const appDarkStyleVariant = ref<AppDarkStyleVariant>('yemu')
 const glassOpacityPercent = ref(80)
+
+// Reader display
+const readerAutoNightEnabled = ref(false)
+const readerAutoNightCustomPolicy = ref<ReaderAutoNightPolicy>('preserve')
 
 // WebDAV
 const webdavUrl = ref('')
@@ -97,6 +114,7 @@ const webdavSyncFiles = ref(true)
 const webdavSyncUISettings = ref(true)
 const webdavSyncThemes = ref(true)
 const webdavSyncBackgrounds = ref(true)
+const webdavSyncReadingStats = ref(true)
 const webdavLastSync = ref('')
 const webdavLastLiteSync = ref('')
 const webdavDesktopSettingsDir = ref(DEFAULT_DESKTOP_SETTINGS_DIR)
@@ -163,10 +181,20 @@ function resetSettingsState() {
   sliderMode.value = 'book'
   sidebarCollapsed.value = false
   viewMode.value = 'grid'
+  bookshelfShowAddEntry.value = true
+  homeNavAutoSwitchEnabled.value = true
+  homeNavManualMode.value = 'sidebar'
+  homeBottomNavStyle.value = 'compact'
+  homeNavPortraitMode.value = 'bottom'
+  homeNavLandscapeMode.value = 'sidebar'
+  homeSidebarPresentation.value = 'fixed'
+  homeFixedSidebarStyle.value = 'expanded'
   appThemeMode.value = 'system'
   appLightStyleVariant.value = 'yunbai'
   appDarkStyleVariant.value = 'yemu'
   glassOpacityPercent.value = 80
+  readerAutoNightEnabled.value = false
+  readerAutoNightCustomPolicy.value = 'preserve'
 
   webdavUrl.value = ''
   webdavDir.value = 'Books'
@@ -178,6 +206,7 @@ function resetSettingsState() {
   webdavSyncUISettings.value = true
   webdavSyncThemes.value = true
   webdavSyncBackgrounds.value = true
+  webdavSyncReadingStats.value = true
   webdavLastSync.value = ''
   webdavLastLiteSync.value = ''
   webdavDesktopSettingsDir.value = DEFAULT_DESKTOP_SETTINGS_DIR
@@ -223,7 +252,12 @@ export function useSettings() {
             ttsMiMoVoice.value = isMimoTtsVoiceId(s.value) ? s.value : MIMO_TTS_DEFAULT_VOICE
           }
           if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
+          if (s.key === 'reader_double_page_enabled') pageMode.value = (s.value === 'true' ? 'double' : 'single')
           if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
+          if (s.key === 'reader_auto_night_enabled') readerAutoNightEnabled.value = s.value === 'true'
+          if (s.key === 'reader_auto_night_custom_policy') {
+            readerAutoNightCustomPolicy.value = s.value === 'override' ? 'override' : 'preserve'
+          }
           if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
           if (s.key === 'reader_alwaysOnTop') {
             isAlwaysOnTop.value = (s.value === 'true')
@@ -244,6 +278,7 @@ export function useSettings() {
           if (s.key === 'webdavSyncUISettings') webdavSyncUISettings.value = s.value !== 'false'
           if (s.key === 'webdavSyncThemes') webdavSyncThemes.value = s.value !== 'false'
           if (s.key === 'webdavSyncBackgrounds') webdavSyncBackgrounds.value = s.value !== 'false'
+          if (s.key === 'webdav_sync_reading_stats') webdavSyncReadingStats.value = s.value !== 'false'
           if (s.key === 'webdavLastSync') webdavLastSync.value = s.value || ''
           if (s.key === 'webdavLastLiteSync') webdavLastLiteSync.value = s.value || ''
           if (s.key === 'webdavDesktopSettingsDir') webdavDesktopSettingsDir.value = s.value || DEFAULT_DESKTOP_SETTINGS_DIR
@@ -262,6 +297,18 @@ export function useSettings() {
           if (s.key === 'chapterTitleDisplay') chapterTitleDisplay.value = s.value as any || 'left'
           if (s.key === 'sidebarCollapsed') sidebarCollapsed.value = s.value === 'true'
           if (s.key === 'viewMode') viewMode.value = s.value as any || 'grid'
+          if (s.key === 'bookshelf_show_add_entry') bookshelfShowAddEntry.value = s.value !== 'false'
+          if (s.key === 'home_nav_auto_switch_enabled') homeNavAutoSwitchEnabled.value = s.value !== 'false'
+          if (s.key === 'home_nav_manual_mode') homeNavManualMode.value = s.value === 'bottom' ? 'bottom' : 'sidebar'
+          if (s.key === 'home_bottom_nav_style') homeBottomNavStyle.value = s.value || 'compact'
+          if (s.key === 'home_nav_portrait_mode') {
+            homeNavPortraitMode.value = s.value === 'sidebar' || s.value === 'drawer' ? s.value : 'bottom'
+          }
+          if (s.key === 'home_nav_landscape_mode') {
+            homeNavLandscapeMode.value = s.value === 'bottom' || s.value === 'drawer' ? s.value : 'sidebar'
+          }
+          if (s.key === 'home_sidebar_presentation') homeSidebarPresentation.value = s.value || 'fixed'
+          if (s.key === 'home_fixed_sidebar_style') homeFixedSidebarStyle.value = s.value || 'expanded'
           if (s.key === 'app_theme_mode') {
             appThemeMode.value = s.value === 'light' || s.value === 'dark' ? s.value : 'system'
           }
@@ -276,14 +323,15 @@ export function useSettings() {
           }
           if (s.key === 'reader_pIndent') pIndent.value = parseFloat(s.value) || 2
           if (s.key === 'reader_pSpacing') pSpacing.value = parseFloat(s.value) || 0.8
-          if (s.key === 'readingTimeTrackingEnabled') readingTimeTrackingEnabled.value = s.value === 'true'
+          if (s.key === 'readingTimeTrackingEnabled' || s.key === 'reading_time_tracking_enabled') readingTimeTrackingEnabled.value = s.value === 'true'
           if (s.key === 'readingTimeStatsHidden') readingTimeStatsHidden.value = s.value === 'true'
-          if (s.key === 'readingStatsDeviceId') readingStatsDeviceId.value = s.value || ''
+          if (s.key === 'readingStatsDeviceId' || s.key === 'reading_stats_device_id') readingStatsDeviceId.value = s.value || ''
         })
       }
       if (!readingStatsDeviceId.value) {
         readingStatsDeviceId.value = crypto.randomUUID()
         await saveSetting('readingStatsDeviceId', readingStatsDeviceId.value)
+        await saveSetting('reading_stats_device_id', readingStatsDeviceId.value)
       }
       if (!webdavDesktopSettingsDir.value) {
         webdavDesktopSettingsDir.value = DEFAULT_DESKTOP_SETTINGS_DIR
@@ -306,6 +354,8 @@ export function useSettings() {
     saveSetting('bgImage', bgImage.value)
     saveSetting('reader_flipMode', flipMode.value)
     saveSetting('reader_pageMode', pageMode.value)
+    saveSetting('reader_double_page_enabled', pageMode.value === 'double' ? 'true' : 'false')
+    saveSetting('reader_double_page_mode', pageMode.value === 'double' ? 'force' : 'auto')
     saveSetting('reader_doublePageStep', doublePageStep.value)
     saveSetting('reader_blurAmount', blurAmount.value)
     saveSetting('reader_textAlign', textAlign.value)
@@ -352,7 +402,7 @@ export function useSettings() {
     // WebDAV
     webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
     webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
-    webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
+    webdavSyncThemes, webdavSyncBackgrounds, webdavSyncReadingStats, webdavLastSync, webdavLastLiteSync,
     webdavDesktopSettingsDir,
     // Themes
     customThemes, systemFonts,
@@ -360,8 +410,12 @@ export function useSettings() {
     hudTopLeft, hudTopCenter, hudTopRight,
     hudBottomLeft, hudBottomCenter, hudBottomRight,
     chapterTitleDisplay,
-    sliderMode, sidebarCollapsed, viewMode,
+    sliderMode, sidebarCollapsed, viewMode, bookshelfShowAddEntry,
+    homeNavAutoSwitchEnabled, homeNavManualMode,
+    homeBottomNavStyle, homeNavPortraitMode, homeNavLandscapeMode,
+    homeSidebarPresentation, homeFixedSidebarStyle,
     appThemeMode, appLightStyleVariant, appDarkStyleVariant, glassOpacityPercent,
+    readerAutoNightEnabled, readerAutoNightCustomPolicy,
     // Methods
     loadAllSettings, saveAllStyling, saveTtsSettings, saveSetting
   }

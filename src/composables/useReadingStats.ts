@@ -63,6 +63,7 @@ const DESKTOP_SETTINGS_FILE_NAME = 'desktop-settings.json'
 const READING_STATS_REMOTE_DIR = 'readingStats'
 const PACILREAD_ROOT_DIR = 'PacilRead'
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
+export const DESKTOP_DATABASE_DIR = 'database'
 const REMOTE_BG_PLACEHOLDER_PREFIX = '__PACILREAD_REMOTE_BG__:'
 const READING_STATS_IDLE_MS = 60_000
 
@@ -83,12 +84,22 @@ const UI_SETTINGS_KEYS = [
   'reader_sliderMode',
   'sidebarCollapsed',
   'viewMode',
+  'bookshelf_show_add_entry',
+  'home_nav_auto_switch_enabled',
+  'home_nav_manual_mode',
+  'home_bottom_nav_style',
+  'home_nav_portrait_mode',
+  'home_nav_landscape_mode',
+  'home_sidebar_presentation',
+  'home_fixed_sidebar_style',
   'app_theme_mode',
   'app_light_style_variant',
   'app_dark_style_variant',
   'glass_opacity_percent',
   'readingTimeTrackingEnabled',
+  'reading_time_tracking_enabled',
   'readingTimeStatsHidden',
+  'webdav_sync_reading_stats',
 ]
 
 const THEME_SETTINGS_KEYS = [
@@ -105,7 +116,11 @@ const THEME_SETTINGS_KEYS = [
   'reader_flipMode',
   'reader_flipSpeed',
   'reader_pageMode',
+  'reader_double_page_enabled',
+  'reader_double_page_mode',
   'reader_doublePageStep',
+  'reader_auto_night_enabled',
+  'reader_auto_night_custom_policy',
   'reader_blurAmount',
   'reader_textAlign',
   'reader_alignBottom',
@@ -123,6 +138,7 @@ const THEME_SETTINGS_KEYS = [
 
 const LOCAL_ONLY_SETTING_KEYS = new Set([
   'readingStatsDeviceId',
+  'reading_stats_device_id',
   'webdavDesktopSettingsDir',
 ])
 
@@ -328,6 +344,7 @@ async function ensurePacilReadStructure(options: {
   includeReadingStats?: boolean
   includeDesktopSettings?: boolean
   includeDesktopSettingsBackgrounds?: boolean
+  includeDesktopDatabase?: boolean
   includeBooks?: boolean
   includeCovers?: boolean
   includeLegacyBackgrounds?: boolean
@@ -350,6 +367,10 @@ async function ensurePacilReadStructure(options: {
   }
   if (options.includeDesktopSettingsBackgrounds) {
     await ensureWebDavCollection(`${desktopSettingsBaseUrl}backgrounds/`, auth)
+  }
+  if (options.includeDesktopDatabase) {
+    await ensureWebDavCollection(desktopSettingsBaseUrl, auth)
+    await ensureWebDavCollection(`${desktopSettingsBaseUrl}${DESKTOP_DATABASE_DIR}/`, auth)
   }
 
   return {
@@ -404,6 +425,7 @@ export async function ensureReadingStatsDeviceId(): Promise<string> {
   if (!settings.readingStatsDeviceId.value) {
     settings.readingStatsDeviceId.value = crypto.randomUUID()
     await saveSetting('readingStatsDeviceId', settings.readingStatsDeviceId.value)
+    await saveSetting('reading_stats_device_id', settings.readingStatsDeviceId.value)
   }
   return settings.readingStatsDeviceId.value
 }
@@ -520,6 +542,7 @@ export async function createReadingStatsSnapshot(): Promise<{
 export async function uploadReadingStatsSnapshot(): Promise<void> {
   const settings = useSettings()
   if (!settings.webdavSync.value || !settings.webdavUrl.value) return
+  if (!settings.webdavSyncReadingStats.value) return
 
   const { auth, pacilReadBaseUrl } = await ensurePacilReadStructure({
     includeReadingStats: true,
@@ -545,6 +568,7 @@ export async function uploadReadingStatsSnapshot(): Promise<void> {
 export async function mergeRemoteReadingStats(): Promise<number> {
   const settings = useSettings()
   if (!settings.webdavUrl.value) return 0
+  if (!settings.webdavSyncReadingStats.value) return 0
 
   const { auth, baseUrl } = await getWebDavContext()
   const dirUrl = `${baseUrl}${READING_STATS_REMOTE_DIR}/`

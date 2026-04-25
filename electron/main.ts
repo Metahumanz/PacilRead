@@ -261,6 +261,7 @@ function runDatabaseMigrations(database: Database): void {
   )`)
   try { database.run('ALTER TABLE books ADD COLUMN pinned INTEGER DEFAULT 0') } catch (_) {}
   try { database.run("ALTER TABLE books ADD COLUMN reading_stats_key TEXT NOT NULL DEFAULT ''") } catch (_) {}
+  database.run('CREATE INDEX IF NOT EXISTS idx_books_reading_stats_key ON books (reading_stats_key)')
 
   database.run(`CREATE TABLE IF NOT EXISTS chapters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -293,6 +294,24 @@ function runDatabaseMigrations(database: Database): void {
   database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_stats_bucket ON reading_stats (source_device_id, date, book_identity)')
   database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_date ON reading_stats (date)')
   database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_identity ON reading_stats (book_identity)')
+
+  database.run(`CREATE TABLE IF NOT EXISTS bookmarks (
+    uuid TEXT PRIMARY KEY,
+    book_id INTEGER,
+    book_identity TEXT NOT NULL,
+    book_title TEXT NOT NULL,
+    book_author TEXT,
+    chapter_order_index INTEGER NOT NULL DEFAULT 0,
+    chapter_title TEXT NOT NULL DEFAULT '',
+    chapter_offset INTEGER NOT NULL DEFAULT 0,
+    progress_percent INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE SET NULL
+  )`)
+  database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_identity ON bookmarks (book_identity)')
+  database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks (book_id)')
 
   try {
     const books = database.exec('SELECT id, title, author, reading_stats_key FROM books')
@@ -665,6 +684,24 @@ function remapCachedChaptersToImportedBooks(database: Database, previousBooks: a
   return movedChapters
 }
 
+function remapBookmarksToImportedBooks(database: Database): number {
+  if (!tableExists(database, 'bookmarks') || !tableExists(database, 'books')) return 0
+  database.run(`UPDATE bookmarks
+    SET book_id = (
+      SELECT books.id
+      FROM books
+      WHERE books.reading_stats_key = bookmarks.book_identity
+      LIMIT 1
+    )
+    WHERE book_identity <> ''
+      AND EXISTS (
+        SELECT 1
+        FROM books
+        WHERE books.reading_stats_key = bookmarks.book_identity
+      )`)
+  return database.getRowsModified()
+}
+
 function assertFullDatabaseHasReadableContent(database: Database): void {
   const bookCount = countRows(database, 'books')
   const chapterCount = countRows(database, 'chapters')
@@ -703,15 +740,17 @@ ipcMain.handle('db:importLiteFromFile', async (_, filePath: string) => {
       const detachedChapters = detachCachedChapters(db, previousBooks)
       const imported = {
         books: replaceTableFromDatabase(db, liteDb, 'books'),
-        settings: replaceTableFromDatabase(db, liteDb, 'settings'),
+        settings: 0,
         replacementRules: replaceTableFromDatabase(db, liteDb, 'replacement_rules'),
-        readingStats: replaceTableFromDatabase(db, liteDb, 'reading_stats')
+        readingStats: replaceTableFromDatabase(db, liteDb, 'reading_stats'),
+        bookmarks: replaceTableFromDatabase(db, liteDb, 'bookmarks')
       }
       const remappedChapters = remapCachedChaptersToImportedBooks(db, previousBooks)
+      const remappedBookmarks = remapBookmarksToImportedBooks(db)
       const unmatchedChapters = restoreUnmatchedDetachedChapters(db)
       db.run('COMMIT')
       saveDatabase()
-      return { ...imported, importedBookCount, preservedChapters, currentChapters: countRows(db, 'chapters'), detachedChapters, remappedChapters, unmatchedChapters }
+      return { ...imported, importedBookCount, preservedChapters, currentChapters: countRows(db, 'chapters'), detachedChapters, remappedChapters, remappedBookmarks, unmatchedChapters }
     } catch (error) {
       try { db.run('ROLLBACK') } catch {}
       throw error
