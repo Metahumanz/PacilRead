@@ -1,45 +1,141 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useSettings } from './composables/useSettings'
 import { useAppTheme } from './composables/useAppTheme'
+import { hasReadingStatsHistory } from './composables/useReadingStats'
+import type { BookmarkTarget } from './composables/useBookmarks'
 import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
 import SettingsView from './components/SettingsView.vue'
-import TypographyView from './components/TypographyView.vue'
 import ReadingStatsView from './components/ReadingStatsView.vue'
+import BookmarksView from './components/BookmarksView.vue'
 
-type View = 'bookshelf' | 'reader' | 'settings' | 'typography' | 'stats'
+type View = 'bookshelf' | 'reader' | 'settings' | 'stats' | 'bookmarks'
 type NonStatsView = Exclude<View, 'stats'>
 
 const settings = useSettings()
-const { sidebarCollapsed, autoOpenLastRead, loadAllSettings, saveSetting } = settings
+const {
+  sidebarCollapsed,
+  autoOpenLastRead,
+  readingTimeTrackingEnabled,
+  readingTimeStatsHidden,
+  homeNavAutoSwitchEnabled,
+  homeNavManualMode,
+  homeBottomNavStyle,
+  homeNavPortraitMode,
+  homeNavLandscapeMode,
+  homeFixedSidebarStyle,
+  loadAllSettings,
+  saveSetting
+} = settings
 const { appThemeStyle } = useAppTheme()
 
 const currentView = ref<View>('bookshelf')
 const selectedBookId = ref<number | null>(null)
+const selectedBookmarkTarget = ref<BookmarkTarget | null>(null)
 const statsBookId = ref<number | null>(null)
 const statsReturnView = ref<NonStatsView>('settings')
 const statsCanReturnToGlobal = ref(false)
+const showStatsNav = ref(false)
 const isImmersive = ref(false)
 const showQuitConfirm = ref(false)
 const isWindowMaximized = ref(false)
+const windowWidth = ref(typeof window === 'undefined' ? 1200 : window.innerWidth)
+const windowHeight = ref(typeof window === 'undefined' ? 800 : window.innerHeight)
+
+const updateWindowSize = () => {
+  windowWidth.value = window.innerWidth
+  windowHeight.value = window.innerHeight
+}
+
+const normalizeHomeNavMode = (mode: string) => {
+  if (mode === 'bottom' || mode === 'sidebar' || mode === 'drawer') return mode
+  return 'sidebar'
+}
+
+const resolvedHomeNavMode = computed(() => {
+  if (!homeNavAutoSwitchEnabled.value) {
+    return homeNavManualMode.value === 'bottom' ? 'bottom' : 'sidebar'
+  }
+
+  const isNarrow = windowWidth.value < 760
+  const isPortrait = windowHeight.value > windowWidth.value
+  const preferredMode = normalizeHomeNavMode(
+    isNarrow || isPortrait ? homeNavPortraitMode.value : homeNavLandscapeMode.value
+  )
+
+  if (preferredMode === 'drawer') return isNarrow ? 'bottom' : 'sidebar'
+  return preferredMode
+})
+
+const useBottomNav = computed(() => resolvedHomeNavMode.value === 'bottom')
+const effectiveSidebarCollapsed = computed(() => (
+  sidebarCollapsed.value || homeFixedSidebarStyle.value === 'compact'
+))
+
+const homeNavItems = computed(() => [
+  {
+    key: 'bookshelf',
+    label: '书架',
+    icon: '📚',
+    visible: true,
+    active: currentView.value === 'bookshelf',
+    select: () => { currentView.value = 'bookshelf' }
+  },
+  {
+    key: 'stats',
+    label: '统计',
+    icon: '⏱️',
+    visible: showStatsNav.value,
+    active: currentView.value === 'stats',
+    select: () => { openGlobalStats() }
+  },
+  {
+    key: 'bookmarks',
+    label: '书签',
+    icon: '🔖',
+    visible: true,
+    active: currentView.value === 'bookmarks',
+    select: () => { currentView.value = 'bookmarks' }
+  },
+  {
+    key: 'settings',
+    label: '设置',
+    icon: '⚙️',
+    visible: true,
+    active: currentView.value === 'settings',
+    select: () => { currentView.value = 'settings' }
+  }
+].filter(item => item.visible))
 
 const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
   saveSetting('sidebarCollapsed', sidebarCollapsed.value ? 'true' : 'false')
 }
 
-const openBook = (bookId: number) => {
+const refreshHomeAvailability = async () => {
+  try {
+    const hasHistory = await hasReadingStatsHistory()
+    showStatsNav.value = readingTimeTrackingEnabled.value || (!readingTimeStatsHidden.value && hasHistory)
+  } catch (_) {
+    showStatsNav.value = readingTimeTrackingEnabled.value
+  }
+}
+
+const openBook = (bookId: number, target?: BookmarkTarget | null) => {
   selectedBookId.value = bookId
+  selectedBookmarkTarget.value = target || null
   currentView.value = 'reader'
 }
 
 const goBack = () => {
   currentView.value = 'bookshelf'
   selectedBookId.value = null
+  selectedBookmarkTarget.value = null
   isImmersive.value = false
   window.electronAPI.win.setFullScreen(false)
   window.electronAPI.win.setControlsVisible(true)
+  refreshHomeAvailability()
 }
 
 const exitReaderShellForStats = async () => {
@@ -82,6 +178,7 @@ const closeStats = () => {
   statsBookId.value = null
   statsCanReturnToGlobal.value = false
   currentView.value = statsReturnView.value
+  refreshHomeAvailability()
 }
 
 const toggleImmersive = async (val: boolean) => {
@@ -102,6 +199,10 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
       return
     }
     if (currentView.value === 'settings') {
+      goBack()
+      return
+    }
+    if (currentView.value === 'bookmarks') {
       goBack()
       return
     }
@@ -134,16 +235,20 @@ const handleTouchEnd = (e: TouchEvent) => {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('resize', updateWindowSize)
   window.addEventListener('touchstart', handleTouchStart, { passive: true })
   window.addEventListener('touchend', handleTouchEnd, { passive: true })
+  updateWindowSize()
   
   await loadAllSettings()
+  await refreshHomeAvailability()
   
   if (autoOpenLastRead.value) {
     try {
       const b = await window.electronAPI.db.query("SELECT id FROM books ORDER BY last_read DESC LIMIT 1")
       if (b[0] && b[0].id) {
         selectedBookId.value = b[0].id
+        selectedBookmarkTarget.value = null
         currentView.value = 'reader'
       }
     } catch (e) {
@@ -165,8 +270,13 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('resize', updateWindowSize)
   window.removeEventListener('touchstart', handleTouchStart)
   window.removeEventListener('touchend', handleTouchEnd)
+})
+
+watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
+  refreshHomeAvailability()
 })
 </script>
 
@@ -196,6 +306,7 @@ onUnmounted(() => {
       <ReaderView
         v-if="currentView === 'reader' && selectedBookId"
         :book-id="selectedBookId"
+        :initial-bookmark="selectedBookmarkTarget"
         :is-immersive="isImmersive"
         @toggle-immersive="toggleImmersive"
         @go-back="goBack"
@@ -207,54 +318,61 @@ onUnmounted(() => {
         <!-- Custom Window Controls moved to Content Pane -->
 
         <!-- Sidebar -->
-        <aside :class="['app-sidebar flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]', sidebarCollapsed ? 'w-[68px]' : 'w-[260px]']">
+        <aside
+          v-if="!useBottomNav"
+          :class="['app-sidebar flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]', effectiveSidebarCollapsed ? 'w-[68px]' : 'w-[260px]']"
+        >
           <div class="px-4 mb-6 flex items-center window-drag relative min-h-[32px]">
             <button @click="toggleSidebar" class="app-icon-button absolute left-4 w-9 h-9 flex items-center justify-center text-lg active:scale-95 no-drag cursor-pointer z-50" title="折叠导航栏">
               ☰
             </button>
-            <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="sidebarCollapsed ? 'opacity-0' : 'opacity-100'">
+            <div class="flex items-center gap-3 ml-12 transition-opacity duration-300 pointer-events-none" :class="effectiveSidebarCollapsed ? 'opacity-0' : 'opacity-100'">
               <div class="app-logo w-8 h-8 flex items-center justify-center font-bold text-lg italic">P</div>
               <h1 class="app-brand text-[15px] font-semibold">PacilRead</h1>
             </div>
           </div>
           
           <nav class="flex-1 px-3 space-y-1">
-            <button @click="currentView = 'bookshelf'" 
-                    :class="currentView === 'bookshelf' ? 'is-active relative' : ''"
-                    class="app-nav-button flex items-center group">
-              <div v-if="currentView === 'bookshelf'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
+            <button
+              v-for="item in homeNavItems.filter(item => item.key !== 'settings')"
+              :key="item.key"
+              @click="item.select"
+              :class="item.active ? 'is-active relative' : ''"
+              class="app-nav-button flex items-center group"
+            >
+              <div v-if="item.active" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
               <div class="w-8 flex justify-center shrink-0">
-                <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">📚</span>
+                <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">{{ item.icon }}</span>
               </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">书架大厅</span>
-            </button>
-
-            <button @click="currentView = 'typography'" 
-                    :class="currentView === 'typography' ? 'is-active relative' : ''"
-                    class="app-nav-button flex items-center group mt-1">
-              <div v-if="currentView === 'typography'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
-              <div class="w-8 flex justify-center shrink-0">
-                <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">✨</span>
-              </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">排版与预览</span>
+              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="effectiveSidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">{{ item.label }}</span>
             </button>
           </nav>
 
           <div class="px-3 pb-6">
-            <button @click="currentView = 'settings'" 
-                    :class="currentView === 'settings' ? 'is-active relative' : ''"
-                    class="app-nav-button flex items-center group">
-              <div v-if="currentView === 'settings'" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
+            <button
+              v-for="item in homeNavItems.filter(item => item.key === 'settings')"
+              :key="item.key"
+              @click="item.select"
+              :class="item.active ? 'is-active relative' : ''"
+              class="app-nav-button flex items-center group"
+            >
+              <div v-if="item.active" class="app-nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4"></div>
               <div class="w-8 flex justify-center shrink-0">
-                <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">⚙️</span>
+                <span class="text-[18px] opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-transform">{{ item.icon }}</span>
               </div>
-              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">偏好设置</span>
+              <span class="text-[13px] font-medium opacity-90 whitespace-nowrap overflow-hidden transition-all duration-300 ml-2" :class="effectiveSidebarCollapsed ? 'w-0 opacity-0' : 'w-full'">{{ item.label }}</span>
             </button>
           </div>
         </aside>
         
         <!-- Content Pane -->
-        <main :class="[isWindowMaximized ? 'rounded-none mt-0' : 'rounded-tl-lg mt-1']" class="flex-1 bg-transparent relative z-0 flex flex-col maximize-ease">
+        <main
+          :class="[
+            isWindowMaximized || useBottomNav ? 'rounded-none mt-0' : 'rounded-tl-lg mt-1',
+            useBottomNav ? 'home-main-bottom' : ''
+          ]"
+          class="flex-1 bg-transparent relative z-0 flex flex-col maximize-ease"
+        >
           <!-- Draggable Top Bar Area with Controls -->
           <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative pr-0">
             <div class="flex items-center h-10 no-drag">
@@ -273,7 +391,7 @@ onUnmounted(() => {
             </div>
           </div>
           
-          <div class="flex-1 overflow-y-auto custom-scrollbar px-10 pb-10">
+          <div :class="['flex-1 overflow-y-auto custom-scrollbar', useBottomNav ? 'px-4 sm:px-6 pb-28' : 'px-10 pb-10']">
             <Transition name="fade" mode="out-in">
               <BookshelfView
                 v-if="currentView === 'bookshelf'"
@@ -294,14 +412,28 @@ onUnmounted(() => {
                 @open-book-stats="openStatsBook"
                 class="fade-element max-w-5xl mx-auto"
               />
-              <TypographyView
-                v-else-if="currentView === 'typography'"
-                @back="currentView = 'bookshelf'"
+              <BookmarksView
+                v-else-if="currentView === 'bookmarks'"
+                @open-book="openBook"
                 class="fade-element max-w-5xl mx-auto"
               />
             </Transition>
           </div>
         </main>
+
+        <nav v-if="useBottomNav" class="app-bottom-nav no-drag" :class="`is-${homeBottomNavStyle}`" aria-label="首页导航">
+          <button
+            v-for="item in homeNavItems"
+            :key="item.key"
+            @click="item.select"
+            class="app-bottom-nav-button"
+            :class="{ 'is-active': item.active }"
+            type="button"
+          >
+            <span class="app-bottom-nav-icon">{{ item.icon }}</span>
+            <span class="app-bottom-nav-label">{{ item.label }}</span>
+          </button>
+        </nav>
       </div>
     </Transition>
   </div>

@@ -18,7 +18,11 @@ const {
 }>()
 
 const settings = useSettings()
-const { showKeyHints, autoOpenLastRead, nextKeys, prevKeys } = settings
+const { showKeyHints, autoOpenLastRead, nextKeys, prevKeys, bookshelfShowAddEntry, saveSetting } = settings
+
+const toggleBookshelfAddEntry = async () => {
+  await saveSetting('bookshelf_show_add_entry', bookshelfShowAddEntry.value ? 'true' : 'false')
+}
 </script>
 
 <template>
@@ -50,6 +54,20 @@ const { showKeyHints, autoOpenLastRead, nextKeys, prevKeys } = settings
         </div>
         <label class="flex items-center cursor-pointer relative">
           <input type="checkbox" v-model="autoOpenLastRead" @change="toggleAutoOpenLastRead" class="peer sr-only" />
+          <div class="app-switch"></div>
+        </label>
+      </div>
+
+      <div class="flex items-center justify-between p-4 app-row">
+        <div class="flex items-center gap-4">
+          <span class="text-xl opacity-80">＋</span>
+          <div>
+            <div class="text-[14px] font-medium app-title">显示书架添加入口</div>
+            <div class="text-[12px] app-muted mt-0.5">控制书架顶部按钮、网格卡片和列表页脚的添加书籍入口</div>
+          </div>
+        </div>
+        <label class="flex items-center cursor-pointer relative">
+          <input type="checkbox" v-model="bookshelfShowAddEntry" @change="toggleBookshelfAddEntry" class="peer sr-only" />
           <div class="app-switch"></div>
         </label>
       </div>

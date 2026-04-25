@@ -295,6 +295,72 @@ body {
   border-radius: var(--app-radius-pill);
 }
 
+.app-bottom-nav {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 40;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: rgba(var(--app-glass-rgb), var(--app-glass-opacity, 0.88));
+  box-shadow: var(--app-shadow-hover);
+  backdrop-filter: blur(28px) saturate(145%);
+  -webkit-backdrop-filter: blur(28px) saturate(145%);
+}
+
+.app-bottom-nav-button {
+  min-width: 0;
+  min-height: 3.125rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-button);
+  color: var(--app-text-secondary);
+  transition: background var(--app-motion), color var(--app-motion), border-color var(--app-motion), transform var(--app-motion);
+}
+
+.app-bottom-nav-button:hover {
+  background: rgba(var(--app-glass-strong-rgb), 0.5);
+  color: var(--app-text);
+}
+
+.app-bottom-nav-button.is-active {
+  border-color: color-mix(in srgb, var(--app-accent) 65%, var(--app-border));
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+}
+
+.app-bottom-nav-icon {
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+.app-bottom-nav-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+
+.app-bottom-nav.is-icons .app-bottom-nav-button {
+  min-height: 2.75rem;
+}
+
+.app-bottom-nav.is-icons .app-bottom-nav-label {
+  display: none;
+}
+
 .app-title {
   color: var(--app-text);
   font-family: var(--app-font-display);

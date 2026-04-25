@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
+import { deleteBookmarksForBook } from '../composables/useBookmarks'
+import BookCover from './common/BookCover.vue'
 
 interface Book {
   id: number
@@ -12,12 +14,14 @@ interface Book {
   progress_offset: number
   last_read: string
   pinned: number
+  current_chapter_title?: string | null
+  chapter_count?: number
 }
 
 const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
 
 const settings = useSettings()
-const { viewMode, saveSetting } = settings
+const { viewMode, bookshelfShowAddEntry, saveSetting } = settings
 
 const books = ref<Book[]>([])
 const loading = ref(true)
@@ -34,7 +38,15 @@ const filteredBooks = computed(() => {
 const fetchBooks = async () => {
   try {
     loading.value = true
-    const result = await window.electronAPI.db.query('SELECT * FROM books ORDER BY pinned DESC, last_read DESC')
+    const result = await window.electronAPI.db.query(
+      `SELECT
+        b.*,
+        c.title as current_chapter_title,
+        (SELECT COUNT(*) FROM chapters cc WHERE cc.book_id = b.id) as chapter_count
+      FROM books b
+      LEFT JOIN chapters c ON c.book_id = b.id AND c.order_index = b.progress_index
+      ORDER BY b.pinned DESC, b.last_read DESC`
+    )
     books.value = result as Book[]
   } catch (error) {
     console.error('Failed to fetch books:', error)
@@ -63,6 +75,7 @@ const deleteBook = async (bookId: number) => {
   if (!confirm('确定要删除这本书吗？')) return
   try {
     await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE book_id = ?', [bookId])
+    await deleteBookmarksForBook(bookId)
     await window.electronAPI.db.query('DELETE FROM chapters WHERE book_id = ?', [bookId])
     await window.electronAPI.db.query('DELETE FROM books WHERE id = ?', [bookId])
     await fetchBooks()
@@ -106,6 +119,11 @@ const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleDateString('zh-CN')
 }
 
+const formatChapter = (book: Book) => {
+  if (!book.chapter_count) return '暂无章节'
+  return book.current_chapter_title || `第 ${book.progress_index + 1} 章`
+}
+
 onMounted(() => fetchBooks())
 </script>
 
@@ -133,7 +151,7 @@ onMounted(() => fetchBooks())
           <button @click="viewMode = 'icon'; saveSetting('viewMode', 'icon')" :class="viewMode === 'icon' ? 'app-button-primary' : ''" class="app-button p-1.5 leading-none" title="图标视图">▦</button>
         </div>
         
-        <button @click="addBook" :disabled="importing" class="app-button app-button-primary group px-4 py-2 shrink-0 disabled:opacity-45 disabled:hover:translate-y-0 flex justify-center items-center gap-1.5">
+        <button v-if="bookshelfShowAddEntry" @click="addBook" :disabled="importing" class="app-button app-button-primary group px-4 py-2 shrink-0 disabled:opacity-45 disabled:hover:translate-y-0 flex justify-center items-center gap-1.5">
           <span class="text-lg leading-none">{{ importing ? '⏳' : '+' }}</span>
           <span class="text-[13px] whitespace-nowrap">{{ importing ? '导入...' : '添加' }}</span>
         </button>
@@ -149,7 +167,7 @@ onMounted(() => fetchBooks())
       <div class="text-5xl mb-6 opacity-60">📚</div>
       <p class="text-lg app-title font-medium mb-3">书架空空如也</p>
       <p class="text-[13px] app-muted mb-8">支持 TXT 和 EPUB 格式的本地解析与无缝阅读</p>
-      <button @click="addBook" class="app-button app-button-primary px-8 py-2.5 text-[14px]">开启阅读之旅</button>
+      <button v-if="bookshelfShowAddEntry" @click="addBook" class="app-button app-button-primary px-8 py-2.5 text-[14px]">开启阅读之旅</button>
     </div>
     <div v-else-if="filteredBooks.length === 0" class="text-center py-28 mx-auto max-w-lg">
       <p class="text-lg app-muted mb-3">没有搜索到与 "{{ searchQuery }}" 匹配的书籍</p>
@@ -166,10 +184,7 @@ onMounted(() => fetchBooks())
           <!-- Pin badge -->
           <div v-if="book.pinned" class="app-badge is-active absolute top-2 left-2 z-20 text-[10px] font-bold px-1.5 py-0.5">置顶</div>
 
-          <img v-if="book.cover_path" :src="book.cover_path" class="w-full h-full object-cover rounded-xl" alt="封面" @error="(e: Event) => (e.target as HTMLImageElement).style.display='none'" />
-          <div v-else class="h-full w-full flex items-center justify-center opacity-70">
-            <span class="text-5xl group-hover:scale-105 transition-transform duration-500">📖</span>
-          </div>
+          <BookCover class="w-full h-full rounded-xl" :cover-path="book.cover_path" :title="book.title" />
 
           <!-- Actions -->
           <div class="absolute top-2 right-2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-20">
@@ -195,8 +210,19 @@ onMounted(() => fetchBooks())
             <p v-if="book.author" class="text-[12px] app-muted truncate max-w-[65%]">{{ book.author }}</p>
             <p class="text-[10px] app-muted font-mono">{{ formatDate(book.last_read) }}</p>
           </div>
+          <p class="text-[11px] app-muted truncate mt-1">{{ formatChapter(book) }}</p>
         </div>
       </div>
+
+      <button
+        v-if="bookshelfShowAddEntry"
+        @click="addBook"
+        :disabled="importing"
+        class="app-card app-card-hover aspect-[3/4.2] flex flex-col items-center justify-center gap-3 text-center disabled:opacity-50"
+      >
+        <span class="text-4xl opacity-70">{{ importing ? '⏳' : '+' }}</span>
+        <span class="text-[13px] app-title font-semibold">{{ importing ? '导入中...' : '添加书籍' }}</span>
+      </button>
     </div>
 
     <!-- LIST VIEW -->
@@ -204,14 +230,14 @@ onMounted(() => fetchBooks())
       <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id" 
            class="app-card app-card-hover group flex items-center p-2 cursor-pointer bookshelf-card"
            :style="{ animationDelay: `${index * 20}ms` }" @click="emit('open-book', book.id)">
-        <div class="app-book-cover w-12 h-16 shrink-0 rounded-[var(--app-radius-button)] overflow-hidden shadow relative" :class="{'ring-1 ring-[var(--app-accent)]': book.pinned}">
-            <img v-if="book.cover_path" :src="book.cover_path" class="w-full h-full object-cover" />
-            <div v-else class="h-full w-full flex items-center justify-center text-xl opacity-60">📖</div>
+        <div class="w-12 h-16 shrink-0 rounded-[var(--app-radius-button)] overflow-hidden shadow relative" :class="{'ring-1 ring-[var(--app-accent)]': book.pinned}">
+            <BookCover class="w-full h-full" :cover-path="book.cover_path" :title="book.title" />
             <div v-if="book.pinned" class="absolute -top-1 -right-1 z-10 text-[8px] bg-[var(--app-accent)] text-[var(--app-text-on-primary)] px-1 rounded-sm">★</div>
         </div>
         <div class="flex-1 min-w-0 ml-4">
             <h3 class="font-semibold text-[15px] app-title truncate group-hover:text-[var(--app-accent)] transition-colors">{{ book.title }}</h3>
             <p class="text-[13px] app-muted truncate mt-0.5">{{ book.author || '未知作者' }}</p>
+            <p class="text-[12px] app-muted truncate mt-0.5">{{ formatChapter(book) }}</p>
         </div>
         <div class="shrink-0 text-right px-4 hidden md:block">
             <p class="text-[12px] app-muted mb-1">上次阅读</p>
@@ -222,6 +248,15 @@ onMounted(() => fetchBooks())
             <button @click.stop="deleteBook(book.id)" class="p-2 rounded hover:bg-red-500/20 text-slate-600 dark:text-white/60 hover:text-red-400 transition-colors" title="删除"><span class="block leading-none">🗑️</span></button>
         </div>
       </div>
+      <button
+        v-if="bookshelfShowAddEntry"
+        @click="addBook"
+        :disabled="importing"
+        class="app-card app-card-hover flex items-center justify-center gap-2 p-4 text-[13px] app-title font-semibold disabled:opacity-50"
+      >
+        <span>{{ importing ? '⏳' : '+' }}</span>
+        <span>{{ importing ? '导入中...' : '添加书籍' }}</span>
+      </button>
     </div>
 
     <!-- ICON VIEW -->
@@ -234,16 +269,22 @@ onMounted(() => fetchBooks())
 
             <div v-if="book.pinned" class="absolute top-1 left-1 z-20 text-[var(--app-accent)] text-xs">★</div>
 
-            <img v-if="book.cover_path" :src="book.cover_path" class="w-full h-full object-cover" />
-            <div v-else class="h-full w-full flex items-center justify-center bg-[#222]">
-                <span class="text-3xl opacity-40">📖</span>
-            </div>
+            <BookCover class="w-full h-full" :cover-path="book.cover_path" :title="book.title" />
 
             <div class="absolute bottom-0 left-0 right-0 p-2 z-20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 bg-black/80 backdrop-blur-sm">
                 <button @click.stop="deleteBook(book.id)" class="w-full py-1 text-xs text-red-400 hover:text-white hover:bg-red-500 rounded transition-colors border border-transparent hover:border-red-400/50">删除本书</button>
             </div>
         </div>
       </div>
+      <button
+        v-if="bookshelfShowAddEntry"
+        @click="addBook"
+        :disabled="importing"
+        class="app-card app-card-hover aspect-[3/4.2] flex flex-col items-center justify-center gap-2 disabled:opacity-50"
+      >
+        <span class="text-3xl opacity-70">{{ importing ? '⏳' : '+' }}</span>
+        <span class="text-[12px] app-title font-semibold">添加</span>
+      </button>
     </div>
 
   </div>

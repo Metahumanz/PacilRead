@@ -10,6 +10,7 @@ import {
   type ReadingStatsBookRankItem,
   type ReadingStatsPeriod,
 } from '../composables/useReadingStats'
+import BookCover from './common/BookCover.vue'
 
 const props = defineProps<{
   bookId: number | null
@@ -109,15 +110,11 @@ onMounted(async () => {
 
     <div v-if="bookDetail" class="app-card mb-8 p-5">
       <div class="flex items-center gap-4">
-        <div class="app-book-cover w-20 h-28 rounded-[var(--app-radius-card)] overflow-hidden shrink-0 border border-[var(--app-border)]">
-          <img
-            v-if="bookDetail.coverPath"
-            :src="bookDetail.coverPath"
-            class="w-full h-full object-cover"
-            alt="封面"
-          />
-          <div v-else class="w-full h-full flex items-center justify-center text-3xl opacity-50">📖</div>
-        </div>
+        <BookCover
+          class="w-20 h-28 rounded-[var(--app-radius-card)] shrink-0 border border-[var(--app-border)]"
+          :cover-path="bookDetail.coverPath"
+          :title="bookDetail.title"
+        />
         <div class="min-w-0">
           <div class="text-[18px] font-semibold app-title truncate">{{ bookDetail.title }}</div>
           <div class="text-[13px] app-muted mt-1">{{ bookDetail.author || '未知作者' }}</div>
@@ -189,10 +186,11 @@ onMounted(async () => {
         class="app-row w-full flex items-center gap-4 px-5 py-4 text-left"
         @click="item.localBookId && emit('open-book-stats', item.localBookId)"
       >
-        <div class="app-book-cover w-12 h-16 rounded-[var(--app-radius-input)] overflow-hidden shrink-0 border border-[var(--app-border)]">
-          <img v-if="item.coverPath" :src="item.coverPath" class="w-full h-full object-cover" alt="封面" />
-          <div v-else class="w-full h-full flex items-center justify-center opacity-50">📖</div>
-        </div>
+        <BookCover
+          class="w-12 h-16 rounded-[var(--app-radius-input)] shrink-0 border border-[var(--app-border)]"
+          :cover-path="item.coverPath"
+          :title="item.bookTitle"
+        />
         <div class="flex-1 min-w-0">
           <div class="text-[14px] font-semibold app-title truncate">{{ item.bookTitle || '未命名书籍' }}</div>
           <div class="text-[12px] app-muted truncate mt-1">{{ item.bookAuthor || '未知作者' }}</div>
