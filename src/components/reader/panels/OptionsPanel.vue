@@ -16,6 +16,7 @@ const emit = defineEmits<{
 const settings = useSettings()
 const {
   sliderMode, flipMode, saveSetting, saveAllStyling,
+  readerAutoNightEnabled, readerAutoNightCustomPolicy,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight
 } = settings
@@ -68,6 +69,11 @@ const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => {
   flipMode.value = mode
   saveSetting('reader_flipMode', mode)
 }
+
+const saveAutoNight = () => {
+  saveSetting('reader_auto_night_enabled', readerAutoNightEnabled.value ? 'true' : 'false')
+  saveSetting('reader_auto_night_custom_policy', readerAutoNightCustomPolicy.value)
+}
 </script>
 
 <template>
@@ -102,6 +108,22 @@ const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => {
         <button @click="setFlipMode('slide')" :class="{active: flipMode==='slide'}">平移</button>
         <button @click="setFlipMode('cover')" :class="{active: flipMode==='cover'}">覆盖</button>
         <button @click="setFlipMode('curl')" :class="{active: flipMode==='curl'}">仿真</button>
+      </div>
+    </div>
+
+    <div class="sr">
+      <label>自动夜间</label>
+      <div class="btn-group">
+        <button @click="readerAutoNightEnabled=false; saveAutoNight()" :class="{active: !readerAutoNightEnabled}">关闭</button>
+        <button @click="readerAutoNightEnabled=true; saveAutoNight()" :class="{active: readerAutoNightEnabled}">跟随系统</button>
+      </div>
+    </div>
+
+    <div class="sr" v-if="readerAutoNightEnabled">
+      <label>夜间策略</label>
+      <div class="btn-group">
+        <button @click="readerAutoNightCustomPolicy='preserve'; saveAutoNight()" :class="{active: readerAutoNightCustomPolicy==='preserve'}">保留主题</button>
+        <button @click="readerAutoNightCustomPolicy='override'; saveAutoNight()" :class="{active: readerAutoNightCustomPolicy==='override'}">夜色覆盖</button>
       </div>
     </div>
 

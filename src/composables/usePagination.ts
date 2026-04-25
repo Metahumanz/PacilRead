@@ -32,6 +32,7 @@ export function usePagination(opts: {
 
   let flipLock = false
   let lastFlipTime = 0
+  let recalcTimer: number | null = null
 
   // ---- Flip duration map ----
   const flipDurationMap = computed(() => {
@@ -41,7 +42,27 @@ export function usePagination(opts: {
   })
 
   // ---- Page calculation ----
-  const recalc = () => { nextTick(() => { setTimeout(calculatePages, 60) }) }
+  const waitForStableLayout = (attempt = 0, lastWidth = -1) => {
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        const width = opts.containerRef.value?.clientWidth || 0
+        if (width <= 0 && attempt < 10) {
+          waitForStableLayout(attempt + 1, width)
+          return
+        }
+        if (attempt < 6 && width !== lastWidth) {
+          waitForStableLayout(attempt + 1, width)
+          return
+        }
+        calculatePages()
+      })
+    })
+  }
+
+  const recalc = () => {
+    if (recalcTimer) window.clearTimeout(recalcTimer)
+    recalcTimer = window.setTimeout(() => waitForStableLayout(), 40)
+  }
 
   const calculatePages = () => {
     if (!opts.contentRef.value || !opts.containerRef.value) return

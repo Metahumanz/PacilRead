@@ -8,6 +8,8 @@ import { useRules } from '../composables/useRules'
 import { useHUD } from '../composables/useHUD'
 import { useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
+import { useAppTheme } from '../composables/useAppTheme'
+import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -19,11 +21,12 @@ import RulesPanel from './reader/panels/RulesPanel.vue'
 import AutoPagePanel from './reader/panels/AutoPagePanel.vue'
 import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
+import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 
 interface Chapter { id: number; title: string; body: string; order_index: number }
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string; reading_stats_key: string }
 
-const props = defineProps<{ bookId: number, isImmersive: boolean }>()
+const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
 const emit = defineEmits<{
   (e: 'toggle-immersive', isFull: boolean): void
   (e: 'go-back'): void
@@ -44,8 +47,11 @@ const showAutoPage = ref(false)
 const showTts = ref(false)
 const autoPageActive = ref(false)
 const showReaderOptions = ref(false)
+const showBookmarks = ref(false)
 const showCopyModal = ref(false)
 const selectedText = ref('')
+const bookmarkPanelVersion = ref(0)
+const bookmarkStatus = ref('')
 
 // DOM refs
 const contentRef = ref<HTMLElement | null>(null)
@@ -67,6 +73,7 @@ const {
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
   chapterTitleDisplay,
+  readerAutoNightEnabled, readerAutoNightCustomPolicy,
   loadAllSettings, saveAllStyling, saveSetting,
   sliderMode, pIndent, pSpacing
 } = settings
@@ -74,6 +81,7 @@ const {
 const { rules, fetchRules, applyReplacements } = useRules()
 const { startHUD, stopHUD, formatHUD } = useHUD()
 const { uploadProgressToWebdav } = useSync()
+const { resolvedBucket } = useAppTheme()
 const readingTimeTracker = useReadingTimeTracker({
   enabled: readingTimeTrackingEnabled,
   book: computed(() => {
@@ -192,6 +200,62 @@ const trackedSetCurrentPage = (page: number) => {
   currentPage.value = page
 }
 
+const getChapterOffset = () => {
+  const bodyLength = currentChapterData.value?.body?.length || 0
+  if (bodyLength <= 0 || totalPages.value <= 0) return 0
+  return Math.floor(bodyLength * (currentPage.value / totalPages.value))
+}
+
+const buildBookmarkSummary = (offset: number) => {
+  const text = currentBody.value
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return currentChapterData.value?.title || ''
+  const start = Math.max(0, Math.min(offset, text.length - 1))
+  return text.slice(start, start + 96)
+}
+
+const handleCreateBookmark = async () => {
+  if (!book.value || !currentChapterData.value) return
+  const chapterOffset = getChapterOffset()
+  try {
+    await createBookmark({
+      bookId: props.bookId,
+      bookIdentity: book.value.reading_stats_key,
+      bookTitle: book.value.title,
+      bookAuthor: book.value.author || '',
+      chapterOrderIndex: currentChapterData.value.order_index,
+      chapterTitle: currentChapterData.value.title,
+      chapterOffset,
+      progressPercent: progressPercent.value,
+      summary: buildBookmarkSummary(chapterOffset),
+    })
+    bookmarkPanelVersion.value += 1
+    bookmarkStatus.value = '已添加书签'
+    window.setTimeout(() => { bookmarkStatus.value = '' }, 1800)
+  } catch (error) {
+    console.error('Create bookmark failed:', error)
+    bookmarkStatus.value = '书签保存失败'
+    window.setTimeout(() => { bookmarkStatus.value = '' }, 1800)
+  }
+}
+
+const goToBookmarkTarget = (target: BookmarkTarget) => {
+  recordReadingActivity()
+  const targetIndex = chapters.value.findIndex((chapter) => chapter.order_index === target.chapterOrderIndex)
+  const nextIndex = targetIndex >= 0 ? targetIndex : target.chapterOrderIndex
+  if (nextIndex < 0 || nextIndex >= chapters.value.length) return
+  pendingWebdavPos.value = Math.max(0, target.chapterOffset)
+  if (nextIndex !== currentChapterIndex.value) {
+    goToChapter(nextIndex, true)
+  } else {
+    recalc()
+  }
+  showBookmarks.value = false
+  showMenu.value = false
+}
+
 // ---- Theme (composable) ----
 const theme = useTheme({
   onStyleChanged: () => { saveAllStyling(); recalc() },
@@ -201,9 +265,20 @@ const { readerBgStyle } = theme
 const textStyle = computed(() => ({
   fontFamily: fontFamily.value, fontSize: fontSize.value + 'px',
   lineHeight: String(lineHeight.value), letterSpacing: letterSpacing.value + 'em',
-  fontWeight: String(fontWeight.value), color: fontColor.value,
+  fontWeight: String(fontWeight.value), color: effectiveFontColor.value,
   textAlign: textAlign.value as any,
 }))
+
+const isAutoNightActive = computed(() => readerAutoNightEnabled.value && resolvedBucket.value === 'dark')
+const shouldOverrideAutoNight = computed(() => (
+  isAutoNightActive.value && readerAutoNightCustomPolicy.value === 'override'
+))
+const effectiveFontColor = computed(() => shouldOverrideAutoNight.value ? '#e2e8f0' : fontColor.value)
+const effectiveReaderBgStyle = computed(() => (
+  shouldOverrideAutoNight.value
+    ? { backgroundColor: '#0f172a' }
+    : readerBgStyle.value
+))
 
 // HUD logic handled by useHUD
 
@@ -269,7 +344,7 @@ const downloadProgressFromWebdav = async () => {
 const closeAll = () => {
   showMenu.value = false; showStyling.value = false; showToc.value = false;
   showSearch.value = false; showRules.value = false; showAutoPage.value = false;
-  showTts.value = false; showReaderOptions.value = false;
+  showTts.value = false; showReaderOptions.value = false; showBookmarks.value = false;
 }
 const closeKeyHints = () => { showKeyHints.value = false }
 const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
@@ -355,6 +430,7 @@ const openPanel = (panel: string) => {
   showAutoPage.value = panel === 'autopage' ? !showAutoPage.value : false
   showTts.value = panel === 'tts' ? !showTts.value : false
   showReaderOptions.value = panel === 'readerOptions' ? !showReaderOptions.value : false
+  showBookmarks.value = panel === 'bookmarks' ? !showBookmarks.value : false
 }
 
 const jumpToSearchResult = (idx: number) => { trackedGoToChapter(idx, true) }
@@ -384,8 +460,19 @@ onMounted(async () => {
   await fetchChapters()
   await fetchRules(props.bookId)
   startHUD()
-  if (book.value) currentPage.value = book.value.progress_offset || 0
-  await downloadProgressFromWebdav()
+  if (props.initialBookmark && chapters.value.length > 0) {
+    const targetIndex = chapters.value.findIndex((chapter) => chapter.order_index === props.initialBookmark?.chapterOrderIndex)
+    currentChapterIndex.value = targetIndex >= 0
+      ? targetIndex
+      : Math.min(Math.max(props.initialBookmark.chapterOrderIndex, 0), chapters.value.length - 1)
+    pendingWebdavPos.value = Math.max(0, props.initialBookmark.chapterOffset)
+    currentPage.value = 0
+  } else if (book.value) {
+    currentPage.value = book.value.progress_offset || 0
+  }
+  if (!props.initialBookmark) {
+    await downloadProgressFromWebdav()
+  }
   await readingTimeTracker.start()
   loading.value = false
   setTimeout(calculatePages, 300)
@@ -421,10 +508,11 @@ onUnmounted(async () => {
   }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <!-- Background layer -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
-         :style="[readerBgStyle, { filter: blurAmount > 0 ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 ? 'scale(1.1)' : 'none' }]"
+         :style="[effectiveReaderBgStyle, { filter: blurAmount > 0 && !shouldOverrideAutoNight ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 && !shouldOverrideAutoNight ? 'scale(1.1)' : 'none' }]"
          :class="{ 'bg-[#0f172a]': !bgImage }">
     </div>
-    <div v-if="bgImage && blurAmount > 0" class="fixed inset-0 pointer-events-none bg-black/40"></div>
+    <div v-if="bgImage && blurAmount > 0 && !shouldOverrideAutoNight" class="fixed inset-0 pointer-events-none bg-black/40"></div>
+    <div v-if="isAutoNightActive && !shouldOverrideAutoNight" class="fixed inset-0 pointer-events-none bg-black/25"></div>
 
     <div v-if="loading" class="load"><div class="spinner"></div><p>正在载入...</p></div>
 
@@ -447,9 +535,9 @@ onUnmounted(async () => {
       <!-- Reveal animation overlay -->
       <div v-if="showingCover" class="snapshot-layer" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']">
         <div class="absolute inset-0 pointer-events-none transform-gpu origin-center" 
-             :style="[readerBgStyle, { filter: blurAmount > 0 ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 ? 'scale(1.1)' : 'none' }]"
+             :style="[effectiveReaderBgStyle, { filter: blurAmount > 0 && !shouldOverrideAutoNight ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 && !shouldOverrideAutoNight ? 'scale(1.1)' : 'none' }]"
              :class="{ 'bg-[#0f172a]': !bgImage }"></div>
-        <div v-if="bgImage && blurAmount > 0" class="absolute inset-0 pointer-events-none bg-black/40"></div>
+        <div v-if="bgImage && blurAmount > 0 && !shouldOverrideAutoNight" class="absolute inset-0 pointer-events-none bg-black/40"></div>
         <div class="absolute inset-0" v-html="snapshotHtml"></div>
       </div>
       <div v-if="showingCover" class="sweep-line" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']"></div>
@@ -463,7 +551,7 @@ onUnmounted(async () => {
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
               columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
             }" v-if="prevChapterData">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
               <div v-html="prevBody" class="ch-body"></div>
             </div>
           </div>
@@ -476,7 +564,7 @@ onUnmounted(async () => {
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
               columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
             }">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
             </div>
           </div>
@@ -485,7 +573,7 @@ onUnmounted(async () => {
         <div class="slide">
           <div class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div class="pg-ct" :style="textStyle" v-if="nextChapterData">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: fontColor, textAlign: (chapterTitleDisplay as any) }">{{ nextChapterData.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ nextChapterData.title }}</h2>
               <div v-html="nextBody" class="ch-body"></div>
             </div>
           </div>
@@ -521,6 +609,12 @@ onUnmounted(async () => {
         :bottomRight="formatHUD(hudBottomRight, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
       />
 
+      <Transition name="fade">
+        <div v-if="bookmarkStatus" class="bookmark-toast">
+          {{ bookmarkStatus }}
+        </div>
+      </Transition>
+
       <!-- Reader Menu -->
       <Transition name="menu-slide">
         <ReaderMenu 
@@ -529,18 +623,19 @@ onUnmounted(async () => {
           :showSearch="showSearch" :showRules="showRules" :showStyling="showStyling"
           :showAutoPage="showAutoPage" :autoPageActive="autoPageActive"
           :showTts="showTts" :ttsActive="ttsActive"
-          :showToc="showToc" :showReaderOptions="showReaderOptions"
+          :showToc="showToc" :showBookmarks="showBookmarks" :showReaderOptions="showReaderOptions"
           :currentChapterIndex="currentChapterIndex" :chapters="chapters"
           :currentPage="currentPage" :totalPages="totalPages"
           :sliderMax="sliderMax" :sliderValue="sliderValue"
           :currentChapterTitle="currentChapterData?.title || ''"
-          @back="handleGoBack" @open-book-stats="openBookStats" @toggle-always-on-top="toggleAlwaysOnTop"
+          @back="handleGoBack" @open-book-stats="openBookStats" @create-bookmark="handleCreateBookmark" @toggle-always-on-top="toggleAlwaysOnTop"
           @toggle-immersive="toggleImmersiveMode" @open-panel="openPanel"
           @go-to-chapter="(idx) => trackedGoToChapter(idx, true)"
           @slider-input="(val) => { if(sliderMode==='book') trackedGoToChapter(val, true); else trackedSetCurrentPage(val); }"
         >
           <Transition name="sf"><SearchPanel v-if="showSearch" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
+          <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
           <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
@@ -566,6 +661,7 @@ onUnmounted(async () => {
 
 <style scoped>
 .reader-root { position:fixed; inset:0; overflow:hidden; user-select:none; display:flex; flex-direction:column; color:white; color-scheme:only light; }
+.bookmark-toast { position:absolute; left:50%; top:86px; transform:translateX(-50%); z-index:70; padding:8px 14px; border-radius:999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.12); color:white; font-size:13px; font-weight:700; box-shadow:0 12px 32px rgba(0,0,0,0.35); backdrop-filter:blur(16px); }
 .load { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; color:rgba(255,255,255,0.5); z-index:1; }
 .spinner { width:40px; height:40px; border:2px solid rgba(59,130,246,0.2); border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg) } }

@@ -15,6 +15,7 @@ defineProps<{
   showTts: boolean
   ttsActive: boolean
   showToc: boolean
+  showBookmarks: boolean
   showReaderOptions: boolean
   currentChapterIndex: number
   chapters: Chapter[]
@@ -28,6 +29,7 @@ defineProps<{
 defineEmits<{
   (e: 'back'): void
   (e: 'open-book-stats'): void
+  (e: 'create-bookmark'): void
   (e: 'toggle-always-on-top'): void
   (e: 'toggle-immersive'): void
   (e: 'open-panel', panel: string): void
@@ -58,6 +60,8 @@ defineEmits<{
         <button @click="$emit('open-panel', 'search')" class="m-btn" :class="{ active: showSearch }">🔍 搜索</button>
         <button @click="$emit('open-panel', 'rules')" class="m-btn" :class="{ active: showRules }">📝 替换</button>
         <button @click="$emit('open-panel', 'styling')" class="m-btn" :class="{ active: showStyling }">Aa 排版</button>
+        <button @click="$emit('create-bookmark')" class="m-btn">🔖 标记</button>
+        <button @click="$emit('open-panel', 'bookmarks')" class="m-btn" :class="{ active: showBookmarks }">书签</button>
         <button @click="$emit('open-panel', 'autopage')" class="m-btn shadow-sm" :class="showAutoPage || autoPageActive ? 'bg-indigo-600/80 border-indigo-500 text-white' : ''">⏱ 翻页</button>
         <button @click="$emit('open-panel', 'tts')" class="m-btn shadow-sm" :class="showTts || ttsActive ? 'bg-violet-600/80 border-violet-500 text-white' : ''">🎧 听书</button>
       </div>
