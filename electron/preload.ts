@@ -9,11 +9,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath),
     importLiteFromFile: (filePath: string) => ipcRenderer.invoke('db:importLiteFromFile', filePath),
     getSize: () => ipcRenderer.invoke('db:getSize'),
-    migrateToV6: () => ipcRenderer.invoke('db:migrateToV6'),
-    onMigrationProgress: (cb: (data: { step: number; total: number; message: string }) => void) => {
+    getBookChapters: (bookId: number) => ipcRenderer.invoke('db:getBookChapters', bookId),
+    optimizeStorage: () => ipcRenderer.invoke('db:optimizeStorage'),
+    deleteBook: (bookId: number) => ipcRenderer.invoke('db:deleteBook', bookId),
+    listChapterTextFiles: () => ipcRenderer.invoke('db:listChapterTextFiles'),
+    getRequiredChapterTextFiles: () => ipcRenderer.invoke('db:getRequiredChapterTextFiles'),
+    getMissingChapterTextFiles: () => ipcRenderer.invoke('db:getMissingChapterTextFiles'),
+    onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => {
       const listener = (_: any, data: any) => cb(data)
-      ipcRenderer.on('db:migration-progress', listener)
-      return () => ipcRenderer.removeListener('db:migration-progress', listener)
+      ipcRenderer.on('db:optimize-progress', listener)
+      return () => ipcRenderer.removeListener('db:optimize-progress', listener)
     }
   },
   dialog: {

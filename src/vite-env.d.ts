@@ -27,9 +27,27 @@ export interface ElectronAPI {
       remappedBookmarks: number
       unmatchedChapters: number
     }>
-    getSize: () => Promise<{ sizeBytes: number }>
-    migrateToV6: () => Promise<{ migrated: boolean }>
-    onMigrationProgress: (cb: (data: { step: number; total: number; message: string }) => void) => () => void
+    getSize: () => Promise<{ sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }>
+    getBookChapters: (bookId: number) => Promise<Array<{
+      id: number
+      title: string
+      order_index: number
+      body: string
+      body_text: string
+      body_text_storage: string
+      body_text_missing: number
+    }>>
+    optimizeStorage: () => Promise<{
+      optimizedChapters: number
+      clearedBodyHtml: number
+      before: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
+      after: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
+    }>
+    deleteBook: (bookId: number) => Promise<{ success: boolean }>
+    listChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string; sizeBytes: number }>>
+    getRequiredChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
+    getMissingChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
+    onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => () => void
   }
   dialog: {
     openFile: () => Promise<string | null>
@@ -67,8 +85,8 @@ export interface ElectronAPI {
   }
   webdav: {
     request: (opts: { url: string; method: string; headers?: Record<string, string>; body?: string }) => Promise<{ status?: number; data?: string; error?: string }>
-    uploadFile: (localPath: string, remoteUrl: string, auth: string) => Promise<{ success: boolean; error?: string }>
-    downloadFile: (remoteUrl: string, localPath: string, auth: string) => Promise<{ success: boolean; error?: string }>
+    uploadFile: (localPath: string, remoteUrl: string, auth: string) => Promise<{ success: boolean; status?: number; error?: string }>
+    downloadFile: (remoteUrl: string, localPath: string, auth: string) => Promise<{ success: boolean; status?: number; error?: string }>
   }
   tts: {
     getEdgeVoices: () => Promise<any[]>
