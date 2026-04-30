@@ -123,7 +123,7 @@ const {
                         <span>📥 恢复全量镜像</span>
                       </button>
                     </div>
-                    <p class="mt-2 text-[10px] app-muted">保存完整数据库镜像，同时配套上传桌面设置 JSON 与阅读统计目录。</p>
+                    <p class="mt-2 text-[10px] app-muted">保存共享 reader.db、chapter_text 正文、封面、桌面设置 JSON 与阅读统计目录。</p>
                   </div>
                 </div>
 

@@ -5,6 +5,8 @@ import { useSettings } from '../../composables/useSettings'
 const {
   appVersion,
   dbSize,
+  dbTextSize,
+  dbTotalSize,
   onOpenMigration,
   updateStatus,
   updateDetail,
@@ -18,6 +20,8 @@ const {
 } = defineProps<{
   appVersion: string
   dbSize: string
+  dbTextSize: string
+  dbTotalSize: string
   onOpenMigration: () => void
   updateStatus: string
   updateDetail: string
@@ -72,7 +76,7 @@ const { silentUpdate } = settings
           <div>
             <div class="text-[14px] font-medium app-title">本地数据库</div>
             <div class="text-[12px] app-muted mt-0.5">
-              当前大小 {{ dbSize || '—' }} · reader.db v6
+              reader.db {{ dbSize || '—' }} · 正文文件 {{ dbTextSize || '—' }} · 合计 {{ dbTotalSize || '—' }} · v7
             </div>
           </div>
         </div>
@@ -80,7 +84,7 @@ const { silentUpdate } = settings
           @click="onOpenMigration"
           class="app-button px-4 py-1.5 text-[13px]"
         >
-          手动迁移
+          优化数据库存储
         </button>
       </div>
 

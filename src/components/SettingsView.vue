@@ -57,6 +57,8 @@ const {
 // Update related state
 const appVersion = ref('')
 const dbSize = ref('')
+const dbTextSize = ref('')
+const dbTotalSize = ref('')
 const updateStatus = ref('')
 const updateDetail = ref('')
 
@@ -64,7 +66,7 @@ const updateDetail = ref('')
 const showMigrationModal = ref(false)
 const migrationRunning = ref(false)
 const migrationStep = ref(0)
-const migrationTotal = ref(6)
+const migrationTotal = ref(4)
 const migrationMessage = ref('')
 const migrationDone = ref(false)
 const migrationError = ref('')
@@ -79,26 +81,32 @@ const openMigrationConfirm = () => {
   showMigrationModal.value = true
 }
 
+const formatBytes = (bytes: number) => {
+  if (!bytes || bytes <= 0) return '—'
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB'
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB'
+  return (bytes / 1024).toFixed(1) + ' KB'
+}
+
+const refreshDbSize = async () => {
+  const sz = await window.electronAPI.db.getSize()
+  dbSize.value = formatBytes(sz.databaseBytes ?? sz.sizeBytes)
+  dbTextSize.value = formatBytes(sz.chapterTextBytes)
+  dbTotalSize.value = formatBytes(sz.totalBytes ?? sz.sizeBytes)
+}
+
 const startMigration = async () => {
   migrationRunning.value = true
   migrationError.value = ''
   try {
-    unsubMigrationProgress = window.electronAPI.db.onMigrationProgress((data) => {
+    unsubMigrationProgress = window.electronAPI.db.onOptimizeProgress((data) => {
       migrationStep.value = data.step
       migrationTotal.value = data.total
       migrationMessage.value = data.message
     })
-    await window.electronAPI.db.migrateToV6()
+    await window.electronAPI.db.optimizeStorage()
     migrationDone.value = true
-    // Refresh db size
-    try {
-      const sz = await window.electronAPI.db.getSize()
-      if (sz.sizeBytes > 0) {
-        dbSize.value = sz.sizeBytes >= 1048576
-          ? (sz.sizeBytes / 1048576).toFixed(1) + ' MB'
-          : (sz.sizeBytes / 1024).toFixed(1) + ' KB'
-      }
-    } catch {}
+    await refreshDbSize()
   } catch (e: any) {
     migrationError.value = e?.message || String(e)
   } finally {
@@ -184,6 +192,7 @@ const testWebdav = async () => {
     }
     await window.electronAPI.webdav.request({ url: syncBaseURL + 'bookProgress/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: pacilReadBaseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}chapter_text/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}readingStats/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
@@ -296,11 +305,12 @@ const ensureWebdavCollection = async (url: string, auth: string) => {
   await window.electronAPI.webdav.request({ url, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
 }
 
-const ensureSyncDirectories = async (auth: string, options: { includeDesktopDatabase?: boolean } = {}) => {
+const ensureSyncDirectories = async (auth: string, options: { includeDesktopDatabase?: boolean; includeChapterText?: boolean } = {}) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
   await ensureWebdavCollection(baseUrl, auth)
   await ensureWebdavCollection(baseUrl + 'books/', auth)
   await ensureWebdavCollection(baseUrl + 'covers/', auth)
+  if (options.includeChapterText) await ensureWebdavCollection(baseUrl + 'chapter_text/', auth)
   await ensureWebdavCollection(baseUrl + 'readingStats/', auth)
   await ensureWebdavCollection(getDesktopPrivateBaseUrl(), auth)
   await ensureWebdavCollection(getDesktopPrivateBaseUrl() + 'backgrounds/', auth)
@@ -317,6 +327,141 @@ const downloadFirstAvailable = async (remoteUrls: string[], dstPath: string, aut
     lastError = result.error || `无法读取 ${remoteUrl}`
   }
   return { success: false, error: lastError || '云端文件不存在', remoteUrl: remoteUrls[0] }
+}
+
+const assertUploadSucceeded = (result: { success: boolean; status?: number; error?: string }, label: string) => {
+  if (result.error || result.success === false) {
+    throw new Error(result.error || `${label}失败 (HTTP ${result.status || 'unknown'})`)
+  }
+}
+
+const encodeRemoteRelativePath = (relativePath: string) => (
+  relativePath
+    .split('/')
+    .filter(Boolean)
+    .map(part => encodeURIComponent(part))
+    .join('/')
+)
+
+const getFileNameFromPath = (value: string) => {
+  const clean = String(value || '').split(/[?#]/)[0]
+  return clean.split(/[\\/]/).pop() || ''
+}
+
+const fileUrlToLocalPath = (value: string) => {
+  if (!value.startsWith('file:///')) return value
+  try {
+    return decodeURIComponent(value.replace(/^file:\/\/\//, ''))
+  } catch (_) {
+    return value.replace(/^file:\/\/\//, '')
+  }
+}
+
+const localPathToFileUrl = (value: string) => 'file:///' + value.replace(/\\/g, '/')
+
+const ensureRemoteRelativeDir = async (baseUrl: string, relativeDir: string, auth: string) => {
+  const parts = relativeDir.split('/').filter(Boolean)
+  let current = baseUrl
+  for (const part of parts) {
+    current += encodeURIComponent(part) + '/'
+    await ensureWebdavCollection(current, auth)
+  }
+}
+
+const uploadChapterTextFiles = async (auth: string, skipExisting = false) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const files = await window.electronAPI.db.getRequiredChapterTextFiles()
+  if (files.length === 0) return { uploaded: 0, skipped: 0, total: 0 }
+
+  const chapterBaseUrl = baseUrl + 'chapter_text/'
+  await ensureWebdavCollection(chapterBaseUrl, auth)
+  const dirs = Array.from(new Set(files.map(file => file.relativePath.split('/').slice(0, -1).join('/')).filter(Boolean)))
+  for (const dir of dirs) {
+    await ensureRemoteRelativeDir(chapterBaseUrl, dir, auth)
+  }
+
+  let uploaded = 0
+  let skipped = 0
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    const remotePath = chapterBaseUrl + encodeRemoteRelativePath(file.relativePath)
+    if (skipExisting) {
+      const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
+      if (check.status === 200) {
+        skipped += 1
+        continue
+      }
+    }
+    webdavSyncStatus.value = `上传章节正文 (${i + 1}/${files.length})...`
+    const result = await window.electronAPI.webdav.uploadFile(file.localPath, remotePath, auth)
+    if (result.error || result.success === false) {
+      throw new Error(result.error || `上传章节正文失败 (HTTP ${result.status || 'unknown'})`)
+    }
+    uploaded += 1
+  }
+
+  return { uploaded, skipped, total: files.length }
+}
+
+const downloadChapterTextFiles = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const files = await window.electronAPI.db.getRequiredChapterTextFiles()
+  let downloaded = 0
+  let missing = 0
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    webdavSyncStatus.value = `下载章节正文 (${i + 1}/${files.length})...`
+    const remotePath = baseUrl + 'chapter_text/' + encodeRemoteRelativePath(file.relativePath)
+    const result = await window.electronAPI.webdav.downloadFile(remotePath, file.localPath, auth)
+    if (result.error) {
+      missing += 1
+      continue
+    }
+    downloaded += 1
+  }
+
+  const stillMissing = await window.electronAPI.db.getMissingChapterTextFiles()
+  return { downloaded, missing: Math.max(missing, stillMissing.length), total: files.length }
+}
+
+const uploadCoverFiles = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const appDataPath = await window.electronAPI.app.getPath('userData')
+  const coversDir = appDataPath + '/covers/'
+  const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ""')
+  for (let i = 0; i < (coverFiles as any[]).length; i++) {
+    const source = String((coverFiles as any[])[i].cover_path || '')
+    const fileName = getFileNameFromPath(source)
+    if (!fileName) continue
+    const localPath = source.startsWith('file:///') ? fileUrlToLocalPath(source) : coversDir + fileName
+    webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
+    assertUploadSucceeded(
+      await window.electronAPI.webdav.uploadFile(localPath, baseUrl + 'covers/' + encodeURIComponent(fileName), auth),
+      '上传封面'
+    )
+  }
+}
+
+const downloadCoverFiles = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const appDataPath = await window.electronAPI.app.getPath('userData')
+  const coversDir = appDataPath + '/covers/'
+  const coverFiles = await window.electronAPI.db.query('SELECT id, cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ""')
+  let downloaded = 0
+  for (let i = 0; i < (coverFiles as any[]).length; i++) {
+    const row = (coverFiles as any[])[i]
+    const fileName = getFileNameFromPath(String(row.cover_path || ''))
+    if (!fileName) continue
+    const localPath = coversDir + fileName
+    webdavSyncStatus.value = `下载封面 (${i + 1}/${(coverFiles as any[]).length})...`
+    const result = await window.electronAPI.webdav.downloadFile(baseUrl + 'covers/' + encodeURIComponent(fileName), localPath, auth)
+    if (!result.error) {
+      downloaded += 1
+      await window.electronAPI.db.query('UPDATE books SET cover_path = ? WHERE id = ?', [localPathToFileUrl(localPath), row.id])
+    }
+  }
+  return downloaded
 }
 
 const refreshReadingStatsSummary = async () => {
@@ -420,13 +565,18 @@ const fullBackup = async () => {
     const baseUrl = getCurrentPacilReadBaseUrl()
 
     webdavSyncStatus.value = '创建云端目录...'
-    await ensureSyncDirectories(auth, { includeDesktopDatabase: true })
+    await ensureSyncDirectories(auth, { includeChapterText: true })
 
     if (webdavSyncBookshelf.value) {
       webdavSyncStatus.value = '导出数据库...'
       const dbPath = await window.electronAPI.db.export()
-      webdavSyncStatus.value = '上传 Win11 私有数据库...'
-      await window.electronAPI.webdav.uploadFile(dbPath, getDesktopDatabaseBaseUrl() + 'reader.db', auth)
+      webdavSyncStatus.value = '上传共享数据库...'
+      assertUploadSucceeded(
+        await window.electronAPI.webdav.uploadFile(dbPath, baseUrl + 'reader.db', auth),
+        '上传共享数据库'
+      )
+      await uploadChapterTextFiles(auth)
+      await uploadCoverFiles(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -436,14 +586,10 @@ const fullBackup = async () => {
       for (let i = 0; i < (bookFiles as any[]).length; i++) {
         const fileName = (bookFiles as any[])[i].path.split(/[\\/]/).pop()
         webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
-        await window.electronAPI.webdav.uploadFile(booksDir + fileName, baseUrl + 'books/' + fileName, auth)
-      }
-      const coversDir = appDataPath + '/covers/'
-      const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL')
-      for (let i = 0; i < (coverFiles as any[]).length; i++) {
-        const fileName = (coverFiles as any[])[i].cover_path.split(/[\\/]/).pop()
-        webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
-        await window.electronAPI.webdav.uploadFile(coversDir + fileName, baseUrl + 'covers/' + fileName, auth)
+        assertUploadSucceeded(
+          await window.electronAPI.webdav.uploadFile(booksDir + fileName, baseUrl + 'books/' + fileName, auth),
+          '上传书籍'
+        )
       }
     }
 
@@ -480,14 +626,18 @@ const fullRestore = async () => {
     const dstPath = appDataPath + '/reader.db.restore'
     webdavSyncStatus.value = '下载数据库快照...'
     const dl = await downloadFirstAvailable(
-      [getDesktopDatabaseBaseUrl() + 'reader.db', baseUrl + 'reader.db'],
+      [baseUrl + 'reader.db', getDesktopDatabaseBaseUrl() + 'reader.db'],
       dstPath,
       auth
     )
+    let chapterTextRestore = { downloaded: 0, missing: 0, total: 0 }
     if (!dl.error) {
       webdavSyncStatus.value = '应用数据库...'
       await window.electronAPI.db.importFromFile(dstPath)
       await restoreLocalOnlySettings(preservedSettings)
+      webdavSyncStatus.value = '恢复章节正文...'
+      chapterTextRestore = await downloadChapterTextFiles(auth)
+      await downloadCoverFiles(auth)
     }
 
     webdavSyncStatus.value = '应用桌面设置...'
@@ -513,7 +663,9 @@ const fullRestore = async () => {
 
     alert(dl.error
       ? '桌面设置与阅读统计已从云端恢复，数据库快照不存在。'
-      : '数据库、桌面设置与阅读统计已成功从云端恢复！')
+      : chapterTextRestore.missing > 0
+        ? `数据库已恢复，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个外置章节正文缺失。请确认 WebDAV 的 chapter_text/ 目录完整。`
+        : '数据库、章节正文、封面、桌面设置与阅读统计已成功从云端恢复！')
     webdavSyncStatus.value = '从云端恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
@@ -536,7 +688,10 @@ const incrementalBackup = async () => {
       webdavSyncStatus.value = '处理增量数据库...'
       const litePath = await (window.electronAPI.db as any).exportLite()
       webdavSyncStatus.value = '上传 Win11 私有增量数据库...'
-      await window.electronAPI.webdav.uploadFile(litePath, getDesktopDatabaseBaseUrl() + 'reader_lite.db', auth)
+      assertUploadSucceeded(
+        await window.electronAPI.webdav.uploadFile(litePath, getDesktopDatabaseBaseUrl() + 'reader_lite.db', auth),
+        '上传增量数据库'
+      )
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -550,7 +705,10 @@ const incrementalBackup = async () => {
         const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
         if (check.status !== 200) {
           webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
-          await window.electronAPI.webdav.uploadFile(booksDir + fileName, remotePath, auth)
+          assertUploadSucceeded(
+            await window.electronAPI.webdav.uploadFile(booksDir + fileName, remotePath, auth),
+            '上传书籍'
+          )
         }
       }
       const coversDir = appDataPath + '/covers/'
@@ -561,7 +719,10 @@ const incrementalBackup = async () => {
         const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
         if (check.status !== 200) {
           webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
-          await window.electronAPI.webdav.uploadFile(coversDir + fileName, remotePath, auth)
+          assertUploadSucceeded(
+            await window.electronAPI.webdav.uploadFile(coversDir + fileName, remotePath, auth),
+            '上传封面'
+          )
         }
       }
     }
@@ -645,16 +806,7 @@ onMounted(async () => {
   await fetchBooks()
   await refreshReadingStatsSummary()
   try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
-  try {
-    const sz = await window.electronAPI.db.getSize()
-    if (sz.sizeBytes > 0) {
-      dbSize.value = sz.sizeBytes >= 1048576
-        ? (sz.sizeBytes / 1048576).toFixed(1) + ' MB'
-        : (sz.sizeBytes / 1024).toFixed(1) + ' KB'
-    } else {
-      dbSize.value = '—'
-    }
-  } catch { dbSize.value = '—' }
+  try { await refreshDbSize() } catch { dbSize.value = '—'; dbTextSize.value = '—'; dbTotalSize.value = '—' }
   window.electronAPI.updater.onStatus((data) => {
     switch (data.status) {
       case 'checking': updateStatus.value = '🔍 正在检查...'; break
@@ -724,6 +876,8 @@ onMounted(async () => {
     <SettingsAbout
       :appVersion="appVersion"
       :dbSize="dbSize"
+      :dbTextSize="dbTextSize"
+      :dbTotalSize="dbTotalSize"
       :onOpenMigration="openMigrationConfirm"
       :updateStatus="updateStatus"
       :updateDetail="updateDetail"
@@ -775,7 +929,7 @@ onMounted(async () => {
       </div>
     </Transition>
 
-    <!-- Database migration modal — non-dismissable while running -->
+    <!-- Database storage optimize modal — non-dismissable while running -->
     <Teleport to="body">
       <div
         v-if="showMigrationModal"
@@ -787,17 +941,17 @@ onMounted(async () => {
             <span v-if="!migrationDone && !migrationError">⚙️</span>
             <span v-else-if="migrationDone">✅</span>
             <span v-else>❌</span>
-            数据库迁移
+            优化数据库存储
           </h3>
 
           <!-- Confirm stage -->
           <template v-if="!migrationRunning && !migrationDone && !migrationError">
             <p class="mt-3 text-[13px] app-muted leading-6">
-              即将对本地数据库执行 v6 架构迁移，包括正文列回填、冗余数据清理与空间回收。
+              即将把库内章节正文导出为 GZIP 文件，并清空 reader.db 内的冗余正文后回收空间。
             </p>
             <div class="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
               <p class="text-[12px] text-amber-200 font-semibold leading-5">
-                迁移期间请勿关闭应用或断电。预计耗时取决于数据库大小，大库可能需要数十秒。
+                优化期间请勿关闭应用或断电。大书库可能需要数十秒，已完成的章节可在下次继续跳过。
               </p>
             </div>
             <div class="mt-6 flex gap-3">
@@ -811,7 +965,7 @@ onMounted(async () => {
                 @click="startMigration"
                 class="flex-1 py-3 px-4 bg-blue-600 rounded-xl text-[13px] font-bold shadow-lg shadow-blue-500/20"
               >
-                开始迁移
+                开始优化
               </button>
             </div>
           </template>
@@ -819,7 +973,7 @@ onMounted(async () => {
           <!-- Running stage -->
           <template v-if="migrationRunning">
             <p class="mt-3 text-[13px] app-muted leading-6">
-              正在执行迁移，请耐心等待，不要关闭应用...
+              正在优化数据库，请耐心等待，不要关闭应用...
             </p>
             <div class="mt-4 space-y-2">
               <div class="flex justify-between text-[12px] app-muted">
@@ -838,7 +992,7 @@ onMounted(async () => {
           <!-- Done stage -->
           <template v-if="migrationDone">
             <p class="mt-3 text-[13px] app-positive-text leading-6">
-              数据库已成功迁移至 v6 架构。
+              数据库已完成 v7 深度瘦身。
             </p>
             <div class="mt-6">
               <button
@@ -853,7 +1007,7 @@ onMounted(async () => {
           <!-- Error stage -->
           <template v-if="migrationError">
             <p class="mt-3 text-[13px] text-red-300 leading-6">
-              迁移失败：{{ migrationError }}
+              优化失败：{{ migrationError }}
             </p>
             <div class="mt-6 flex gap-3">
               <button
