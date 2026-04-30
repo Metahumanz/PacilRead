@@ -5,6 +5,7 @@ import { useSettings } from '../../composables/useSettings'
 const {
   appVersion,
   dbSize,
+  onOpenMigration,
   updateStatus,
   updateDetail,
   updateAvailable,
@@ -17,6 +18,7 @@ const {
 } = defineProps<{
   appVersion: string
   dbSize: string
+  onOpenMigration: () => void
   updateStatus: string
   updateDetail: string
   updateAvailable: boolean
@@ -61,6 +63,25 @@ const { silentUpdate } = settings
             GitHub
           </a>
         </div>
+      </div>
+
+      <!-- 数据库维护 -->
+      <div class="flex items-center justify-between p-4 app-row">
+        <div class="flex items-center gap-4">
+          <span class="text-xl opacity-80">🗄️</span>
+          <div>
+            <div class="text-[14px] font-medium app-title">本地数据库</div>
+            <div class="text-[12px] app-muted mt-0.5">
+              当前大小 {{ dbSize || '—' }} · reader.db v6
+            </div>
+          </div>
+        </div>
+        <button
+          @click="onOpenMigration"
+          class="app-button px-4 py-1.5 text-[13px]"
+        >
+          手动迁移
+        </button>
       </div>
 
       <!-- 行为控制 -->

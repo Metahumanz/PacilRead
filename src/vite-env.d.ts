@@ -28,6 +28,8 @@ export interface ElectronAPI {
       unmatchedChapters: number
     }>
     getSize: () => Promise<{ sizeBytes: number }>
+    migrateToV6: () => Promise<{ migrated: boolean }>
+    onMigrationProgress: (cb: (data: { step: number; total: number; message: string }) => void) => () => void
   }
   dialog: {
     openFile: () => Promise<string | null>

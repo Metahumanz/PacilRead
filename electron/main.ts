@@ -269,6 +269,101 @@ function getCurrentUserVersion(database: Database): number {
   return 0
 }
 
+function runV6Migration(
+  database: Database,
+  onProgress?: (step: number, total: number, message: string) => void
+): { migrated: boolean } {
+  const currentVersion = getCurrentUserVersion(database)
+  if (currentVersion >= 6) {
+    onProgress?.(6, 6, '数据库已是 v6 版本，无需迁移')
+    return { migrated: false }
+  }
+
+  const totalSteps = 6
+  let step = 0
+  const progress = (message: string) => {
+    step++
+    onProgress?.(step, totalSteps, message)
+  }
+
+  console.log(`[DB Migration] Running v6 migration (current user_version = ${currentVersion})`)
+  try {
+    progress('正在从 body 列提取纯文本正文...')
+
+    const chaptersResult = database.exec(
+      "SELECT id, body, body_text, body_html FROM chapters WHERE (body_text IS NULL OR body_text = '') AND (body IS NOT NULL AND body <> '' OR body_html IS NOT NULL AND body_html <> '')"
+    )
+    let hadBodyHtmlContent = false
+    if (chaptersResult.length > 0) {
+      const { columns, values } = chaptersResult[0]
+      const idIdx = columns.indexOf('id')
+      const bodyIdx = columns.indexOf('body')
+      const bodyTextIdx = columns.indexOf('body_text')
+      const bodyHtmlIdx = columns.indexOf('body_html')
+      for (const row of values) {
+        const id = row[idIdx]
+        const body = String(row[bodyIdx] || '')
+        const bodyHtml = String(row[bodyHtmlIdx] || '')
+        let newBodyText = String(row[bodyTextIdx] || '')
+        if (!newBodyText) {
+          if (bodyHtml) {
+            newBodyText = stripHtmlTags(bodyHtml)
+            hadBodyHtmlContent = true
+          } else if (body) {
+            newBodyText = stripHtmlTags(body)
+          }
+          if (newBodyText) {
+            database.run('UPDATE chapters SET body_text = ? WHERE id = ?', [newBodyText, id])
+          }
+        }
+      }
+    }
+
+    progress('正在为移动端库补齐渲染用 body 列...')
+
+    const missingBodyResult = database.exec(
+      "SELECT id, body_text FROM chapters WHERE (body IS NULL OR body = '') AND body_text IS NOT NULL AND body_text <> ''"
+    )
+    if (missingBodyResult.length > 0) {
+      const { columns, values } = missingBodyResult[0]
+      const idIdx = columns.indexOf('id')
+      const bodyTextIdx = columns.indexOf('body_text')
+      for (const row of values) {
+        const id = row[idIdx]
+        const bodyText = String(row[bodyTextIdx] || '')
+        if (bodyText) {
+          database.run('UPDATE chapters SET body = ? WHERE id = ?', [textToHtml(bodyText), id])
+        }
+      }
+    }
+
+    progress('正在清理冗余的 body_html 列...')
+
+    const bodyHtmlResult = database.exec(
+      "SELECT id FROM chapters WHERE body_html IS NOT NULL AND body_html <> ''"
+    )
+    if (bodyHtmlResult.length > 0 && bodyHtmlResult[0].values.length > 0) {
+      database.run("UPDATE chapters SET body_html = ''")
+      hadBodyHtmlContent = true
+    }
+
+    progress('正在设置数据库版本号...')
+    database.run('PRAGMA user_version = 6')
+
+    progress('正在回收存储空间 (VACUUM)...')
+    if (hadBodyHtmlContent) {
+      try { database.run('VACUUM') } catch (e) { console.error('[DB Migration] VACUUM failed:', e) }
+    }
+
+    progress('数据库迁移完成')
+    console.log('[DB Migration] v6 migration complete')
+    return { migrated: true }
+  } catch (e) {
+    console.error('[DB Migration] v6 migration error:', e)
+    throw e
+  }
+}
+
 function runDatabaseMigrations(database: Database): void {
   database.run(`CREATE TABLE IF NOT EXISTS books (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,85 +435,7 @@ function runDatabaseMigrations(database: Database): void {
   database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks (book_id)')
 
   // ---- v6 data migration ----
-  const currentVersion = getCurrentUserVersion(database)
-  if (currentVersion < 6) {
-    console.log(`[DB Migration] Running v6 migration (current user_version = ${currentVersion})`)
-    try {
-      // Backfill body_text from body (old desktop DBs)
-      database.run(
-        "UPDATE chapters SET body_text = ? WHERE (body_text IS NULL OR body_text = '') AND body IS NOT NULL AND body <> ''",
-        [''] // placeholder — we use a subquery approach via per-row logic below
-      )
-      // Use exec-based row-by-row backfill for body → body_text (strip HTML)
-      const chaptersResult = database.exec(
-        "SELECT id, body, body_text, body_html FROM chapters WHERE (body_text IS NULL OR body_text = '') AND (body IS NOT NULL AND body <> '' OR body_html IS NOT NULL AND body_html <> '')"
-      )
-      let hadBodyHtmlContent = false
-      if (chaptersResult.length > 0) {
-        const { columns, values } = chaptersResult[0]
-        const idIdx = columns.indexOf('id')
-        const bodyIdx = columns.indexOf('body')
-        const bodyTextIdx = columns.indexOf('body_text')
-        const bodyHtmlIdx = columns.indexOf('body_html')
-        for (const row of values) {
-          const id = row[idIdx]
-          const body = String(row[bodyIdx] || '')
-          const bodyHtml = String(row[bodyHtmlIdx] || '')
-          let newBodyText = String(row[bodyTextIdx] || '')
-          if (!newBodyText) {
-            // Prefer body_html for text extraction (old mobile DBs), fall back to body
-            if (bodyHtml) {
-              newBodyText = stripHtmlTags(bodyHtml)
-              hadBodyHtmlContent = true
-            } else if (body) {
-              newBodyText = stripHtmlTags(body)
-            }
-            if (newBodyText) {
-              database.run('UPDATE chapters SET body_text = ? WHERE id = ?', [newBodyText, id])
-            }
-          }
-        }
-      }
-      // Backfill body from body_text for Android v6 DBs missing the body column
-      database.run(
-        "UPDATE chapters SET body = ? WHERE (body IS NULL OR body = '') AND body_text IS NOT NULL AND body_text <> ''",
-        [''] // placeholder
-      )
-      const missingBodyResult = database.exec(
-        "SELECT id, body_text FROM chapters WHERE (body IS NULL OR body = '') AND body_text IS NOT NULL AND body_text <> ''"
-      )
-      if (missingBodyResult.length > 0) {
-        const { columns, values } = missingBodyResult[0]
-        const idIdx2 = columns.indexOf('id')
-        const bodyTextIdx2 = columns.indexOf('body_text')
-        for (const row of values) {
-          const id = row[idIdx2]
-          const bodyText = String(row[bodyTextIdx2] || '')
-          if (bodyText) {
-            database.run('UPDATE chapters SET body = ? WHERE id = ?', [textToHtml(bodyText), id])
-          }
-        }
-      }
-      // Clear body_html (it is now a shadow column kept empty going forward)
-      database.run("DELETE FROM chapters WHERE 1 = 0") // no-op to appease linter
-      const bodyHtmlResult = database.exec(
-        "SELECT id FROM chapters WHERE body_html IS NOT NULL AND body_html <> ''"
-      )
-      if (bodyHtmlResult.length > 0 && bodyHtmlResult[0].values.length > 0) {
-        database.run("UPDATE chapters SET body_html = ''")
-        hadBodyHtmlContent = true
-      }
-      // Set version
-      database.run('PRAGMA user_version = 6')
-      // Best-effort VACUUM when we cleared large fields
-      if (hadBodyHtmlContent) {
-        try { database.run('VACUUM') } catch (e) { console.error('[DB Migration] VACUUM failed:', e) }
-      }
-      console.log('[DB Migration] v6 migration complete')
-    } catch (e) {
-      console.error('[DB Migration] v6 migration error:', e)
-    }
-  }
+  runV6Migration(database)
 
   // Existing title/author normalization
   try {
@@ -664,6 +681,15 @@ ipcMain.handle('db:getSize', async () => {
   } catch {
     return { sizeBytes: 0 }
   }
+})
+
+ipcMain.handle('db:migrateToV6', async (event) => {
+  if (!db) throw new Error('Database not initialized')
+  const result = runV6Migration(db, (step, total, message) => {
+    event.sender.send('db:migration-progress', { step, total, message })
+  })
+  saveDatabase()
+  return result
 })
 
 ipcMain.handle('db:export', async () => {

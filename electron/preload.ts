@@ -8,7 +8,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportLite: () => ipcRenderer.invoke('db:exportLite'),
     importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath),
     importLiteFromFile: (filePath: string) => ipcRenderer.invoke('db:importLiteFromFile', filePath),
-    getSize: () => ipcRenderer.invoke('db:getSize')
+    getSize: () => ipcRenderer.invoke('db:getSize'),
+    migrateToV6: () => ipcRenderer.invoke('db:migrateToV6'),
+    onMigrationProgress: (cb: (data: { step: number; total: number; message: string }) => void) => {
+      const listener = (_: any, data: any) => cb(data)
+      ipcRenderer.on('db:migration-progress', listener)
+      return () => ipcRenderer.removeListener('db:migration-progress', listener)
+    }
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),

@@ -59,6 +59,65 @@ const appVersion = ref('')
 const dbSize = ref('')
 const updateStatus = ref('')
 const updateDetail = ref('')
+
+// ---- Database migration UI state ----
+const showMigrationModal = ref(false)
+const migrationRunning = ref(false)
+const migrationStep = ref(0)
+const migrationTotal = ref(6)
+const migrationMessage = ref('')
+const migrationDone = ref(false)
+const migrationError = ref('')
+let unsubMigrationProgress: (() => void) | null = null
+
+const openMigrationConfirm = () => {
+  migrationRunning.value = false
+  migrationDone.value = false
+  migrationError.value = ''
+  migrationStep.value = 0
+  migrationMessage.value = ''
+  showMigrationModal.value = true
+}
+
+const startMigration = async () => {
+  migrationRunning.value = true
+  migrationError.value = ''
+  try {
+    unsubMigrationProgress = window.electronAPI.db.onMigrationProgress((data) => {
+      migrationStep.value = data.step
+      migrationTotal.value = data.total
+      migrationMessage.value = data.message
+    })
+    await window.electronAPI.db.migrateToV6()
+    migrationDone.value = true
+    // Refresh db size
+    try {
+      const sz = await window.electronAPI.db.getSize()
+      if (sz.sizeBytes > 0) {
+        dbSize.value = sz.sizeBytes >= 1048576
+          ? (sz.sizeBytes / 1048576).toFixed(1) + ' MB'
+          : (sz.sizeBytes / 1024).toFixed(1) + ' KB'
+      }
+    } catch {}
+  } catch (e: any) {
+    migrationError.value = e?.message || String(e)
+  } finally {
+    migrationRunning.value = false
+    if (unsubMigrationProgress) {
+      unsubMigrationProgress()
+      unsubMigrationProgress = null
+    }
+  }
+}
+
+const closeMigrationModal = () => {
+  if (migrationRunning.value) return
+  if (unsubMigrationProgress) {
+    unsubMigrationProgress()
+    unsubMigrationProgress = null
+  }
+  showMigrationModal.value = false
+}
 const updateAvailable = ref(false)
 const updateReady = ref(false)
 const isDownloading = ref(false)
@@ -665,6 +724,7 @@ onMounted(async () => {
     <SettingsAbout
       :appVersion="appVersion"
       :dbSize="dbSize"
+      :onOpenMigration="openMigrationConfirm"
       :updateStatus="updateStatus"
       :updateDetail="updateDetail"
       :updateAvailable="updateAvailable"
@@ -714,6 +774,105 @@ onMounted(async () => {
         </div>
       </div>
     </Transition>
+
+    <!-- Database migration modal — non-dismissable while running -->
+    <Teleport to="body">
+      <div
+        v-if="showMigrationModal"
+        class="fixed inset-0 z-[300] flex items-center justify-center p-6"
+        style="background: rgba(0,0,0,0.65); backdrop-filter: blur(8px);"
+      >
+        <div class="w-full max-w-md app-card app-card-strong p-6" @click.stop @keydown.escape.prevent>
+          <h3 class="text-[18px] font-semibold app-title flex items-center gap-2">
+            <span v-if="!migrationDone && !migrationError">⚙️</span>
+            <span v-else-if="migrationDone">✅</span>
+            <span v-else>❌</span>
+            数据库迁移
+          </h3>
+
+          <!-- Confirm stage -->
+          <template v-if="!migrationRunning && !migrationDone && !migrationError">
+            <p class="mt-3 text-[13px] app-muted leading-6">
+              即将对本地数据库执行 v6 架构迁移，包括正文列回填、冗余数据清理与空间回收。
+            </p>
+            <div class="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <p class="text-[12px] text-amber-200 font-semibold leading-5">
+                迁移期间请勿关闭应用或断电。预计耗时取决于数据库大小，大库可能需要数十秒。
+              </p>
+            </div>
+            <div class="mt-6 flex gap-3">
+              <button
+                @click="closeMigrationModal"
+                class="flex-1 py-3 px-4 glass-card rounded-xl text-[13px] border border-white/5"
+              >
+                取消
+              </button>
+              <button
+                @click="startMigration"
+                class="flex-1 py-3 px-4 bg-blue-600 rounded-xl text-[13px] font-bold shadow-lg shadow-blue-500/20"
+              >
+                开始迁移
+              </button>
+            </div>
+          </template>
+
+          <!-- Running stage -->
+          <template v-if="migrationRunning">
+            <p class="mt-3 text-[13px] app-muted leading-6">
+              正在执行迁移，请耐心等待，不要关闭应用...
+            </p>
+            <div class="mt-4 space-y-2">
+              <div class="flex justify-between text-[12px] app-muted">
+                <span>{{ migrationMessage || '准备中...' }}</span>
+                <span class="font-mono">{{ migrationStep }} / {{ migrationTotal }}</span>
+              </div>
+              <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                  :style="{ width: Math.max(4, (migrationTotal > 0 ? (migrationStep / migrationTotal) * 100 : 0)) + '%' }"
+                ></div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Done stage -->
+          <template v-if="migrationDone">
+            <p class="mt-3 text-[13px] app-positive-text leading-6">
+              数据库已成功迁移至 v6 架构。
+            </p>
+            <div class="mt-6">
+              <button
+                @click="closeMigrationModal"
+                class="w-full py-3 px-4 bg-blue-600 rounded-xl text-[13px] font-bold shadow-lg shadow-blue-500/20"
+              >
+                完成
+              </button>
+            </div>
+          </template>
+
+          <!-- Error stage -->
+          <template v-if="migrationError">
+            <p class="mt-3 text-[13px] text-red-300 leading-6">
+              迁移失败：{{ migrationError }}
+            </p>
+            <div class="mt-6 flex gap-3">
+              <button
+                @click="closeMigrationModal"
+                class="flex-1 py-3 px-4 glass-card rounded-xl text-[13px] border border-white/5"
+              >
+                关闭
+              </button>
+              <button
+                @click="startMigration"
+                class="flex-1 py-3 px-4 bg-blue-600 rounded-xl text-[13px] font-bold shadow-lg shadow-blue-500/20"
+              >
+                重试
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
