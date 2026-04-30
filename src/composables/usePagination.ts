@@ -74,7 +74,7 @@ export function usePagination(opts: {
     
     if (pendingWebdavPos.value >= 0) {
       const ch = opts.chapters.value[opts.currentChapterIndex.value]
-      const L = ch?.body?.length || 0
+      const L = ch?.body_text?.length || ch?.body?.length || 0
       if (L > 0) {
         currentPage.value = Math.floor((pendingWebdavPos.value / L) * totalPages.value)
       } else {

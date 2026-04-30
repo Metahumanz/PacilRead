@@ -23,7 +23,7 @@ import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 
-interface Chapter { id: number; title: string; body: string; order_index: number }
+interface Chapter { id: number; title: string; body: string; body_text: string; order_index: number }
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string; reading_stats_key: string }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
@@ -145,7 +145,7 @@ const saveProgress = async () => {
       author: book.value.author || '',
       currentChapterIndex: currentChapterIndex.value,
       currentChapterTitle: currentChapterData.value?.title || '',
-      currentChapterBodyLength: currentChapterData.value?.body?.length || 0,
+      currentChapterBodyLength: currentChapterData.value?.body_text?.length || 0,
       currentPage: pagination.currentPage.value,
       totalPages: pagination.totalPages.value,
       pendingWebdavPos: pagination.pendingWebdavPos.value
@@ -201,14 +201,13 @@ const trackedSetCurrentPage = (page: number) => {
 }
 
 const getChapterOffset = () => {
-  const bodyLength = currentChapterData.value?.body?.length || 0
-  if (bodyLength <= 0 || totalPages.value <= 0) return 0
-  return Math.floor(bodyLength * (currentPage.value / totalPages.value))
+  const bodyTextLength = currentChapterData.value?.body_text?.length || 0
+  if (bodyTextLength <= 0 || totalPages.value <= 0) return 0
+  return Math.floor(bodyTextLength * (currentPage.value / totalPages.value))
 }
 
 const buildBookmarkSummary = (offset: number) => {
-  const text = currentBody.value
-    .replace(/<[^>]+>/g, ' ')
+  const text = (currentChapterData.value?.body_text || '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!text) return currentChapterData.value?.title || ''

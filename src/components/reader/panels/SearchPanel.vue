@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-interface Chapter { id: number; title: string; body: string; order_index: number }
+interface Chapter { id: number; title: string; body: string; body_text: string; order_index: number }
 interface SearchResult { chapterIndex: number; chapterTitle: string; snippet: string }
 
 const props = defineProps<{
@@ -25,7 +25,7 @@ const doSearch = async () => {
   try {
     const results: SearchResult[] = []
     for (let i = 0; i < props.chapters.length; i++) {
-      const plain = props.chapters[i].body.replace(/<[^>]+>/g, '')
+      const plain = props.chapters[i].body_text || props.chapters[i].body.replace(/<[^>]+>/g, '')
       let startIndex = 0
       while (startIndex < plain.length) {
         const idx = plain.toLowerCase().indexOf(q.toLowerCase(), startIndex)
