@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
-import { deleteBookmarksForBook } from '../composables/useBookmarks'
 import BookCover from './common/BookCover.vue'
 
 interface Book {
@@ -74,10 +73,7 @@ const addBook = async () => {
 const deleteBook = async (bookId: number) => {
   if (!confirm('确定要删除这本书吗？')) return
   try {
-    await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE book_id = ?', [bookId])
-    await deleteBookmarksForBook(bookId)
-    await window.electronAPI.db.query('DELETE FROM chapters WHERE book_id = ?', [bookId])
-    await window.electronAPI.db.query('DELETE FROM books WHERE id = ?', [bookId])
+    await window.electronAPI.db.deleteBook(bookId)
     await fetchBooks()
   } catch (error) {
     console.error('Failed to delete book:', error)

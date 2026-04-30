@@ -23,7 +23,15 @@ import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 
-interface Chapter { id: number; title: string; body: string; body_text: string; order_index: number }
+interface Chapter {
+  id: number
+  title: string
+  body: string
+  body_text: string
+  order_index: number
+  body_text_storage?: string
+  body_text_missing?: number
+}
 interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string; reading_stats_key: string }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
@@ -112,7 +120,7 @@ const fetchBook = async () => {
 }
 const fetchChapters = async () => {
   try {
-    const r = await window.electronAPI.db.query('SELECT * FROM chapters WHERE book_id = ? ORDER BY order_index', [props.bookId])
+    const r = await window.electronAPI.db.getBookChapters(props.bookId)
     chapters.value = r as Chapter[]
     if (chapters.value.length > 0) {
       currentChapterIndex.value = Math.min(Math.max(currentChapterIndex.value, 0), chapters.value.length - 1)
@@ -128,6 +136,7 @@ const fetchChapters = async () => {
 const currentChapterData = computed(() => chapters.value[currentChapterIndex.value] || null)
 const prevChapterData = computed(() => { const i = currentChapterIndex.value - 1; return i >= 0 ? chapters.value[i] : null })
 const nextChapterData = computed(() => { const i = currentChapterIndex.value + 1; return i < chapters.value.length ? chapters.value[i] : null })
+const hasReadableChapters = computed(() => chapters.value.some(ch => !ch.body_text_missing || ch.body_text || ch.body))
 const currentBody = computed(() => currentChapterData.value ? applyReplacements(currentChapterData.value.body) : '')
 const prevBody = computed(() => prevChapterData.value ? applyReplacements(prevChapterData.value.body) : '')
 const nextBody = computed(() => nextChapterData.value ? applyReplacements(nextChapterData.value.body) : '')
@@ -516,7 +525,7 @@ onUnmounted(async () => {
     <div v-if="loading" class="load"><div class="spinner"></div><p>正在载入...</p></div>
 
     <template v-else>
-      <div v-if="!book || chapters.length === 0" class="empty-reader">
+      <div v-if="!book || chapters.length === 0 || !hasReadableChapters" class="empty-reader">
         <div class="empty-reader-card">
           <div class="empty-reader-icon">!</div>
           <h2>{{ book ? '这本书暂无可读取正文' : '未找到书籍记录' }}</h2>
