@@ -7,7 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     export: () => ipcRenderer.invoke('db:export'),
     exportLite: () => ipcRenderer.invoke('db:exportLite'),
     importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath),
-    importLiteFromFile: (filePath: string) => ipcRenderer.invoke('db:importLiteFromFile', filePath)
+    importLiteFromFile: (filePath: string) => ipcRenderer.invoke('db:importLiteFromFile', filePath),
+    getSize: () => ipcRenderer.invoke('db:getSize')
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),

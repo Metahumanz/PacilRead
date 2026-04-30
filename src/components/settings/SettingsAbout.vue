@@ -4,6 +4,7 @@ import { useSettings } from '../../composables/useSettings'
 
 const {
   appVersion,
+  dbSize,
   updateStatus,
   updateDetail,
   updateAvailable,
@@ -15,6 +16,7 @@ const {
   toggleSilentUpdate
 } = defineProps<{
   appVersion: string
+  dbSize: string
   updateStatus: string
   updateDetail: string
   updateAvailable: boolean
@@ -46,6 +48,7 @@ const { silentUpdate } = settings
         </div>
         <div class="flex items-center gap-3">
            <span class="app-badge text-[12px] font-mono px-2 py-1">v{{ appVersion }}</span>
+          <span v-if="dbSize" class="text-[12px] app-muted font-mono">{{ dbSize }}</span>
           <template v-if="updateAvailable">
             <button @click="downloadUpdate" class="app-button app-button-primary px-4 py-1.5 text-[13px]">后台下载最新版</button>
           </template>

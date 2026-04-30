@@ -27,6 +27,7 @@ export interface ElectronAPI {
       remappedBookmarks: number
       unmatchedChapters: number
     }>
+    getSize: () => Promise<{ sizeBytes: number }>
   }
   dialog: {
     openFile: () => Promise<string | null>

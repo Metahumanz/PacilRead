@@ -56,6 +56,7 @@ const {
 
 // Update related state
 const appVersion = ref('')
+const dbSize = ref('')
 const updateStatus = ref('')
 const updateDetail = ref('')
 const updateAvailable = ref(false)
@@ -585,6 +586,16 @@ onMounted(async () => {
   await fetchBooks()
   await refreshReadingStatsSummary()
   try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
+  try {
+    const sz = await window.electronAPI.db.getSize()
+    if (sz.sizeBytes > 0) {
+      dbSize.value = sz.sizeBytes >= 1048576
+        ? (sz.sizeBytes / 1048576).toFixed(1) + ' MB'
+        : (sz.sizeBytes / 1024).toFixed(1) + ' KB'
+    } else {
+      dbSize.value = '—'
+    }
+  } catch { dbSize.value = '—' }
   window.electronAPI.updater.onStatus((data) => {
     switch (data.status) {
       case 'checking': updateStatus.value = '🔍 正在检查...'; break
@@ -651,8 +662,9 @@ onMounted(async () => {
       :toggleRuleActive="toggleRuleActive"
     />
 
-    <SettingsAbout 
+    <SettingsAbout
       :appVersion="appVersion"
+      :dbSize="dbSize"
       :updateStatus="updateStatus"
       :updateDetail="updateDetail"
       :updateAvailable="updateAvailable"
