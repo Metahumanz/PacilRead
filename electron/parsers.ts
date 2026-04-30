@@ -8,7 +8,19 @@ import { PDFParse } from 'pdf-parse'
 export interface Chapter {
   title: string
   body: string
+  bodyText: string
+  bodyHtml: string
   orderIndex: number
+}
+
+export interface EpubParseResult {
+  chapters: Chapter[]
+  coverBuffer?: Buffer
+  coverExtension?: string
+}
+
+export function stripHtmlTags(html: string): string {
+  return html.replace(/<[^>]+>/g, '').trim()
 }
 
 function linesToHtml(text: string): string {
@@ -50,6 +62,8 @@ export function splitTextIntoChapters(content: string): Chapter[] {
     return [{
       title: '全文',
       body: linesToHtml(content),
+      bodyText: content.trim(),
+      bodyHtml: '',
       orderIndex: 0
     }]
   }
@@ -66,6 +80,8 @@ export function splitTextIntoChapters(content: string): Chapter[] {
         chapters.push({
           title: '前言',
           body: linesToHtml(chunk),
+          bodyText: chunk,
+          bodyHtml: '',
           orderIndex: chapters.length
         })
       }
@@ -73,9 +89,12 @@ export function splitTextIntoChapters(content: string): Chapter[] {
 
     const nextIndex = i + 1 < bestMatches.length ? bestMatches[i + 1].index : content.length
 
+    const rawText = content.slice(index, nextIndex).replace(title, '').trim()
     chapters.push({
       title: title,
-      body: linesToHtml(content.slice(index, nextIndex).replace(title, '').trim()),
+      body: linesToHtml(rawText),
+      bodyText: rawText,
+      bodyHtml: '',
       orderIndex: chapters.length
     })
 
@@ -114,10 +133,6 @@ export async function parsePdf(filePath: string): Promise<Chapter[]> {
 
 // ---- EPUB parser using adm-zip (no browser deps) ----
 
-function stripHtmlTags(html: string): string {
-  return html.replace(/<[^>]+>/g, '').trim()
-}
-
 function extractBodyContent(html: string): string {
   // Extract content inside <body>...</body>
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
@@ -137,7 +152,73 @@ function extractTitle(html: string): string {
   return ''
 }
 
-export async function parseEpub(filePath: string): Promise<Chapter[]> {
+function findEpubCover(
+  zip: AdmZip,
+  opfXml: string,
+  manifest: Map<string, string>,
+  rootDir: string
+): { buffer: Buffer; extension: string } | null {
+  const entries = zip.getEntries()
+  const coverImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml']
+  let coverId: string | null = null
+
+  // Strategy 1: <meta name="cover" content="cover-image-id"/>
+  const metaCoverMatch = opfXml.match(/<meta\s+[^>]*name="cover"[^>]*content="([^"]+)"[^>]*\/?\s*>/i)
+  if (metaCoverMatch) {
+    coverId = metaCoverMatch[1]
+  }
+
+  // Strategy 2: <guide> <reference type="cover" href="..."/>
+  if (!coverId) {
+    const guideMatch = opfXml.match(/<reference\s+[^>]*type="cover"[^>]*href="([^"]+)"[^>]*\/?\s*>/i)
+    if (guideMatch) {
+      const href = guideMatch[1]
+      // Find matching manifest item by href
+      for (const [id, itemHref] of manifest) {
+        if (itemHref === href || itemHref.endsWith(href)) {
+          coverId = id
+          break
+        }
+      }
+    }
+  }
+
+  // Strategy 3: manifest item id containing "cover" (case-insensitive), with image media-type
+  if (!coverId) {
+    for (const [id, href] of manifest) {
+      if (id.toLowerCase().includes('cover') && /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(href)) {
+        coverId = id
+        break
+      }
+    }
+  }
+
+  // Strategy 4: first image in manifest
+  if (!coverId) {
+    for (const [id, href] of manifest) {
+      if (/\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(href)) {
+        coverId = id
+        break
+      }
+    }
+  }
+
+  if (!coverId) return null
+
+  const coverHref = manifest.get(coverId)
+  if (!coverHref) return null
+
+  const coverPath = rootDir !== '.' ? `${rootDir}/${coverHref}` : coverHref
+  const coverEntry = entries.find(e => e.entryName === coverPath || e.entryName === decodeURIComponent(coverPath))
+  if (!coverEntry) return null
+
+  const extMatch = coverPath.match(/\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i)
+  const extension = extMatch ? extMatch[1].toLowerCase() : 'jpg'
+
+  return { buffer: coverEntry.getData(), extension }
+}
+
+export async function parseEpub(filePath: string): Promise<EpubParseResult> {
   const zip = new AdmZip(filePath)
   const entries = zip.getEntries()
 
@@ -171,7 +252,10 @@ export async function parseEpub(filePath: string): Promise<Chapter[]> {
     }
   }
 
-  // 4. Parse spine: <itemref idref="..." />
+  // 4. Extract cover image
+  const coverData = findEpubCover(zip, opfXml, manifest, rootDir)
+
+  // 5. Parse spine: <itemref idref="..." />
   const spineIds: string[] = []
   const spineSection = opfXml.match(/<spine[^>]*>([\s\S]*?)<\/spine>/i)
   if (spineSection) {
@@ -182,7 +266,7 @@ export async function parseEpub(filePath: string): Promise<Chapter[]> {
     }
   }
 
-  // 5. Parse TOC for titles (try toc.ncx)
+  // 6. Parse TOC for titles (try toc.ncx)
   const tocTitles: Map<string, string> = new Map()
   // Find NCX file from manifest
   const ncxId = Array.from(manifest.entries()).find(([, href]) => href.endsWith('.ncx'))?.[0]
@@ -203,7 +287,7 @@ export async function parseEpub(filePath: string): Promise<Chapter[]> {
     }
   }
 
-  // 6. Read each spine item
+  // 7. Read each spine item
   const chapters: Chapter[] = []
   for (let i = 0; i < spineIds.length; i++) {
     const id = spineIds[i]
@@ -225,6 +309,8 @@ export async function parseEpub(filePath: string): Promise<Chapter[]> {
     chapters.push({
       title: title,
       body: bodyContent,
+      bodyText: stripHtmlTags(bodyContent),
+      bodyHtml: '',
       orderIndex: chapters.length
     })
   }
@@ -233,5 +319,9 @@ export async function parseEpub(filePath: string): Promise<Chapter[]> {
     throw new Error('EPUB parsing failed: no readable chapters found')
   }
 
-  return chapters
+  return {
+    chapters,
+    coverBuffer: coverData?.buffer,
+    coverExtension: coverData?.extension
+  }
 }

@@ -4,7 +4,7 @@ import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync } from 'fs'
 import { createHash } from 'crypto'
-import { parseTxt, parseEpub, parsePdf } from './parsers'
+import { parseTxt, parseEpub, parsePdf, stripHtmlTags, type Chapter } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
 
@@ -251,6 +251,24 @@ function buildReadingStatsKey(title: string, author: string | null): string {
     .digest('hex')
 }
 
+function textToHtml(text: string): string {
+  return text
+    .split(/\n/)
+    .filter(l => l.trim())
+    .map(l => `<p>${l.trim()}</p>`)
+    .join('\n')
+}
+
+function getCurrentUserVersion(database: Database): number {
+  try {
+    const result = database.exec('PRAGMA user_version')
+    if (result.length > 0 && result[0].values.length > 0) {
+      return Number(result[0].values[0][0]) || 0
+    }
+  } catch (_) {}
+  return 0
+}
+
 function runDatabaseMigrations(database: Database): void {
   database.run(`CREATE TABLE IF NOT EXISTS books (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,12 +281,20 @@ function runDatabaseMigrations(database: Database): void {
   try { database.run("ALTER TABLE books ADD COLUMN reading_stats_key TEXT NOT NULL DEFAULT ''") } catch (_) {}
   database.run('CREATE INDEX IF NOT EXISTS idx_books_reading_stats_key ON books (reading_stats_key)')
 
+  // v6 schema: chapters with body_text (source of truth), body_html (shadow, kept empty), body (desktop rendering shadow)
   database.run(`CREATE TABLE IF NOT EXISTS chapters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    book_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+    book_id INTEGER NOT NULL, title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    body_text TEXT NOT NULL DEFAULT '',
+    body_html TEXT NOT NULL DEFAULT '',
     order_index INTEGER NOT NULL, link TEXT,
     FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
   )`)
+  try { database.run("ALTER TABLE chapters ADD COLUMN body_text TEXT NOT NULL DEFAULT ''") } catch (_) {}
+  try { database.run("ALTER TABLE chapters ADD COLUMN body_html TEXT NOT NULL DEFAULT ''") } catch (_) {}
+  // Android v6 DBs may lack the body column
+  try { database.run("ALTER TABLE chapters ADD COLUMN body TEXT NOT NULL DEFAULT ''") } catch (_) {}
 
   database.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`)
   database.run(`CREATE TABLE IF NOT EXISTS replacement_rules (
@@ -313,6 +339,88 @@ function runDatabaseMigrations(database: Database): void {
   database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_identity ON bookmarks (book_identity)')
   database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks (book_id)')
 
+  // ---- v6 data migration ----
+  const currentVersion = getCurrentUserVersion(database)
+  if (currentVersion < 6) {
+    console.log(`[DB Migration] Running v6 migration (current user_version = ${currentVersion})`)
+    try {
+      // Backfill body_text from body (old desktop DBs)
+      database.run(
+        "UPDATE chapters SET body_text = ? WHERE (body_text IS NULL OR body_text = '') AND body IS NOT NULL AND body <> ''",
+        [''] // placeholder — we use a subquery approach via per-row logic below
+      )
+      // Use exec-based row-by-row backfill for body → body_text (strip HTML)
+      const chaptersResult = database.exec(
+        "SELECT id, body, body_text, body_html FROM chapters WHERE (body_text IS NULL OR body_text = '') AND (body IS NOT NULL AND body <> '' OR body_html IS NOT NULL AND body_html <> '')"
+      )
+      let hadBodyHtmlContent = false
+      if (chaptersResult.length > 0) {
+        const { columns, values } = chaptersResult[0]
+        const idIdx = columns.indexOf('id')
+        const bodyIdx = columns.indexOf('body')
+        const bodyTextIdx = columns.indexOf('body_text')
+        const bodyHtmlIdx = columns.indexOf('body_html')
+        for (const row of values) {
+          const id = row[idIdx]
+          const body = String(row[bodyIdx] || '')
+          const bodyHtml = String(row[bodyHtmlIdx] || '')
+          let newBodyText = String(row[bodyTextIdx] || '')
+          if (!newBodyText) {
+            // Prefer body_html for text extraction (old mobile DBs), fall back to body
+            if (bodyHtml) {
+              newBodyText = stripHtmlTags(bodyHtml)
+              hadBodyHtmlContent = true
+            } else if (body) {
+              newBodyText = stripHtmlTags(body)
+            }
+            if (newBodyText) {
+              database.run('UPDATE chapters SET body_text = ? WHERE id = ?', [newBodyText, id])
+            }
+          }
+        }
+      }
+      // Backfill body from body_text for Android v6 DBs missing the body column
+      database.run(
+        "UPDATE chapters SET body = ? WHERE (body IS NULL OR body = '') AND body_text IS NOT NULL AND body_text <> ''",
+        [''] // placeholder
+      )
+      const missingBodyResult = database.exec(
+        "SELECT id, body_text FROM chapters WHERE (body IS NULL OR body = '') AND body_text IS NOT NULL AND body_text <> ''"
+      )
+      if (missingBodyResult.length > 0) {
+        const { columns, values } = missingBodyResult[0]
+        const idIdx2 = columns.indexOf('id')
+        const bodyTextIdx2 = columns.indexOf('body_text')
+        for (const row of values) {
+          const id = row[idIdx2]
+          const bodyText = String(row[bodyTextIdx2] || '')
+          if (bodyText) {
+            database.run('UPDATE chapters SET body = ? WHERE id = ?', [textToHtml(bodyText), id])
+          }
+        }
+      }
+      // Clear body_html (it is now a shadow column kept empty going forward)
+      database.run("DELETE FROM chapters WHERE 1 = 0") // no-op to appease linter
+      const bodyHtmlResult = database.exec(
+        "SELECT id FROM chapters WHERE body_html IS NOT NULL AND body_html <> ''"
+      )
+      if (bodyHtmlResult.length > 0 && bodyHtmlResult[0].values.length > 0) {
+        database.run("UPDATE chapters SET body_html = ''")
+        hadBodyHtmlContent = true
+      }
+      // Set version
+      database.run('PRAGMA user_version = 6')
+      // Best-effort VACUUM when we cleared large fields
+      if (hadBodyHtmlContent) {
+        try { database.run('VACUUM') } catch (e) { console.error('[DB Migration] VACUUM failed:', e) }
+      }
+      console.log('[DB Migration] v6 migration complete')
+    } catch (e) {
+      console.error('[DB Migration] v6 migration error:', e)
+    }
+  }
+
+  // Existing title/author normalization
   try {
     const books = database.exec('SELECT id, title, author, reading_stats_key FROM books')
     if (books.length > 0) {
@@ -448,13 +556,32 @@ ipcMain.handle('db:importBook', async (_, filePath: string) => {
     )
     const result = db.exec('SELECT last_insert_rowid() as id')
     const bookId = result[0].values[0][0] as number
-    let chapters: { title: string; body: string; orderIndex: number }[]
-    if (ext === '.txt') chapters = parseTxt(filePath)
-    else if (ext === '.epub') chapters = await parseEpub(filePath)
-    else if (ext === '.pdf') chapters = await parsePdf(filePath)
-    else throw new Error(`Unsupported: ${ext}`)
+    let chapters: Chapter[]
+    if (ext === '.txt') {
+      chapters = parseTxt(filePath)
+    } else if (ext === '.epub') {
+      const epubResult = await parseEpub(filePath)
+      chapters = epubResult.chapters
+      // Save extracted cover
+      if (epubResult.coverBuffer && epubResult.coverExtension) {
+        try {
+          const coversDir = join(app.getPath('userData'), 'covers')
+          if (!existsSync(coversDir)) mkdirSync(coversDir, { recursive: true })
+          const coverFilename = `epub_cover_${bookId}.${epubResult.coverExtension}`
+          const coverDestPath = join(coversDir, coverFilename)
+          writeFileSync(coverDestPath, epubResult.coverBuffer)
+          const coverUrl = 'file:///' + coverDestPath.replace(/\\/g, '/')
+          db.run('UPDATE books SET cover_path = ? WHERE id = ?', [coverUrl, bookId])
+        } catch (e) { console.error('Failed to save EPUB cover:', e) }
+      }
+    } else if (ext === '.pdf') {
+      chapters = await parsePdf(filePath)
+    } else {
+      throw new Error(`Unsupported: ${ext}`)
+    }
     for (const ch of chapters) {
-      db.run('INSERT INTO chapters (book_id, title, body, order_index) VALUES (?, ?, ?, ?)', [bookId, ch.title, ch.body, ch.orderIndex])
+      db.run('INSERT INTO chapters (book_id, title, body, body_text, body_html, order_index) VALUES (?, ?, ?, ?, ?, ?)',
+        [bookId, ch.title, ch.body, ch.bodyText, ch.bodyHtml, ch.orderIndex])
     }
     saveDatabase()
     return { bookId, chapterCount: chapters.length }
@@ -530,6 +657,14 @@ ipcMain.handle('updater:install', async (_, silent?: boolean) => {
 ipcMain.handle('app:getVersion', async () => app.getVersion())
 ipcMain.handle('app:getPath', async (_, name: any) => app.getPath(name))
 ipcMain.handle('app:quit', async () => app.quit())
+ipcMain.handle('db:getSize', async () => {
+  try {
+    const stat = statSync(dbPath)
+    return { sizeBytes: stat.size }
+  } catch {
+    return { sizeBytes: 0 }
+  }
+})
 
 ipcMain.handle('db:export', async () => {
   if (!db) throw new Error('Database not initialized')
