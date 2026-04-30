@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 
 const props = defineProps<{
   coverPath?: string | null
@@ -8,6 +8,27 @@ const props = defineProps<{
 }>()
 
 const imageFailed = ref(false)
+const coversBaseUrl = ref('')
+
+onMounted(async () => {
+  try {
+    const userData = await window.electronAPI.app.getPath('userData')
+    coversBaseUrl.value = 'file:///' + userData.replace(/\\/g, '/') + '/covers/'
+  } catch {}
+})
+
+const resolvedCoverSrc = computed(() => {
+  const cp = props.coverPath
+  if (!cp) return null
+  // Already a file:/// URL — use as-is
+  if (cp.startsWith('file:///')) return cp
+  if (cp.startsWith('file://')) return cp
+  // Extract filename from any path (Windows, Unix, Android, etc.)
+  const filename = cp.replace(/\\/g, '/').split('/').pop() || cp
+  if (!filename) return null
+  if (coversBaseUrl.value) return coversBaseUrl.value + filename
+  return cp
+})
 
 const initials = computed(() => {
   const title = (props.title || '').trim()
@@ -23,8 +44,8 @@ watch(() => props.coverPath, () => {
 <template>
   <div class="app-book-cover overflow-hidden relative flex items-center justify-center">
     <img
-      v-if="coverPath && !imageFailed"
-      :src="coverPath"
+      v-if="resolvedCoverSrc && !imageFailed"
+      :src="resolvedCoverSrc"
       class="w-full h-full object-cover"
       :alt="alt || title || '封面'"
       @error="imageFailed = true"
