@@ -7,6 +7,18 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.5.0',
+    date: '2026-04-30',
+    changes: [
+      '数据库升级至 reader.db v6：新增 body_text 作为章节正文真源，body 保留为桌面渲染影子列，body_html 清空后仅作兼容占位，实现与 Android 移动端数据库双向兼容',
+      '旧数据库自动迁移：桌面旧库从 body 回填 body_text，移动端 v6 库补齐 body 列，旧移动库从 body_html 提取文本后清空，迁移后执行 VACUUM 回收空间',
+      'EPUB 导入自动提取封面：支持从元数据声明、guide、manifest 多级降级查找封面图片，自动保存至本地 covers 目录',
+      '封面路径跨平台兼容：渲染层支持 file:///、裸文件名、Android 私有路径三种格式，自动解析到本地 covers/ 目录',
+      '阅读进度、全文搜索、书签摘要统一使用 body_text 作为字符偏移依据，确保跨端同步数据一致',
+      '偏好设置新增数据库文件大小显示，方便评估备份与存储占用'
+    ]
+  },
+  {
     version: '0.4.9',
     date: '2026-04-25',
     changes: [
