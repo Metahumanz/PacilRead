@@ -1,10 +1,11 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } from 'electron'
-import { dirname, join, extname } from 'path'
+import { dirname, join, extname, isAbsolute } from 'path'
 import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, rmSync } from 'fs'
 import { gzipSync, gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
+import AdmZip from 'adm-zip'
 import { parseTxt, parseEpub, parsePdf, stripHtmlTags, type Chapter } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
@@ -16,6 +17,7 @@ let dbPath: string = ''
 let mimoAbortController: AbortController | null = null
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
+const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
 
 // ---- Window bounds persistence ----
 const boundsFile = join(app.getPath('userData'), 'window-bounds.json')
@@ -288,6 +290,75 @@ function getBookChapterTextDir(bookId: number): string {
   return join(getChapterTextRoot(), `book_${bookId}`)
 }
 
+function resolveChapterTextPath(bodyTextPath: string, dataDir: string): string | null {
+  const relativePath = join(dataDir, CHAPTER_TEXT_DIR, ...bodyTextPath.replace(/\\/g, '/').split('/').filter(Boolean))
+  if (existsSync(relativePath)) return relativePath
+  if (isAbsolute(bodyTextPath) && existsSync(bodyTextPath)) return bodyTextPath
+  return null
+}
+
+function createBookChapterTextZip(bookId: number): string | null {
+  if (!db) return null
+  const rows = queryRows(
+    db,
+    `SELECT body_text_path FROM chapters
+     WHERE book_id = ? AND body_text_storage = 'file_gzip'
+       AND body_text_path IS NOT NULL AND body_text_path <> ''
+     ORDER BY order_index`,
+    [bookId]
+  )
+  if (rows.length === 0) return null
+
+  const zip = new AdmZip()
+  const chapterTextRoot = getChapterTextRoot()
+  for (const row of rows) {
+    const relativePath = normalizeChapterTextRelativePath(row.body_text_path)
+    if (!relativePath) continue
+    const absolutePath = getChapterTextAbsolutePath(relativePath)
+    if (!existsSync(absolutePath)) continue
+    zip.addLocalFile(absolutePath, dirname(relativePath))
+  }
+  if (zip.getEntryCount() === 0) return null
+
+  const tempDir = app.getPath('temp')
+  const zipPath = join(tempDir, `chapters_${bookId}_${Date.now()}.zip`)
+  zip.writeZip(zipPath)
+  return zipPath
+}
+
+function extractBookChapterTextZip(zipPath: string): number {
+  const chapterTextRoot = getChapterTextRoot()
+  const zip = new AdmZip(zipPath)
+  const entries = zip.getEntries()
+  let extracted = 0
+
+  for (const entry of entries) {
+    if (entry.isDirectory) continue
+    const normalized = normalizeChapterTextRelativePath(entry.entryName)
+    if (!normalized) {
+      console.warn('[DB] Skipping unsafe ZIP entry:', entry.entryName)
+      continue
+    }
+    const absolutePath = join(chapterTextRoot, ...normalized.split('/'))
+    mkdirSync(dirname(absolutePath), { recursive: true })
+    zip.extractEntryTo(entry, dirname(absolutePath), false, true)
+    extracted++
+  }
+  return extracted
+}
+
+function getBookIdsWithFileGzipChapters(): number[] {
+  if (!db) return []
+  const rows = queryRows(
+    db,
+    `SELECT DISTINCT book_id FROM chapters
+     WHERE body_text_storage = 'file_gzip'
+       AND body_text_path IS NOT NULL AND body_text_path <> ''
+     ORDER BY book_id`
+  )
+  return rows.map(row => Number(row.book_id))
+}
+
 function writeChapterTextGzip(bookId: number, chapterId: number, bodyText: string): {
   relativePath: string
   sizeBytes: number
@@ -306,32 +377,50 @@ function writeChapterTextGzip(bookId: number, chapterId: number, bodyText: strin
   return { relativePath, sizeBytes: source.byteLength }
 }
 
-function readChapterTextGzip(relativePath: unknown): string | null {
-  const safePath = normalizeChapterTextRelativePath(relativePath)
-  if (!safePath) return null
-
-  const absolutePath = getChapterTextAbsolutePath(safePath)
-  if (!existsSync(absolutePath)) return null
+function readChapterTextGzip(bodyTextPath: string): string | null {
+  const dataDir = app.getPath('userData')
+  const resolvedPath = resolveChapterTextPath(bodyTextPath, dataDir)
+  if (!resolvedPath) return null
 
   try {
-    return gunzipSync(readFileSync(absolutePath)).toString('utf8')
+    return gunzipSync(readFileSync(resolvedPath)).toString('utf8')
   } catch (error) {
-    console.error('[DB] Failed to read chapter text file:', safePath, error)
+    console.error('[DB] Failed to read chapter text file:', resolvedPath, error)
     return null
   }
 }
 
-function getReadableChapterText(chapter: any): { bodyText: string; missing: boolean } {
+function getReadableChapterText(chapter: any): { bodyText: string; missing: boolean; fallbackUsed: string | null } {
   const storage = String(chapter.body_text_storage || 'db')
+
+  // Tier 1: file_gzip external storage
   if (storage === 'file_gzip' && chapter.body_text_path) {
     const fileText = readChapterTextGzip(chapter.body_text_path)
-    if (fileText !== null) return { bodyText: fileText, missing: false }
+    if (fileText !== null) return { bodyText: fileText, missing: false, fallbackUsed: null }
+    console.warn(`[DB] External chapter text file missing for chapter ${chapter.id}: ${chapter.body_text_path}`)
   }
 
+  // Tier 2: inline body_text
   const inlineText = String(chapter.body_text || '')
-  if (inlineText) return { bodyText: inlineText, missing: false }
+  if (inlineText) return { bodyText: inlineText, missing: false, fallbackUsed: storage === 'file_gzip' ? 'body_text' : null }
 
-  return { bodyText: '', missing: true }
+  // Tier 3: chunked body_text read — body_text might be null if CursorWindow-limited; direct DB query
+  if (chapter.body_text === null || chapter.body_text === undefined) {
+    try {
+      const rows = queryRows(db!, 'SELECT body_text FROM chapters WHERE id = ?', [chapter.id])
+      const directText = String(rows[0]?.body_text || '')
+      if (directText) return { bodyText: directText, missing: false, fallbackUsed: 'chunked_body_text' }
+    } catch (_) {}
+  }
+
+  // Tier 4: legacy body column (pre-v6 HTML content, strip HTML to get plain text)
+  if (chapter.body !== undefined && chapter.body !== null) {
+    const legacyBody = stripHtmlTags(String(chapter.body || ''))
+    if (legacyBody) return { bodyText: legacyBody, missing: false, fallbackUsed: 'legacy_body' }
+  }
+
+  // Tier 5: placeholder text
+  return { bodyText: EMPTY_CHAPTER_TEXT_PLACEHOLDER, missing: true, fallbackUsed: 'placeholder' }
 }
 
 function directorySizeBytes(dirPath: string): number {
@@ -632,6 +721,12 @@ async function initDatabase(): Promise<void> {
   dbPath = join(app.getPath('userData'), 'reader.db')
   db = existsSync(dbPath) ? new SQL.Database(readFileSync(dbPath)) : new SQL.Database()
 
+  // Startup health check — warn if core tables are missing
+  if (existsSync(dbPath) && !isDatabaseHealthyForStartup(db)) {
+    console.warn('[DB] Database health check failed on startup: books or chapters table missing')
+    mainWindow?.webContents.send('db:health-warning', '数据库可能已损坏，缺少核心表。建议从备份恢复。')
+  }
+
   runDatabaseMigrations(db)
 
   saveDatabase()
@@ -874,10 +969,13 @@ ipcMain.handle('db:getSize', async () => {
 
 ipcMain.handle('db:getBookChapters', async (_, bookId: number) => {
   if (!db) throw new Error('Database not initialized')
+  const columns = getTableColumns(db, 'chapters')
+  const hasLegacyBody = columns.includes('body')
+  const bodyColumn = hasLegacyBody ? ', body' : ''
   const rows = queryRows(
     db,
     `SELECT id, book_id, title, body_html, body_text, order_index,
-      body_text_path, body_text_storage, body_text_size
+      body_text_path, body_text_storage, body_text_size${bodyColumn}
      FROM chapters
      WHERE book_id = ?
      ORDER BY order_index`,
@@ -893,17 +991,92 @@ ipcMain.handle('db:getBookChapters', async (_, bookId: number) => {
       body: readable.bodyText ? textToHtml(readable.bodyText) : '',
       body_text: readable.bodyText,
       body_text_storage: String(row.body_text_storage || 'db'),
-      body_text_missing: readable.missing ? 1 : 0
+      body_text_missing: readable.missing ? 1 : 0,
+      body_text_fallback: readable.fallbackUsed
     }
   })
 })
 
+function isDatabaseHealthyForStartup(database: Database): boolean {
+  try {
+    const result = database.exec(
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('books','chapters')"
+    )
+    const count = result.length > 0 && result[0].values.length > 0 ? Number(result[0].values[0][0]) : 0
+    return count >= 2
+  } catch (e) {
+    console.warn('[DB] Health check failed:', e)
+    return false
+  }
+}
+
+function countNonEmptyBodyHtml(): number {
+  if (!db) return 0
+  const result = db.exec(
+    "SELECT COUNT(*) FROM chapters WHERE body_html IS NOT NULL AND body_html != ''"
+  )
+  return Number(result[0]?.values[0]?.[0] || 0)
+}
+
+function countChaptersNeedingExport(): number {
+  if (!db) return 0
+  const result = db.exec(
+    `SELECT COUNT(*) FROM chapters
+     WHERE COALESCE(body_text_storage, 'db') = 'db'
+       AND body_text IS NOT NULL AND body_text != ''`
+  )
+  return Number(result[0]?.values[0]?.[0] || 0)
+}
+
+function countMissingChapterTextFiles(): number {
+  if (!db) return 0
+  const rows = queryRows(
+    db,
+    `SELECT id, body_text_path FROM chapters
+     WHERE body_text_storage = 'file_gzip'
+       AND body_text_path IS NOT NULL AND body_text_path <> ''
+       AND (body_text IS NULL OR body_text = '')`
+  )
+  let missing = 0
+  const dataDir = app.getPath('userData')
+  for (const row of rows) {
+    if (!resolveChapterTextPath(row.body_text_path, dataDir)) missing++
+  }
+  return missing
+}
+
+function getFreePageCount(): number {
+  if (!db) return 0
+  try {
+    const result = db.exec('PRAGMA freelist_count')
+    return Number(result[0]?.values[0]?.[0] || 0)
+  } catch (_) { return 0 }
+}
+
+const VACUUM_FREE_PAGE_THRESHOLD = 256
+
+function hasPendingMaintenanceWork(): boolean {
+  if (countNonEmptyBodyHtml() > 0) return true
+  if (countChaptersNeedingExport() > 0) return true
+  if (countMissingChapterTextFiles() > 0) return true
+  if (getFreePageCount() >= VACUUM_FREE_PAGE_THRESHOLD) return true
+  return false
+}
+
 ipcMain.handle('db:optimizeStorage', async (event) => {
   if (!db) throw new Error('Database not initialized')
+
+  // Phase 0: Health check
+  if (!isDatabaseHealthyForStartup(db)) {
+    throw new Error('数据库可能已损坏，缺少 books 或 chapters 表。建议从备份恢复。')
+  }
+
   runV7Migration(db)
   saveDatabase()
   const before = getStorageSizeInfo()
-  const rows = queryRows(
+
+  // Count work for progress reporting
+  const exportRows = queryRows(
     db,
     `SELECT id, book_id, body_text
      FROM chapters
@@ -912,48 +1085,133 @@ ipcMain.handle('db:optimizeStorage', async (event) => {
        AND body_text <> ''
      ORDER BY book_id, order_index`
   )
+  const missingRows = queryRows(
+    db,
+    `SELECT id, book_id, body_text, body_text_path FROM chapters
+     WHERE body_text_storage = 'file_gzip'
+       AND body_text_path IS NOT NULL AND body_text_path <> ''`
+  )
+  const columns = getTableColumns(db, 'chapters')
+  const hasLegacyBody = columns.includes('body')
+  const dataDir = app.getPath('userData')
+  const missingWithFileGone = missingRows.filter(row => !resolveChapterTextPath(row.body_text_path, dataDir))
 
-  const total = rows.length + 4
+  const total = 4 + missingWithFileGone.length + exportRows.length
   let step = 0
   const progress = (message: string) => {
     step += 1
     event.sender.send('db:optimize-progress', { step, total, message })
   }
 
-  let optimizedChapters = 0
-  for (const row of rows) {
-    const chapterId = Number(row.id)
-    const bookId = Number(row.book_id)
-    const bodyText = String(row.body_text || '')
-    const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
-    db.run(
-      `UPDATE chapters
-       SET body_text = '',
-         body_text_path = ?,
-         body_text_storage = 'file_gzip',
-         body_text_size = ?,
-         body_html = ''
-       WHERE id = ?`,
-      [stored.relativePath, stored.sizeBytes, chapterId]
-    )
-    optimizedChapters += db.getRowsModified()
-    progress(`正在外置章节正文 ${optimizedChapters}/${rows.length}`)
-  }
-
+  // Phase 1: Clear body_html
   progress('正在清理 body_html...')
   db.run("UPDATE chapters SET body_html = '' WHERE body_html IS NOT NULL AND body_html <> ''")
   const clearedBodyHtml = db.getRowsModified()
 
+  // Phase 2: Repair missing external chapter text files
+  let repairedChapters = 0
+  if (missingWithFileGone.length > 0) {
+    for (let i = 0; i < missingWithFileGone.length; i++) {
+      const row = missingWithFileGone[i]
+      const chapterId = Number(row.id)
+      const bookId = Number(row.book_id)
+      progress(`正在修复缺失正文 ${i + 1}/${missingWithFileGone.length}`)
+
+      // Priority 1: From database body_text
+      let bodyText = String(row.body_text || '')
+      if (!bodyText && hasLegacyBody) {
+        // Priority 2: From legacy body column (pre-v6 HTML)
+        try {
+          const legacyRows = queryRows(db, 'SELECT body FROM chapters WHERE id = ?', [chapterId])
+          bodyText = stripHtmlTags(String(legacyRows[0]?.body || ''))
+        } catch (_) {}
+      }
+      if (!bodyText) continue // Priority 3: Skip, source reparsing needed
+
+      try {
+        const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
+        db.run(
+          `UPDATE chapters
+           SET body_text = '',
+             body_text_path = ?,
+             body_text_storage = 'file_gzip',
+             body_text_size = ?,
+             body_html = ''
+           WHERE id = ?`,
+          [stored.relativePath, stored.sizeBytes, chapterId]
+        )
+        if (hasLegacyBody) {
+          try { db.run("UPDATE chapters SET body = '' WHERE id = ?", [chapterId]) } catch (_) {}
+        }
+        repairedChapters += db.getRowsModified()
+      } catch (e) {
+        console.error('[DB] Failed to repair chapter text for chapter', chapterId, e)
+      }
+    }
+  }
+
+  // Phase 3: Export body_text to external .txt.gz
+  let optimizedChapters = 0
+  for (let i = 0; i < exportRows.length; i++) {
+    const row = exportRows[i]
+    const chapterId = Number(row.id)
+    const bookId = Number(row.book_id)
+    const bodyText = String(row.body_text || '')
+    progress(`正在外置章节正文 ${i + 1}/${exportRows.length}`)
+    try {
+      const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
+      db.run(
+        `UPDATE chapters
+         SET body_text = '',
+           body_text_path = ?,
+           body_text_storage = 'file_gzip',
+           body_text_size = ?,
+           body_html = ''
+         WHERE id = ?`,
+        [stored.relativePath, stored.sizeBytes, chapterId]
+      )
+      optimizedChapters += db.getRowsModified()
+    } catch (e) {
+      console.error('[DB] Failed to export chapter text for chapter', chapterId, e)
+    }
+  }
+
+  // Phase 4: WAL checkpoint
   progress('正在同步数据库状态...')
   try { db.run('PRAGMA wal_checkpoint(TRUNCATE)') } catch (_) {}
 
-  progress('正在回收 reader.db 空间...')
-  try { db.run('VACUUM') } catch (error) { console.error('[DB] VACUUM failed:', error) }
+  // Phase 5: VACUUM — always after export, otherwise only if freelist >= threshold
+  let wasVacuumed = false
+  const shouldVacuum = optimizedChapters > 0 || repairedChapters > 0 || getFreePageCount() >= VACUUM_FREE_PAGE_THRESHOLD
+  if (shouldVacuum) {
+    progress('正在回收 reader.db 空间...')
+    try { db.run('VACUUM'); wasVacuumed = true } catch (error) { console.error('[DB] VACUUM failed:', error) }
+  }
 
   progress('正在刷新空间统计...')
   saveDatabase()
   const after = getStorageSizeInfo()
-  return { optimizedChapters, clearedBodyHtml, before, after }
+  return { optimizedChapters, repairedChapters, clearedBodyHtml, wasVacuumed, before, after }
+})
+
+ipcMain.handle('db:checkHealth', async () => {
+  if (!db) return { healthy: false, reason: 'Database not initialized' }
+  if (!isDatabaseHealthyForStartup(db)) return { healthy: false, reason: '缺少 books 或 chapters 核心表，数据库可能已损坏' }
+  return { healthy: true, reason: null }
+})
+
+ipcMain.handle('db:hasPendingMaintenance', async () => {
+  return hasPendingMaintenanceWork()
+})
+
+ipcMain.handle('db:getMaintenanceStatus', async () => {
+  return {
+    hasPendingWork: hasPendingMaintenanceWork(),
+    nonEmptyBodyHtml: countNonEmptyBodyHtml(),
+    needsExport: countChaptersNeedingExport(),
+    missingChapterFiles: countMissingChapterTextFiles(),
+    freelistCount: getFreePageCount()
+  }
 })
 
 ipcMain.handle('db:export', async () => {
@@ -1044,6 +1302,18 @@ ipcMain.handle('db:getMissingChapterTextFiles', async () => {
     .filter((relativePath): relativePath is string => Boolean(relativePath))
     .filter(relativePath => !existsSync(getChapterTextAbsolutePath(relativePath)))
     .map(relativePath => ({ relativePath, localPath: getChapterTextAbsolutePath(relativePath) }))
+})
+
+ipcMain.handle('db:getBookIdsWithFileGzipChapters', async () => {
+  return getBookIdsWithFileGzipChapters()
+})
+
+ipcMain.handle('db:createBookChapterTextZip', async (_, bookId: number) => {
+  return createBookChapterTextZip(bookId)
+})
+
+ipcMain.handle('db:extractBookChapterTextZip', async (_, zipPath: string) => {
+  return extractBookChapterTextZip(zipPath)
 })
 
 function quoteIdentifier(name: string): string {
