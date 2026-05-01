@@ -7,6 +7,38 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.5.2',
+    date: '2026-05-01',
+    changes: [
+      '数据层架构升级：SQLite→v8 JSON 格式迁移，reader.db 保留为写入中间层，运行时统一走 DataStore 读 JSON 文件',
+      '新增 useDataStore 全局单例数据层：集中管理 books/chapters/rules/themes/bookmarks/readingStats/settings 七类实体，均以响应式 ref 驱动 UI',
+      '新增 useV8Sync 基于 SHA256 manifest 比对的增量同步模块：全量备份/恢复、增量差异上传/智能合并，支持 v7 旧格式回退读取与远端旧文件清理',
+      'Electron 层新增 6 个 data: IPC 通道（readEntity/writeEntity/hashFile/getDataDir/isMigrated/writeAll），迁移后自动清理 SQLite 内联正文并 VACUUM',
+      '全量/增量同步改用 JSON 实体文件替代 reader.db 二进制上传：章节正文以 ZIP 打包，封面/书籍文件按文件名增量检查',
+      '修复 Vue reactive proxy 通过 contextBridge IPC 时 structured clone 序列化失败，导致所有网络功能（WebDAV 探测/备份/恢复）不可用',
+      '修复 SQLite→JSON 迁移后 body_text/body_html 未清理，导致 reader.db 与 JSON 数据双重占用存储空间',
+      '存储统计新增 JSON 数据目录大小，设置页显示 reader.db / 正文 / JSON / 合计四项分解',
+      '5 个 composable（useBookmarks/useReadingStats/useRules/useSettings/useTheme）全面迁移至 DataStore，移除直连 SQL 查询',
+      '4 个 Vue 组件（BookshelfView/SettingsView/OptionsPanel/RulesPanel）全面迁移至 DataStore 与 v8 同步流程'
+    ]
+  },
+  {
+    version: '0.5.1',
+    date: '2026-05-01',
+    changes: [
+      '数据库升级至 v7：全新 chapters 结构支持 body_text 回退链（外置 .txt.gz→库内 body_text→旧版 body→body_html 提取），实现与 Android 移动端数据库双向兼容',
+      '章节正文外置存储：body_text 可选导出为 GZIP 压缩文件，reader.db 保持轻量，支持一键优化存储与缺失文件修复',
+      '同步格式升级：全量/增量同步支持 ZIP 打包章节正文批量上传，替代逐个文件传输，大幅提升大批量章节同步速度',
+      '远端孤立文件清理：同步完成后自动检测并删除远端无对应本地记录的 chapter_text ZIP 与正文文件',
+      '新增数据库健康检查与维护状态 IPC：启动时检测核心表完整性，设置页展示待处理维护项数量与 freelist 状态',
+      '桌面端设置架构兼容性说明文档更新，导出 extractHrefValues 辅助函数',
+      'WebDAV 同步格式 v8 迁移指南：桌面客户端从 reader.db 二进制同步过渡到 JSON 实体文件 + ZIP 章节正文',
+      '修复 reader 返回书架失败：切换至 DataStore 统一数据层后视图跳转状态丢失',
+      '全局 Escape 键增加 reader 视图兜底返回，自动续读迁移至 DataStore.getBooksSorted',
+      '数据库 VACUUM 阈值设为 256 空闲页，优化存储后自动回收磁盘空间'
+    ]
+  },
+  {
     version: '0.5.0',
     date: '2026-04-30',
     changes: [
