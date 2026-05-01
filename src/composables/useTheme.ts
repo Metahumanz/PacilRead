@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
-import { useSettings, saveSetting } from './useSettings'
+import { useSettings } from './useSettings'
+import { useDataStore } from './useDataStore'
 import darkThemeBg from '../assets/themes/dark.jpg'
 import paperThemeBg from '../assets/themes/paper.jpg'
 import greenThemeBg from '../assets/themes/green.jpg'
@@ -27,7 +28,7 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
     if (t.marginY !== undefined) marginY.value = t.marginY
     if (t.pageMode !== undefined) pageMode.value = t.pageMode as 'single' | 'double'
     if (t.doublePageStep !== undefined) doublePageStep.value = t.doublePageStep as 1 | 2
-    
+
     if (opts?.onStyleChanged) opts.onStyleChanged()
   }
 
@@ -39,19 +40,26 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
 
   const saveTheme = async () => {
     if (!newThemeName.value.trim()) return
-    customThemes.value.push({
-      id: Date.now(), name: newThemeName.value.trim(), bgImage: bgImage.value, coverColor: coverColor.value,
-      fontColor: fontColor.value, fontFamily: fontFamily.value, fontSize: fontSize.value, lineHeight: lineHeight.value,
-      letterSpacing: letterSpacing.value, fontWeight: fontWeight.value, marginX: marginX.value, marginY: marginY.value,
+    const { addTheme } = useDataStore()
+    const config = {
+      bgImage: bgImage.value, coverColor: coverColor.value,
+      fontColor: fontColor.value, fontFamily: fontFamily.value, fontSize: fontSize.value,
+      lineHeight: lineHeight.value, letterSpacing: letterSpacing.value,
+      fontWeight: fontWeight.value, marginX: marginX.value, marginY: marginY.value,
       pageMode: pageMode.value, doublePageStep: doublePageStep.value
+    }
+    const theme = await addTheme({
+      name: newThemeName.value.trim(),
+      configJson: JSON.stringify(config),
     })
-    await saveSetting('custom_themes', JSON.stringify(customThemes.value))
+    customThemes.value.push({ id: theme.id, name: theme.name, ...config })
     newThemeName.value = ''
   }
 
   const deleteTheme = async (id: number) => {
+    const { deleteTheme: delTheme } = useDataStore()
+    await delTheme(id)
     customThemes.value = customThemes.value.filter(t => t.id !== id)
-    await saveSetting('custom_themes', JSON.stringify(customThemes.value))
   }
 
   const readerBgStyle = computed(() => {

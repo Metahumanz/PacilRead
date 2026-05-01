@@ -214,11 +214,6 @@ function getPeriodRange(period: ReadingStatsPeriod): { start: string; end: strin
   return { start: toDateString(startDate), end }
 }
 
-function normalizeSelectValue<T>(rows: any[], key: string, fallback: T): T {
-  if (!Array.isArray(rows) || rows.length === 0) return fallback
-  return (rows[0]?.[key] ?? fallback) as T
-}
-
 function isLocalFileUrl(value: string | undefined): boolean {
   return typeof value === 'string' && value.startsWith('file:///')
 }
@@ -244,24 +239,17 @@ function sanitizeRemoteFileName(input: string): string {
   return sanitized || `bg-${Date.now()}`
 }
 
-function parseSettingsRows(rows: any[]): Record<string, string> {
-  const settings: Record<string, string> = {}
-  for (const row of rows) {
-    if (row?.key) settings[row.key] = row.value ?? ''
-  }
-  return settings
-}
-
 async function readSettingsMap(): Promise<Record<string, string>> {
-  const rows = await window.electronAPI.db.query('SELECT key, value FROM settings')
-  return parseSettingsRows(rows)
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  return { ...store.settingsMap.value }
 }
 
 async function saveSettingsMap(settings: Record<string, string>): Promise<void> {
-  const entries = Object.entries(settings)
-  for (const [key, value] of entries) {
-    await saveSetting(key, value)
-  }
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  await store.setSettings(settings)
 }
 
 export async function getCurrentDesktopSettingsSnapshot(): Promise<Record<string, string>> {
@@ -431,58 +419,13 @@ export async function ensureReadingStatsDeviceId(): Promise<string> {
 }
 
 export async function appendReadingStatsDuration(row: ReadingStatsRowPayload): Promise<void> {
-  await window.electronAPI.db.query(
-    `INSERT INTO reading_stats (
-      date, source_device_id, book_identity, book_title, book_author,
-      duration_seconds, char_count, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(source_device_id, date, book_identity)
-    DO UPDATE SET
-      book_title = excluded.book_title,
-      book_author = excluded.book_author,
-      duration_seconds = reading_stats.duration_seconds + excluded.duration_seconds,
-      char_count = reading_stats.char_count + excluded.char_count,
-      updated_at = CASE
-        WHEN excluded.updated_at > reading_stats.updated_at THEN excluded.updated_at
-        ELSE reading_stats.updated_at
-      END`,
-    [
-      row.date,
-      row.sourceDeviceId,
-      row.bookIdentity,
-      row.bookTitle,
-      row.bookAuthor,
-      row.durationSeconds,
-      row.charCount,
-      row.updatedAt,
-    ]
-  )
+  const { useDataStore: getStore } = await import('./useDataStore')
+  await getStore().upsertReadingStatRow(row, 'append')
 }
 
 async function overwriteReadingStatsRow(row: ReadingStatsRowPayload): Promise<void> {
-  await window.electronAPI.db.query(
-    `INSERT INTO reading_stats (
-      date, source_device_id, book_identity, book_title, book_author,
-      duration_seconds, char_count, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(source_device_id, date, book_identity)
-    DO UPDATE SET
-      book_title = excluded.book_title,
-      book_author = excluded.book_author,
-      duration_seconds = excluded.duration_seconds,
-      char_count = excluded.char_count,
-      updated_at = excluded.updated_at`,
-    [
-      row.date,
-      row.sourceDeviceId,
-      row.bookIdentity,
-      row.bookTitle,
-      row.bookAuthor,
-      row.durationSeconds,
-      row.charCount,
-      row.updatedAt,
-    ]
-  )
+  const { useDataStore: getStore } = await import('./useDataStore')
+  await getStore().upsertReadingStatRow(row, 'overwrite')
 }
 
 export async function getAllLocalReadingStatsRows(): Promise<ReadingStatsRowPayload[]> {
@@ -515,21 +458,8 @@ export async function createReadingStatsSnapshot(): Promise<{
   rows: ReadingStatsRowPayload[]
 }> {
   const deviceId = await ensureReadingStatsDeviceId()
-  const rows = await window.electronAPI.db.query(
-    `SELECT
-      date as date,
-      source_device_id as sourceDeviceId,
-      book_identity as bookIdentity,
-      book_title as bookTitle,
-      COALESCE(book_author, '') as bookAuthor,
-      duration_seconds as durationSeconds,
-      char_count as charCount,
-      updated_at as updatedAt
-    FROM reading_stats
-    WHERE source_device_id = ?
-    ORDER BY date ASC, book_identity ASC`,
-    [deviceId]
-  )
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const rows = getStore().getReadingStatsRows(deviceId)
 
   return {
     schemaVersion: READING_STATS_SCHEMA_VERSION,
@@ -589,29 +519,23 @@ export async function mergeRemoteReadingStats(): Promise<number> {
         rows?: ReadingStatsRowPayload[]
       }
       const rows = Array.isArray(payload.rows) ? payload.rows : []
+      const { useDataStore: getStore } = await import('./useDataStore')
+      const store = getStore()
       for (const row of rows) {
         if (!row?.date || !row?.sourceDeviceId || !row?.bookIdentity) continue
-        const localRows = await window.electronAPI.db.query(
-          `SELECT updated_at as updatedAt
-          FROM reading_stats
-          WHERE source_device_id = ? AND date = ? AND book_identity = ?`,
-          [row.sourceDeviceId, row.date, row.bookIdentity]
-        )
-        const localUpdatedAt = normalizeSelectValue<number>(localRows, 'updatedAt', -1)
-        if (!Array.isArray(localRows) || localRows.length === 0 || row.updatedAt >= localUpdatedAt) {
-          await overwriteReadingStatsRow({
-            date: row.date,
-            sourceDeviceId: row.sourceDeviceId,
-            bookIdentity: row.bookIdentity,
-            bookTitle: row.bookTitle || '',
-            bookAuthor: row.bookAuthor || '',
-            durationSeconds: Number(row.durationSeconds) || 0,
-            charCount: Number(row.charCount) || 0,
-            updatedAt: Number(row.updatedAt) || 0,
-          })
-          mergedCount += 1
-        }
+        const merged = await store.mergeRemoteReadingStatRow({
+          date: row.date,
+          sourceDeviceId: row.sourceDeviceId,
+          bookIdentity: row.bookIdentity,
+          bookTitle: row.bookTitle || '',
+          bookAuthor: row.bookAuthor || '',
+          durationSeconds: Number(row.durationSeconds) || 0,
+          charCount: Number(row.charCount) || 0,
+          updatedAt: Number(row.updatedAt) || 0,
+        })
+        if (merged) mergedCount += 1
       }
+      await store.flushRemoteReadingStatsMerge()
     } catch (_) {}
   }
 
@@ -619,7 +543,8 @@ export async function mergeRemoteReadingStats(): Promise<number> {
 }
 
 export async function clearLocalReadingStats(): Promise<void> {
-  await window.electronAPI.db.query('DELETE FROM reading_stats')
+  const { useDataStore: getStore } = await import('./useDataStore')
+  await getStore().clearReadingStats()
 }
 
 export async function deleteRemoteReadingStatsFiles(): Promise<void> {
@@ -640,25 +565,21 @@ export async function deleteRemoteReadingStatsFiles(): Promise<void> {
 }
 
 async function getBookIdentityById(bookId: number): Promise<string | null> {
-  const rows = await window.electronAPI.db.query(
-    'SELECT reading_stats_key as readingStatsKey FROM books WHERE id = ?',
-    [bookId]
-  )
-  return normalizeSelectValue<string | null>(rows, 'readingStatsKey', null)
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const book = getStore().getBook(bookId)
+  return book?.readingStatsKey ?? null
 }
 
 async function queryReadingStatsTotal(start: string, end: string, bookIdentity?: string | null): Promise<number> {
-  const sql = bookIdentity
-    ? `SELECT COALESCE(SUM(duration_seconds), 0) as totalSeconds
-      FROM reading_stats
-      WHERE date BETWEEN ? AND ? AND book_identity = ?`
-    : `SELECT COALESCE(SUM(duration_seconds), 0) as totalSeconds
-      FROM reading_stats
-      WHERE date BETWEEN ? AND ?`
-
-  const params = bookIdentity ? [start, end, bookIdentity] : [start, end]
-  const rows = await window.electronAPI.db.query(sql, params)
-  return Number(normalizeSelectValue(rows, 'totalSeconds', 0))
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const allRows = getStore().getReadingStatsRows()
+  let total = 0
+  for (const row of allRows) {
+    if (row.date < start || row.date > end) continue
+    if (bookIdentity && row.bookIdentity !== bookIdentity) continue
+    total += row.durationSeconds
+  }
+  return total
 }
 
 export async function fetchReadingStatsOverview(bookId?: number | null): Promise<ReadingStatsOverview> {
@@ -676,48 +597,68 @@ export async function fetchReadingStatsOverview(bookId?: number | null): Promise
 
 export async function fetchReadingStatsBookRank(period: ReadingStatsPeriod): Promise<ReadingStatsBookRankItem[]> {
   const range = getPeriodRange(period)
-  const rows = await window.electronAPI.db.query(
-    `SELECT
-      rs.book_identity as bookIdentity,
-      MAX(rs.book_title) as bookTitle,
-      MAX(COALESCE(rs.book_author, '')) as bookAuthor,
-      SUM(rs.duration_seconds) as totalSeconds,
-      MAX(rs.updated_at) as lastUpdatedAt,
-      MAX(b.id) as localBookId,
-      MAX(b.cover_path) as coverPath
-    FROM reading_stats rs
-    LEFT JOIN books b ON b.reading_stats_key = rs.book_identity
-    WHERE rs.date BETWEEN ? AND ?
-    GROUP BY rs.book_identity
-    ORDER BY totalSeconds DESC, lastUpdatedAt DESC`,
-    [range.start, range.end]
-  )
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  const allStats = store.getReadingStatsRows()
+  const allBooks = store.books.value
 
-  return (rows as ReadingStatsBookRankItem[]) || []
+  // Group by bookIdentity, filter by date range
+  const groups = new Map<string, { totalSeconds: number; bookTitle: string; bookAuthor: string; lastUpdatedAt: number }>()
+  for (const row of allStats) {
+    if (row.date < range.start || row.date > range.end) continue
+    const g = groups.get(row.bookIdentity)
+    if (g) {
+      g.totalSeconds += row.durationSeconds
+      g.lastUpdatedAt = Math.max(g.lastUpdatedAt, row.updatedAt)
+    } else {
+      groups.set(row.bookIdentity, {
+        totalSeconds: row.durationSeconds,
+        bookTitle: row.bookTitle,
+        bookAuthor: row.bookAuthor,
+        lastUpdatedAt: row.updatedAt,
+      })
+    }
+  }
+
+  // Join with books to get localBookId and coverPath
+  const result: ReadingStatsBookRankItem[] = []
+  for (const [identity, g] of groups) {
+    const matchingBook = allBooks.find(b => b.readingStatsKey === identity)
+    result.push({
+      bookIdentity: identity,
+      bookTitle: g.bookTitle,
+      bookAuthor: g.bookAuthor,
+      totalSeconds: g.totalSeconds,
+      lastUpdatedAt: g.lastUpdatedAt,
+      localBookId: matchingBook?.id ?? null,
+      coverPath: matchingBook?.coverFile ?? null,
+    })
+  }
+
+  result.sort((a, b) => b.totalSeconds - a.totalSeconds || b.lastUpdatedAt - a.lastUpdatedAt)
+  return result
 }
 
 export async function fetchReadingStatsBookDetail(bookId: number): Promise<ReadingStatsBookDetail | null> {
-  const rows = await window.electronAPI.db.query(
-    `SELECT
-      id as id,
-      title as title,
-      COALESCE(author, '') as author,
-      cover_path as coverPath,
-      COALESCE(last_read, '') as lastRead,
-      progress_index as progressIndex,
-      reading_stats_key as readingStatsKey
-    FROM books
-    WHERE id = ?`,
-    [bookId]
-  )
-
-  if (!Array.isArray(rows) || rows.length === 0) return null
-  return rows[0] as ReadingStatsBookDetail
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const b = getStore().getBook(bookId)
+  if (!b) return null
+  return {
+    id: b.id,
+    title: b.title,
+    author: b.author || '',
+    coverPath: b.coverFile,
+    lastRead: b.lastReadAt ? new Date(b.lastReadAt).toISOString() : '',
+    progressIndex: b.progressIndex,
+    readingStatsKey: b.readingStatsKey,
+  }
 }
 
 export async function hasReadingStatsHistory(): Promise<boolean> {
-  const rows = await window.electronAPI.db.query('SELECT COUNT(*) as count FROM reading_stats')
-  return Number(normalizeSelectValue(rows, 'count', 0)) > 0
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  return store.readingStats.value.length > 0
 }
 
 function shouldIncludeSettingKey(

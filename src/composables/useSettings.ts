@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
+import { useDataStore } from './useDataStore'
 
 /*
  * 设置系统架构说明（与 Android 端兼容性）
@@ -27,10 +28,8 @@ import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 
 // ---- Persistence helpers ----
 export const saveSetting = async (k: string, v: any) => {
-  await window.electronAPI.db.query(
-    'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
-    [k, String(v)]
-  )
+  const { setSetting } = useDataStore()
+  await setSetting(k, String(v))
 }
 
 const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
@@ -247,111 +246,122 @@ export function useSettings() {
   const loadAllSettings = async () => {
     try {
       resetSettingsState()
-      const r = await window.electronAPI.db.query('SELECT * FROM settings')
-      if (Array.isArray(r)) {
-        r.forEach((s: any) => {
-          if (s.key === 'reader_fontSize') fontSize.value = parseInt(s.value) || 20
-          if (s.key === 'reader_lineHeight') lineHeight.value = parseFloat(s.value) || 1.8
-          if (s.key === 'reader_letterSpacing') letterSpacing.value = parseFloat(s.value) || 0
-          if (s.key === 'reader_fontWeight') fontWeight.value = parseInt(s.value) || 400
-          if (s.key === 'reader_marginX') marginX.value = parseInt(s.value) || 60
-          if (s.key === 'reader_marginY') marginY.value = parseInt(s.value) || 40
-          if (s.key === 'reader_fontFamily') fontFamily.value = s.value || 'system-ui'
-          if (s.key === 'reader_fontColor') fontColor.value = s.value || '#e2e8f0'
-          if (s.key === 'reader_coverColor') coverColor.value = s.value || '#0f172a'
-          if (s.key === 'bgImage') bgImage.value = s.value || ''
-          if (s.key === 'reader_flipMode') {
-            if (s.value === 'curl') flipMode.value = 'curl'
-            else if (s.value === 'cover') flipMode.value = 'cover'
-            else flipMode.value = 'slide'
-          }
-          if (s.key === 'reader_flipSpeed') flipSpeed.value = s.value as any || 'medium'
-          if (s.key === 'reader_autoPageSpeed') autoPageSpeed.value = parseInt(s.value) || 10
-          if (s.key === 'reader_ttsEngine') ttsEngine.value = s.value as any || 'edge'
-          if (s.key === 'reader_ttsVoice') ttsVoice.value = s.value || ''
-          if (s.key === 'reader_ttsRate') ttsRate.value = parseFloat(s.value) || 1.0
-          if (s.key === 'reader_highlightColor') highlightColor.value = s.value || '#3b82f6'
-          if (s.key === 'reader_ttsMiMoApiKey') ttsMiMoApiKey.value = s.value || ''
-          if (s.key === 'reader_ttsMiMoVoice') {
-            ttsMiMoVoice.value = isMimoTtsVoiceId(s.value) ? s.value : MIMO_TTS_DEFAULT_VOICE
-          }
-          if (s.key === 'reader_pageMode') pageMode.value = (s.value === 'double' ? 'double' : 'single')
-          if (s.key === 'reader_double_page_enabled') pageMode.value = (s.value === 'true' ? 'double' : 'single')
-          if (s.key === 'reader_doublePageStep') doublePageStep.value = (parseInt(s.value) === 1 ? 1 : 2)
-          if (s.key === 'reader_auto_night_enabled') readerAutoNightEnabled.value = s.value === 'true'
-          if (s.key === 'reader_auto_night_custom_policy') {
-            readerAutoNightCustomPolicy.value = s.value === 'override' ? 'override' : 'preserve'
-          }
-          if (s.key === 'hideKeyHints') showKeyHints.value = (s.value !== 'true')
-          if (s.key === 'reader_alwaysOnTop') {
-            isAlwaysOnTop.value = (s.value === 'true')
-            window.electronAPI.win.setAlwaysOnTop(isAlwaysOnTop.value)
-          }
-          if (s.key === 'reader_nextKeys') { try { nextKeys.value = JSON.parse(s.value) } catch (_) {} }
-          if (s.key === 'reader_prevKeys') { try { prevKeys.value = JSON.parse(s.value) } catch (_) {} }
-          if (s.key === 'reader_blurAmount') blurAmount.value = parseInt(s.value) || 0
-          if (s.key === 'reader_textAlign') textAlign.value = s.value === 'justify' ? 'justify' : 'left'
-          if (s.key === 'reader_alignBottom') alignBottom.value = s.value === 'true'
-          if (s.key === 'webdavUrl') webdavUrl.value = s.value
-          if (s.key === 'webdavDir') webdavDir.value = s.value
-          if (s.key === 'webdavUser') webdavUser.value = s.value
-          if (s.key === 'webdavPass') webdavPass.value = s.value
-          if (s.key === 'webdavSync') webdavSync.value = s.value === 'true'
-          if (s.key === 'webdavSyncBookshelf') webdavSyncBookshelf.value = s.value !== 'false'
-          if (s.key === 'webdavSyncFiles') webdavSyncFiles.value = s.value !== 'false'
-          if (s.key === 'webdavSyncUISettings') webdavSyncUISettings.value = s.value !== 'false'
-          if (s.key === 'webdavSyncThemes') webdavSyncThemes.value = s.value !== 'false'
-          if (s.key === 'webdavSyncBackgrounds') webdavSyncBackgrounds.value = s.value !== 'false'
-          if (s.key === 'webdav_sync_reading_stats') webdavSyncReadingStats.value = s.value !== 'false'
-          if (s.key === 'webdavLastSync') webdavLastSync.value = s.value || ''
-          if (s.key === 'webdavLastLiteSync') webdavLastLiteSync.value = s.value || ''
-          if (s.key === 'webdavDesktopSettingsDir') webdavDesktopSettingsDir.value = s.value || DEFAULT_DESKTOP_SETTINGS_DIR
-          if (s.key === 'autoOpenLastRead') autoOpenLastRead.value = s.value === 'true'
-          if (s.key === 'silentUpdate') silentUpdate.value = s.value === 'true'
-          if (s.key === 'reader_sliderMode') sliderMode.value = s.value === 'chapter' ? 'chapter' : 'book'
-          if (s.key === 'custom_themes') {
-            try { customThemes.value = JSON.parse(s.value) || [] } catch (_) {}
-          }
-          if (s.key === 'hud_tl') hudTopLeft.value = s.value
-          if (s.key === 'hud_tc') hudTopCenter.value = s.value
-          if (s.key === 'hud_tr') hudTopRight.value = s.value
-          if (s.key === 'hud_bl') hudBottomLeft.value = s.value
-          if (s.key === 'hud_bc') hudBottomCenter.value = s.value
-          if (s.key === 'hud_br') hudBottomRight.value = s.value
-          if (s.key === 'chapterTitleDisplay') chapterTitleDisplay.value = s.value as any || 'left'
-          if (s.key === 'sidebarCollapsed') sidebarCollapsed.value = s.value === 'true'
-          if (s.key === 'viewMode') viewMode.value = s.value as any || 'grid'
-          if (s.key === 'bookshelf_show_add_entry') bookshelfShowAddEntry.value = s.value !== 'false'
-          if (s.key === 'home_nav_auto_switch_enabled') homeNavAutoSwitchEnabled.value = s.value !== 'false'
-          if (s.key === 'home_nav_manual_mode') homeNavManualMode.value = s.value === 'bottom' ? 'bottom' : 'sidebar'
-          if (s.key === 'home_bottom_nav_style') homeBottomNavStyle.value = s.value || 'compact'
-          if (s.key === 'home_nav_portrait_mode') {
-            homeNavPortraitMode.value = s.value === 'sidebar' || s.value === 'drawer' ? s.value : 'bottom'
-          }
-          if (s.key === 'home_nav_landscape_mode') {
-            homeNavLandscapeMode.value = s.value === 'bottom' || s.value === 'drawer' ? s.value : 'sidebar'
-          }
-          if (s.key === 'home_sidebar_presentation') homeSidebarPresentation.value = s.value || 'fixed'
-          if (s.key === 'home_fixed_sidebar_style') homeFixedSidebarStyle.value = s.value || 'expanded'
-          if (s.key === 'app_theme_mode') {
-            appThemeMode.value = s.value === 'light' || s.value === 'dark' ? s.value : 'system'
-          }
-          if (s.key === 'app_light_style_variant') {
-            appLightStyleVariant.value = s.value === 'yaobai' ? 'yaobai' : 'yunbai'
-          }
-          if (s.key === 'app_dark_style_variant') {
-            appDarkStyleVariant.value = s.value === 'jiye' ? 'jiye' : 'yemu'
-          }
-          if (s.key === 'glass_opacity_percent') {
-            glassOpacityPercent.value = clampGlassOpacity(parseInt(s.value) || 80)
-          }
-          if (s.key === 'reader_pIndent') pIndent.value = parseFloat(s.value) || 2
-          if (s.key === 'reader_pSpacing') pSpacing.value = parseFloat(s.value) || 0.8
-          if (s.key === 'readingTimeTrackingEnabled' || s.key === 'reading_time_tracking_enabled') readingTimeTrackingEnabled.value = s.value === 'true'
-          if (s.key === 'readingTimeStatsHidden') readingTimeStatsHidden.value = s.value === 'true'
-          if (s.key === 'readingStatsDeviceId' || s.key === 'reading_stats_device_id') readingStatsDeviceId.value = s.value || ''
-        })
+      const dataStore = useDataStore()
+      if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
+      const s = dataStore.settingsMap.value
+
+      // Load settings from settings map (v8 JSON format)
+      const v = (key: string): string | undefined => s[key]
+      if (v('reader_fontSize') !== undefined) fontSize.value = parseInt(v('reader_fontSize')!) || 20
+      if (v('reader_lineHeight') !== undefined) lineHeight.value = parseFloat(v('reader_lineHeight')!) || 1.8
+      if (v('reader_letterSpacing') !== undefined) letterSpacing.value = parseFloat(v('reader_letterSpacing')!) || 0
+      if (v('reader_fontWeight') !== undefined) fontWeight.value = parseInt(v('reader_fontWeight')!) || 400
+      if (v('reader_marginX') !== undefined) marginX.value = parseInt(v('reader_marginX')!) || 60
+      if (v('reader_marginY') !== undefined) marginY.value = parseInt(v('reader_marginY')!) || 40
+      if (v('reader_fontFamily') !== undefined) fontFamily.value = v('reader_fontFamily')! || 'system-ui'
+      if (v('reader_fontColor') !== undefined) fontColor.value = v('reader_fontColor')! || '#e2e8f0'
+      if (v('reader_coverColor') !== undefined) coverColor.value = v('reader_coverColor')! || '#0f172a'
+      if (v('bgImage') !== undefined) bgImage.value = v('bgImage')! || ''
+      if (v('reader_flipMode') !== undefined) {
+        const fm = v('reader_flipMode')!
+        if (fm === 'curl') flipMode.value = 'curl'
+        else if (fm === 'cover') flipMode.value = 'cover'
+        else flipMode.value = 'slide'
       }
+      if (v('reader_flipSpeed') !== undefined) flipSpeed.value = v('reader_flipSpeed')! as any || 'medium'
+      if (v('reader_autoPageSpeed') !== undefined) autoPageSpeed.value = parseInt(v('reader_autoPageSpeed')!) || 10
+      if (v('reader_ttsEngine') !== undefined) ttsEngine.value = v('reader_ttsEngine')! as any || 'edge'
+      if (v('reader_ttsVoice') !== undefined) ttsVoice.value = v('reader_ttsVoice')! || ''
+      if (v('reader_ttsRate') !== undefined) ttsRate.value = parseFloat(v('reader_ttsRate')!) || 1.0
+      if (v('reader_highlightColor') !== undefined) highlightColor.value = v('reader_highlightColor')! || '#3b82f6'
+      if (v('reader_ttsMiMoApiKey') !== undefined) ttsMiMoApiKey.value = v('reader_ttsMiMoApiKey')! || ''
+      if (v('reader_ttsMiMoVoice') !== undefined) {
+        const mv = v('reader_ttsMiMoVoice')!
+        ttsMiMoVoice.value = isMimoTtsVoiceId(mv) ? mv : MIMO_TTS_DEFAULT_VOICE
+      }
+      if (v('reader_pageMode') !== undefined) pageMode.value = (v('reader_pageMode')! === 'double' ? 'double' : 'single')
+      if (v('reader_double_page_enabled') !== undefined) pageMode.value = (v('reader_double_page_enabled')! === 'true' ? 'double' : 'single')
+      if (v('reader_doublePageStep') !== undefined) doublePageStep.value = (parseInt(v('reader_doublePageStep')!) === 1 ? 1 : 2)
+      if (v('reader_auto_night_enabled') !== undefined) readerAutoNightEnabled.value = v('reader_auto_night_enabled')! === 'true'
+      if (v('reader_auto_night_custom_policy') !== undefined) {
+        readerAutoNightCustomPolicy.value = v('reader_auto_night_custom_policy')! === 'override' ? 'override' : 'preserve'
+      }
+      if (v('hideKeyHints') !== undefined) showKeyHints.value = (v('hideKeyHints')! !== 'true')
+      if (v('reader_alwaysOnTop') !== undefined) {
+        isAlwaysOnTop.value = (v('reader_alwaysOnTop')! === 'true')
+        window.electronAPI.win.setAlwaysOnTop(isAlwaysOnTop.value)
+      }
+      if (v('reader_nextKeys') !== undefined) { try { nextKeys.value = JSON.parse(v('reader_nextKeys')!) } catch (_) {} }
+      if (v('reader_prevKeys') !== undefined) { try { prevKeys.value = JSON.parse(v('reader_prevKeys')!) } catch (_) {} }
+      if (v('reader_blurAmount') !== undefined) blurAmount.value = parseInt(v('reader_blurAmount')!) || 0
+      if (v('reader_textAlign') !== undefined) textAlign.value = v('reader_textAlign')! === 'justify' ? 'justify' : 'left'
+      if (v('reader_alignBottom') !== undefined) alignBottom.value = v('reader_alignBottom')! === 'true'
+      if (v('webdavUrl') !== undefined) webdavUrl.value = v('webdavUrl')!
+      if (v('webdavDir') !== undefined) webdavDir.value = v('webdavDir')!
+      if (v('webdavUser') !== undefined) webdavUser.value = v('webdavUser')!
+      if (v('webdavPass') !== undefined) webdavPass.value = v('webdavPass')!
+      if (v('webdavSync') !== undefined) webdavSync.value = v('webdavSync')! === 'true'
+      if (v('webdavSyncBookshelf') !== undefined) webdavSyncBookshelf.value = v('webdavSyncBookshelf')! !== 'false'
+      if (v('webdavSyncFiles') !== undefined) webdavSyncFiles.value = v('webdavSyncFiles')! !== 'false'
+      if (v('webdavSyncUISettings') !== undefined) webdavSyncUISettings.value = v('webdavSyncUISettings')! !== 'false'
+      if (v('webdavSyncThemes') !== undefined) webdavSyncThemes.value = v('webdavSyncThemes')! !== 'false'
+      if (v('webdavSyncBackgrounds') !== undefined) webdavSyncBackgrounds.value = v('webdavSyncBackgrounds')! !== 'false'
+      if (v('webdav_sync_reading_stats') !== undefined) webdavSyncReadingStats.value = v('webdav_sync_reading_stats')! !== 'false'
+      if (v('webdavLastSync') !== undefined) webdavLastSync.value = v('webdavLastSync')! || ''
+      if (v('webdavLastLiteSync') !== undefined) webdavLastLiteSync.value = v('webdavLastLiteSync')! || ''
+      if (v('webdavDesktopSettingsDir') !== undefined) webdavDesktopSettingsDir.value = v('webdavDesktopSettingsDir')! || DEFAULT_DESKTOP_SETTINGS_DIR
+      if (v('autoOpenLastRead') !== undefined) autoOpenLastRead.value = v('autoOpenLastRead')! === 'true'
+      if (v('silentUpdate') !== undefined) silentUpdate.value = v('silentUpdate')! === 'true'
+      if (v('reader_sliderMode') !== undefined) sliderMode.value = v('reader_sliderMode')! === 'chapter' ? 'chapter' : 'book'
+      if (v('hud_tl') !== undefined) hudTopLeft.value = v('hud_tl')!
+      if (v('hud_tc') !== undefined) hudTopCenter.value = v('hud_tc')!
+      if (v('hud_tr') !== undefined) hudTopRight.value = v('hud_tr')!
+      if (v('hud_bl') !== undefined) hudBottomLeft.value = v('hud_bl')!
+      if (v('hud_bc') !== undefined) hudBottomCenter.value = v('hud_bc')!
+      if (v('hud_br') !== undefined) hudBottomRight.value = v('hud_br')!
+      if (v('chapterTitleDisplay') !== undefined) chapterTitleDisplay.value = v('chapterTitleDisplay')! as any || 'left'
+      if (v('sidebarCollapsed') !== undefined) sidebarCollapsed.value = v('sidebarCollapsed')! === 'true'
+      if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! as any || 'grid'
+      if (v('bookshelf_show_add_entry') !== undefined) bookshelfShowAddEntry.value = v('bookshelf_show_add_entry')! !== 'false'
+      if (v('home_nav_auto_switch_enabled') !== undefined) homeNavAutoSwitchEnabled.value = v('home_nav_auto_switch_enabled')! !== 'false'
+      if (v('home_nav_manual_mode') !== undefined) homeNavManualMode.value = v('home_nav_manual_mode')! === 'bottom' ? 'bottom' : 'sidebar'
+      if (v('home_bottom_nav_style') !== undefined) homeBottomNavStyle.value = v('home_bottom_nav_style')! || 'compact'
+      if (v('home_nav_portrait_mode') !== undefined) {
+        const nv = v('home_nav_portrait_mode')!
+        homeNavPortraitMode.value = nv === 'sidebar' || nv === 'drawer' ? nv : 'bottom'
+      }
+      if (v('home_nav_landscape_mode') !== undefined) {
+        const nv = v('home_nav_landscape_mode')!
+        homeNavLandscapeMode.value = nv === 'bottom' || nv === 'drawer' ? nv : 'sidebar'
+      }
+      if (v('home_sidebar_presentation') !== undefined) homeSidebarPresentation.value = v('home_sidebar_presentation')! || 'fixed'
+      if (v('home_fixed_sidebar_style') !== undefined) homeFixedSidebarStyle.value = v('home_fixed_sidebar_style')! || 'expanded'
+      if (v('app_theme_mode') !== undefined) {
+        const am = v('app_theme_mode')!
+        appThemeMode.value = am === 'light' || am === 'dark' ? am : 'system'
+      }
+      if (v('app_light_style_variant') !== undefined) {
+        appLightStyleVariant.value = v('app_light_style_variant')! === 'yaobai' ? 'yaobai' : 'yunbai'
+      }
+      if (v('app_dark_style_variant') !== undefined) {
+        appDarkStyleVariant.value = v('app_dark_style_variant')! === 'jiye' ? 'jiye' : 'yemu'
+      }
+      if (v('glass_opacity_percent') !== undefined) {
+        glassOpacityPercent.value = clampGlassOpacity(parseInt(v('glass_opacity_percent')!) || 80)
+      }
+      if (v('reader_pIndent') !== undefined) pIndent.value = parseFloat(v('reader_pIndent')!) || 2
+      if (v('reader_pSpacing') !== undefined) pSpacing.value = parseFloat(v('reader_pSpacing')!) || 0.8
+      if (v('readingTimeTrackingEnabled') !== undefined || v('reading_time_tracking_enabled') !== undefined) readingTimeTrackingEnabled.value = (v('readingTimeTrackingEnabled') || v('reading_time_tracking_enabled')) === 'true'
+      if (v('readingTimeStatsHidden') !== undefined) readingTimeStatsHidden.value = v('readingTimeStatsHidden')! === 'true'
+      if (v('readingStatsDeviceId') !== undefined || v('reading_stats_device_id') !== undefined) readingStatsDeviceId.value = (v('readingStatsDeviceId') || v('reading_stats_device_id')) || ''
+
+      // Load custom themes from themes.json (v8 format)
+      try {
+        customThemes.value = dataStore.themes.value.map(t => {
+          try { return { id: t.id, name: t.name, ...JSON.parse(t.configJson) } }
+          catch { return null }
+        }).filter(Boolean) as any[]
+      } catch (_) {}
       if (!readingStatsDeviceId.value) {
         readingStatsDeviceId.value = crypto.randomUUID()
         await saveSetting('readingStatsDeviceId', readingStatsDeviceId.value)
@@ -366,44 +376,50 @@ export function useSettings() {
   }
 
   const saveAllStyling = () => {
-    saveSetting('reader_fontSize', fontSize.value)
-    saveSetting('reader_lineHeight', lineHeight.value)
-    saveSetting('reader_letterSpacing', letterSpacing.value)
-    saveSetting('reader_fontWeight', fontWeight.value)
-    saveSetting('reader_marginX', marginX.value)
-    saveSetting('reader_marginY', marginY.value)
-    saveSetting('reader_fontFamily', fontFamily.value)
-    saveSetting('reader_fontColor', fontColor.value)
-    saveSetting('reader_coverColor', coverColor.value)
-    saveSetting('bgImage', bgImage.value)
-    saveSetting('reader_flipMode', flipMode.value)
-    saveSetting('reader_pageMode', pageMode.value)
-    saveSetting('reader_double_page_enabled', pageMode.value === 'double' ? 'true' : 'false')
-    saveSetting('reader_double_page_mode', pageMode.value === 'double' ? 'force' : 'auto')
-    saveSetting('reader_doublePageStep', doublePageStep.value)
-    saveSetting('reader_blurAmount', blurAmount.value)
-    saveSetting('reader_textAlign', textAlign.value)
-    saveSetting('reader_alignBottom', alignBottom.value ? 'true' : 'false')
-    saveSetting('hud_tl', hudTopLeft.value)
-    saveSetting('hud_tc', hudTopCenter.value)
-    saveSetting('hud_tr', hudTopRight.value)
-    saveSetting('hud_bl', hudBottomLeft.value)
-    saveSetting('hud_bc', hudBottomCenter.value)
-    saveSetting('hud_br', hudBottomRight.value)
-    saveSetting('chapterTitleDisplay', chapterTitleDisplay.value)
-    saveSetting('reader_sliderMode', sliderMode.value)
-    saveSetting('reader_pIndent', pIndent.value)
-    saveSetting('reader_pSpacing', pSpacing.value)
+    const { setSettings } = useDataStore()
+    setSettings({
+      reader_fontSize: String(fontSize.value),
+      reader_lineHeight: String(lineHeight.value),
+      reader_letterSpacing: String(letterSpacing.value),
+      reader_fontWeight: String(fontWeight.value),
+      reader_marginX: String(marginX.value),
+      reader_marginY: String(marginY.value),
+      reader_fontFamily: fontFamily.value,
+      reader_fontColor: fontColor.value,
+      reader_coverColor: coverColor.value,
+      bgImage: bgImage.value,
+      reader_flipMode: flipMode.value,
+      reader_pageMode: pageMode.value,
+      reader_double_page_enabled: pageMode.value === 'double' ? 'true' : 'false',
+      reader_double_page_mode: pageMode.value === 'double' ? 'force' : 'auto',
+      reader_doublePageStep: String(doublePageStep.value),
+      reader_blurAmount: String(blurAmount.value),
+      reader_textAlign: textAlign.value,
+      reader_alignBottom: alignBottom.value ? 'true' : 'false',
+      hud_tl: hudTopLeft.value,
+      hud_tc: hudTopCenter.value,
+      hud_tr: hudTopRight.value,
+      hud_bl: hudBottomLeft.value,
+      hud_bc: hudBottomCenter.value,
+      hud_br: hudBottomRight.value,
+      chapterTitleDisplay: chapterTitleDisplay.value,
+      reader_sliderMode: sliderMode.value,
+      reader_pIndent: String(pIndent.value),
+      reader_pSpacing: String(pSpacing.value),
+    })
   }
 
   const saveTtsSettings = () => {
-    saveSetting('reader_autoPageSpeed', autoPageSpeed.value)
-    saveSetting('reader_ttsEngine', ttsEngine.value)
-    saveSetting('reader_ttsVoice', ttsVoice.value)
-    saveSetting('reader_ttsRate', ttsRate.value)
-    saveSetting('reader_highlightColor', highlightColor.value)
-    saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value)
-    saveSetting('reader_ttsMiMoVoice', ttsMiMoVoice.value)
+    const { setSettings } = useDataStore()
+    setSettings({
+      reader_autoPageSpeed: String(autoPageSpeed.value),
+      reader_ttsEngine: ttsEngine.value,
+      reader_ttsVoice: ttsVoice.value,
+      reader_ttsRate: String(ttsRate.value),
+      reader_highlightColor: highlightColor.value,
+      reader_ttsMiMoApiKey: ttsMiMoApiKey.value,
+      reader_ttsMiMoVoice: ttsMiMoVoice.value,
+    })
   }
 
   return {
