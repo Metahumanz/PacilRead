@@ -510,17 +510,19 @@ function directorySizeBytes(dirPath: string): number {
   return total
 }
 
-function getStorageSizeInfo(): { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number } {
+function getStorageSizeInfo(): { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number } {
   let databaseBytes = 0
   try {
     databaseBytes = statSync(dbPath).size
   } catch {}
   const chapterTextBytes = directorySizeBytes(getChapterTextRoot())
+  const jsonDataBytes = directorySizeBytes(DATA_DIR)
   return {
     sizeBytes: databaseBytes,
     databaseBytes,
     chapterTextBytes,
-    totalBytes: databaseBytes + chapterTextBytes
+    jsonDataBytes,
+    totalBytes: databaseBytes + chapterTextBytes + jsonDataBytes
   }
 }
 
@@ -948,6 +950,55 @@ async function migrateSqliteToJson(force = false): Promise<boolean> {
   }
 }
 
+// Strip inline body_text/body_html from SQLite chapters that have already been
+// exported to external .txt.gz files. Safe to call repeatedly and at any time —
+// only clears text whose canonical copy lives outside the database.
+function trimSqliteInlineText(): void {
+  if (!db) return
+  try {
+    const columns = getTableColumns(db, 'chapters')
+    const hasLegacyBody = columns.includes('body')
+    const hasBodyHtml = columns.includes('body_html')
+
+    // Only clear inline text for chapters where the canonical text is already external
+    db.run(
+      "UPDATE chapters SET body_text = '' WHERE body_text_storage = 'file_gzip' AND body_text IS NOT NULL AND body_text <> ''"
+    )
+    const clearedRows = db.getRowsModified()
+
+    if (hasBodyHtml) {
+      db.run("UPDATE chapters SET body_html = '' WHERE body_html IS NOT NULL AND body_html <> ''")
+    }
+    if (hasLegacyBody) {
+      try { db.run("UPDATE chapters SET body = ''") } catch (_) {}
+    }
+
+    if (clearedRows > 0) {
+      saveDatabase()
+      console.log(`[Trim] Cleared inline text for ${clearedRows} chapters`)
+    } else {
+      console.log('[Trim] No db-stored inline text to clear')
+    }
+
+    // VACUUM if freelist is above threshold — always worth checking
+    const freelist = getFreePageCount()
+    if (freelist >= VACUUM_FREE_PAGE_THRESHOLD) {
+      console.log(`[Trim] Freelist ${freelist} pages, running VACUUM...`)
+      try {
+        db.run('VACUUM')
+        saveDatabase()
+        console.log('[Trim] VACUUM complete')
+      } catch (e) {
+        console.error('[Trim] VACUUM failed:', e)
+      }
+    } else {
+      console.log(`[Trim] Freelist ${freelist} pages, below threshold — skipping VACUUM`)
+    }
+  } catch (e) {
+    console.error('[Trim] Failed:', e)
+  }
+}
+
 // Requirement 1: Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
@@ -971,6 +1022,8 @@ app.whenReady().then(async () => {
     console.log('Database initialized successfully')
     // Migrate SQLite data to JSON files (v7 → v8)
     await migrateSqliteToJson()
+    // Always trim inline text from SQLite — even if migration was already done
+    trimSqliteInlineText()
   } catch (error) {
     console.error('Database init failed:', String(error))
     dialog.showErrorBox('数据库初始化失败', String(error))

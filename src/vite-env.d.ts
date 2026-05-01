@@ -35,7 +35,7 @@ export interface ElectronAPI {
       remappedBookmarks: number
       unmatchedChapters: number
     }>
-    getSize: () => Promise<{ sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }>
+    getSize: () => Promise<{ sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }>
     getBookChapters: (bookId: number) => Promise<Array<{
       id: number
       title: string
@@ -51,8 +51,8 @@ export interface ElectronAPI {
       repairedChapters: number
       clearedBodyHtml: number
       wasVacuumed: boolean
-      before: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
-      after: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
+      before: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }
+      after: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }
     }>
     deleteBook: (bookId: number) => Promise<{ success: boolean }>
     listChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string; sizeBytes: number }>>

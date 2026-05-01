@@ -62,6 +62,7 @@ const {
 const appVersion = ref('')
 const dbSize = ref('')
 const dbTextSize = ref('')
+const dbJsonSize = ref('')
 const dbTotalSize = ref('')
 const updateStatus = ref('')
 const updateDetail = ref('')
@@ -96,6 +97,7 @@ const refreshDbSize = async () => {
   const sz = await window.electronAPI.db.getSize()
   dbSize.value = formatBytes(sz.databaseBytes ?? sz.sizeBytes)
   dbTextSize.value = formatBytes(sz.chapterTextBytes)
+  dbJsonSize.value = formatBytes(sz.jsonDataBytes ?? 0)
   dbTotalSize.value = formatBytes(sz.totalBytes ?? sz.sizeBytes)
 }
 
@@ -180,30 +182,35 @@ const testWebdav = async () => {
   if (!webdavUrl.value) { webdavTestResult.value = '❌ 请填写服务器地址'; return }
   webdavTesting.value = true
   webdavTestResult.value = '连接中...'
-  await saveWebdav()
-  const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-  const res = await window.electronAPI.webdav.request({
-    url: webdavUrl.value, method: 'PROPFIND', headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }
-  })
-  if (res.error) webdavTestResult.value = '❌ 连接异常: ' + res.error
-  else if (res.status && res.status >= 200 && res.status < 300) {
-    webdavTestResult.value = '✅ 连接成功！'
-    let syncBaseURL = webdavUrl.value
-    if (webdavDir.value) syncBaseURL += webdavDir.value
-    const pacilReadBaseUrl = buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
-    if (webdavDir.value) {
-      await window.electronAPI.webdav.request({ url: syncBaseURL, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+  try {
+    await saveWebdav()
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    const res = await window.electronAPI.webdav.request({
+      url: webdavUrl.value, method: 'PROPFIND', headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }
+    })
+    if (res.error) webdavTestResult.value = '❌ 连接异常: ' + res.error
+    else if (res.status && res.status >= 200 && res.status < 300) {
+      webdavTestResult.value = '✅ 连接成功！'
+      let syncBaseURL = webdavUrl.value
+      if (webdavDir.value) syncBaseURL += webdavDir.value
+      const pacilReadBaseUrl = buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
+      if (webdavDir.value) {
+        await window.electronAPI.webdav.request({ url: syncBaseURL, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      }
+      await window.electronAPI.webdav.request({ url: syncBaseURL + 'bookProgress/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: pacilReadBaseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}chapter_text/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}readingStats/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+      await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/${DESKTOP_DATABASE_DIR}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
     }
-    await window.electronAPI.webdav.request({ url: syncBaseURL + 'bookProgress/', method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: pacilReadBaseUrl, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}chapter_text/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}readingStats/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/backgrounds/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
-    await window.electronAPI.webdav.request({ url: `${pacilReadBaseUrl}${webdavDesktopSettingsDir.value}/${DESKTOP_DATABASE_DIR}/`, method: 'MKCOL', headers: { 'Authorization': `Basic ${auth}` } })
+    else webdavTestResult.value = `❌失败(HTTP ${res.status}): ` + (res.data ? res.data.substring(0, 30) : '')
+  } catch (e: any) {
+    webdavTestResult.value = '❌ 错误: ' + (e?.message || String(e))
+  } finally {
+    webdavTesting.value = false
   }
-  else webdavTestResult.value = `❌失败(HTTP ${res.status}): ` + (res.data ? res.data.substring(0, 30) : '')
-  webdavTesting.value = false
 }
 
 const toggleKeyHints = async () => {
@@ -982,7 +989,7 @@ onMounted(async () => {
   await fetchBooks()
   await refreshReadingStatsSummary()
   try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
-  try { await refreshDbSize() } catch { dbSize.value = '—'; dbTextSize.value = '—'; dbTotalSize.value = '—' }
+  try { await refreshDbSize() } catch { dbSize.value = '—'; dbTextSize.value = '—'; dbJsonSize.value = '—'; dbTotalSize.value = '—' }
   window.electronAPI.updater.onStatus((data) => {
     switch (data.status) {
       case 'checking': updateStatus.value = '🔍 正在检查...'; break
@@ -1053,6 +1060,7 @@ onMounted(async () => {
       :appVersion="appVersion"
       :dbSize="dbSize"
       :dbTextSize="dbTextSize"
+      :dbJsonSize="dbJsonSize"
       :dbTotalSize="dbTotalSize"
       :onOpenMigration="openMigrationConfirm"
       :updateStatus="updateStatus"
@@ -1123,7 +1131,7 @@ onMounted(async () => {
           <!-- Confirm stage -->
           <template v-if="!migrationRunning && !migrationDone && !migrationError">
             <p class="mt-3 text-[13px] app-muted leading-6">
-              即将把库内章节正文导出为 GZIP 文件，并清空 reader.db 内的冗余正文后回收空间。
+              即将把库内章节正文导出为 GZIP 文件，清理 SQLite 与 JSON 中的冗余数据并回收空间。
             </p>
             <div class="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
               <p class="text-[12px] text-amber-200 font-semibold leading-5">
@@ -1168,7 +1176,7 @@ onMounted(async () => {
           <!-- Done stage -->
           <template v-if="migrationDone">
             <p class="mt-3 text-[13px] app-positive-text leading-6">
-              数据库已完成 v7 深度瘦身。
+              数据库已完成瘦身，冗余正文已清理。
             </p>
             <div class="mt-6">
               <button

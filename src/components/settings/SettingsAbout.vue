@@ -6,6 +6,7 @@ const {
   appVersion,
   dbSize,
   dbTextSize,
+  dbJsonSize,
   dbTotalSize,
   onOpenMigration,
   updateStatus,
@@ -21,6 +22,7 @@ const {
   appVersion: string
   dbSize: string
   dbTextSize: string
+  dbJsonSize: string
   dbTotalSize: string
   onOpenMigration: () => void
   updateStatus: string
@@ -76,7 +78,7 @@ const { silentUpdate } = settings
           <div>
             <div class="text-[14px] font-medium app-title">本地数据库</div>
             <div class="text-[12px] app-muted mt-0.5">
-              reader.db {{ dbSize || '—' }} · 正文文件 {{ dbTextSize || '—' }} · 合计 {{ dbTotalSize || '—' }} · v7
+              reader.db {{ dbSize || '—' }} · 正文 {{ dbTextSize || '—' }} · JSON {{ dbJsonSize || '—' }} · 合计 {{ dbTotalSize || '—' }} · v8
             </div>
           </div>
         </div>

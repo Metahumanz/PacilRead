@@ -1,5 +1,5 @@
+import { toRaw } from 'vue'
 import { useDataStore } from './useDataStore'
-import { useSettings } from './useSettings'
 
 // ---- v8 manifest types ----
 interface ManifestFileEntry {
@@ -23,10 +23,11 @@ const ENTITY_TYPES = ['books', 'chapters', 'rules', 'themes', 'bookmarks', 'read
 
 // ---- WebDAV path helpers ----
 function getWebdavContext() {
-  const settings = useSettings()
-  const url = settings.webdavUrl.value
-  const user = settings.webdavUser.value
-  const pass = settings.webdavPass.value
+  const store = useDataStore()
+  const s = store.settingsMap.value
+  const url = s['webdavUrl'] || ''
+  const user = s['webdavUser'] || ''
+  const pass = s['webdavPass'] || ''
   return {
     url,
     user,
@@ -380,7 +381,7 @@ export async function incrementalRestoreV8(
           )
           ;(dataStore as any)[entity].value = merged
           if (changes > 0) {
-            await window.electronAPI.data.writeEntity(entity, merged)
+            await window.electronAPI.data.writeEntity(entity, toRaw(merged))
             mergedFiles.push(fileName)
           }
         }

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, toRaw } from 'vue'
 
 // ---- v8 JSON schema types ----
 
@@ -97,8 +97,9 @@ function computeNextId<T extends { id: number }>(items: T[]): number {
 
 // ---- Persistence helpers ----
 
+// toRaw strips Vue reactive proxies so contextBridge can serialize the plain data
 async function persistEntity(entityType: EntityType, data: unknown): Promise<void> {
-  await window.electronAPI.data.writeEntity(entityType, data)
+  await window.electronAPI.data.writeEntity(entityType, toRaw(data))
 }
 
 async function persistBooks() { await persistEntity('books', books.value) }
