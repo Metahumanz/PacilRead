@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.6.1',
+    date: '2026-05-01',
+    changes: [
+      'WebDAV 同步新增封面文件上传/下载：全量备份、全量恢复、增量备份、增量恢复均自动同步封面图片至 PacilRead/covers/ 目录，与移动端目录结构对齐',
+      '新增 getCoverFilenames/uploadCovers/downloadCovers 封面资产辅助函数，基于 books 数据中的 coverFile 字段自动识别需同步的封面文件',
+      '增量恢复仅在 books.json 有变更时才触发封面下载，避免不必要的网络请求'
+    ]
+  },
+  {
     version: '0.5.2',
     date: '2026-05-01',
     changes: [

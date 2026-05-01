@@ -102,6 +102,84 @@ async function webdavFileExists(path: string): Promise<boolean> {
   } catch { return false }
 }
 
+// ---- Cover asset helpers ----
+
+async function getCoversDir(): Promise<string> {
+  const userData = await window.electronAPI.app.getPath('userData')
+  return `${userData.replace(/\\/g, '/')}/covers`
+}
+
+function getCoverFilenames(books: any[]): string[] {
+  const filenames = new Set<string>()
+  for (const book of books) {
+    if (book.coverFile) {
+      filenames.add(book.coverFile)
+    }
+  }
+  return [...filenames]
+}
+
+async function uploadCovers(
+  books: any[],
+  onProgress?: (message: string) => void,
+): Promise<string[]> {
+  const uploaded: string[] = []
+  const coversDir = await getCoversDir()
+  const ctx = getWebdavContext()
+  const filenames = getCoverFilenames(books)
+
+  for (const filename of filenames) {
+    const localPath = `${coversDir}/${filename}`
+    try {
+      const response = await window.electronAPI.webdav.uploadFile(
+        localPath,
+        remoteUrl(`covers/${encodeURIComponent(filename)}`),
+        ctx.auth,
+      )
+      if (response.success) {
+        uploaded.push(filename)
+      } else {
+        console.error(`Failed to upload cover ${filename}:`, response.error)
+      }
+    } catch (e) {
+      console.error(`Failed to upload cover ${filename}:`, e)
+    }
+  }
+  if (uploaded.length > 0) onProgress?.(`已上传 ${uploaded.length} 个封面文件`)
+  return uploaded
+}
+
+async function downloadCovers(
+  books: any[],
+  onProgress?: (message: string) => void,
+): Promise<string[]> {
+  const downloaded: string[] = []
+  const coversDir = await getCoversDir()
+  const ctx = getWebdavContext()
+  const filenames = getCoverFilenames(books)
+
+  for (const filename of filenames) {
+    const localPath = `${coversDir}/${filename}`
+    try {
+      const response = await window.electronAPI.webdav.downloadFile(
+        remoteUrl(`covers/${encodeURIComponent(filename)}`),
+        localPath,
+        ctx.auth,
+      )
+      if (response.success) {
+        downloaded.push(filename)
+      } else {
+        // File may not exist remotely — that's okay for optional covers
+        console.warn(`Cover not found remotely: ${filename}`)
+      }
+    } catch (e) {
+      console.error(`Failed to download cover ${filename}:`, e)
+    }
+  }
+  if (downloaded.length > 0) onProgress?.(`已下载 ${downloaded.length} 个封面文件`)
+  return downloaded
+}
+
 // ---- Manifest operations ----
 
 async function generateManifest(): Promise<Manifest> {
@@ -117,8 +195,7 @@ async function generateManifest(): Promise<Manifest> {
     }
   }
 
-  // TODO: Add asset manifests (covers, books, chapter_text zips)
-  // These would be generated during full/incremental backup
+  // TODO: Add asset manifests for chapter_text zips (covers are already synced via uploadCovers/downloadCovers)
 
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -220,6 +297,10 @@ export async function fullBackupV8(
       await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
     }
 
+    // Upload cover image files
+    onProgress?.('正在上传封面文件...')
+    await uploadCovers(entities.books, onProgress)
+
     onProgress?.('全量备份完成!')
     return { success: true }
   } catch (e) {
@@ -267,6 +348,12 @@ export async function fullRestoreV8(
     await dataStore.replaceAllEntities(entities as any)
     dataStore.dataLoaded.value = true
 
+    // Download cover image files
+    if (entities.books) {
+      onProgress?.('正在下载封面文件...')
+      await downloadCovers(entities.books, onProgress)
+    }
+
     onProgress?.('全量恢复完成!')
     return { success: true }
   } catch (e) {
@@ -289,10 +376,11 @@ export async function incrementalBackupV8(
     onProgress?.('正在下载远程清单...')
     const remoteManifest = await downloadManifest('sync')
 
+    const entities = dataStore.getAllEntities()
+
     if (!remoteManifest) {
       // First time - do full upload to sync/
       onProgress?.('首次同步，上传全部文件...')
-      const entities = dataStore.getAllEntities()
       for (const entity of ENTITY_TYPES) {
         onProgress?.(`正在上传 ${entity}.json...`)
         const jsonStr = JSON.stringify(entities[entity], null, 2)
@@ -304,7 +392,6 @@ export async function incrementalBackupV8(
     } else {
       // Find changed files
       const changed = findChangedFiles(localManifest, remoteManifest)
-      const entities = dataStore.getAllEntities()
 
       for (const fileName of changed) {
         const entity = fileName.replace('.json', '')
@@ -321,6 +408,11 @@ export async function incrementalBackupV8(
         uploadedFiles.push('manifest.json')
       }
     }
+
+    // Upload cover image files
+    onProgress?.('正在上传封面文件...')
+    const coversUploaded = await uploadCovers(entities.books, onProgress)
+    coversUploaded.forEach(f => uploadedFiles.push(`covers/${f}`))
 
     return { success: true, uploadedFiles }
   } catch (e) {
@@ -391,6 +483,13 @@ export async function incrementalRestoreV8(
     // Reload everything from disk to ensure consistency
     dataStore.dataLoaded.value = false
     await dataStore.loadAllData()
+
+    // Download cover image files if books were merged
+    if (mergedFiles.includes('books.json')) {
+      onProgress?.('正在下载封面文件...')
+      const coversDownloaded = await downloadCovers(dataStore.books.value, onProgress)
+      coversDownloaded.forEach(f => mergedFiles.push(`covers/${f}`))
+    }
 
     return { success: true, mergedFiles }
   } catch (e) {
