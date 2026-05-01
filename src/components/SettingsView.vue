@@ -5,6 +5,7 @@ import {
   DESKTOP_DATABASE_DIR,
   buildPacilReadBaseUrl,
   clearLocalReadingStats,
+  extractHrefValues,
   fetchReadingStatsOverview,
   getCurrentDesktopSettingsSnapshot,
   getAllLocalReadingStatsRows,
@@ -464,6 +465,159 @@ const downloadCoverFiles = async (auth: string) => {
   return downloaded
 }
 
+const uploadBookChapterTextZips = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const bookIds = await window.electronAPI.db.getBookIdsWithFileGzipChapters()
+  if (bookIds.length === 0) return { uploaded: 0, total: 0 }
+
+  const chapterBaseUrl = baseUrl + 'chapter_text/'
+  await ensureWebdavCollection(chapterBaseUrl, auth)
+
+  let uploaded = 0
+  for (let i = 0; i < bookIds.length; i++) {
+    const bookId = bookIds[i]
+    webdavSyncStatus.value = `上传章节正文 ZIP (${i + 1}/${bookIds.length})...`
+    const zipPath = await window.electronAPI.db.createBookChapterTextZip(bookId)
+    if (!zipPath) continue
+    const remotePath = chapterBaseUrl + `chapters_${bookId}.zip`
+    assertUploadSucceeded(
+      await window.electronAPI.webdav.uploadFile(zipPath, remotePath, auth),
+      '上传章节正文 ZIP'
+    )
+    uploaded += 1
+  }
+  return { uploaded, total: bookIds.length }
+}
+
+const downloadChapterTextZipsAndFiles = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+  const appDataPath = await window.electronAPI.app.getPath('userData')
+  const bookIds = await window.electronAPI.db.getBookIdsWithFileGzipChapters()
+  let downloaded = 0
+  let missing = 0
+
+  for (let i = 0; i < bookIds.length; i++) {
+    const bookId = bookIds[i]
+    webdavSyncStatus.value = `下载章节正文 ZIP (${i + 1}/${bookIds.length})...`
+
+    const zipRemotePath = baseUrl + 'chapter_text/chapters_' + bookId + '.zip'
+    const tempZipPath = appDataPath + '/chapters_' + bookId + '.tmp.zip'
+    const zipResult = await window.electronAPI.webdav.downloadFile(zipRemotePath, tempZipPath, auth)
+    if (!zipResult.error) {
+      await window.electronAPI.db.extractBookChapterTextZip(tempZipPath)
+      downloaded += 1
+      continue
+    }
+    missing += 1
+  }
+
+  // Fallback: individual file download for any books still missing chapters
+  if (missing > 0) {
+    const files = await window.electronAPI.db.getRequiredChapterTextFiles()
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      webdavSyncStatus.value = `下载章节正文散文件 (${i + 1}/${files.length})...`
+      const remotePath = baseUrl + 'chapter_text/' + encodeRemoteRelativePath(file.relativePath)
+      const result = await window.electronAPI.webdav.downloadFile(remotePath, file.localPath, auth)
+      if (!result.error) {
+        downloaded += 1
+      }
+    }
+  }
+
+  const stillMissing = await window.electronAPI.db.getMissingChapterTextFiles()
+  return { downloaded, missing: Math.max(missing, stillMissing.length), total: bookIds.length }
+}
+
+const cleanRemoteOrphans = async (auth: string) => {
+  const baseUrl = getCurrentPacilReadBaseUrl()
+
+  // 1. Clean orphan chapter text ZIPs
+  try {
+    const chapterTextDir = baseUrl + 'chapter_text/'
+    const chapterFilesResult = await window.electronAPI.webdav.request({
+      url: chapterTextDir, method: 'PROPFIND',
+      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
+    })
+    if (chapterFilesResult.status === 207 && chapterFilesResult.data) {
+      const hrefs = extractHrefValues(chapterFilesResult.data)
+      const zipFiles = hrefs.filter((f: string) => /chapters_\d+\.zip$/.test(f))
+      const bookIds = await window.electronAPI.db.getBookIdsWithFileGzipChapters()
+      const bookIdSet = new Set(bookIds)
+      for (const zipFile of zipFiles) {
+        const match = zipFile.match(/chapters_(\d+)\.zip$/)
+        if (match) {
+          const remoteBookId = parseInt(match[1])
+          if (!bookIdSet.has(remoteBookId)) {
+            await window.electronAPI.webdav.request({
+              url: zipFile, method: 'DELETE',
+              headers: { Authorization: `Basic ${auth}` }
+            })
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 2. Clean orphan covers
+  try {
+    const coversDir = baseUrl + 'covers/'
+    const coversResult = await window.electronAPI.webdav.request({
+      url: coversDir, method: 'PROPFIND',
+      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
+    })
+    if (coversResult.status === 207 && coversResult.data) {
+      const coverFiles = extractHrefValues(coversResult.data)
+      const usedCovers: string[] = []
+      const coverRows = await window.electronAPI.db.query(
+        'SELECT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ""'
+      ) as any[]
+      for (const row of coverRows) {
+        const fileName = getFileNameFromPath(String(row.cover_path || ''))
+        if (fileName) usedCovers.push(fileName)
+      }
+      const usedSet = new Set(usedCovers)
+      for (const coverFile of coverFiles) {
+        const fileName = coverFile.split('/').pop() || ''
+        if (fileName && !usedSet.has(fileName)) {
+          await window.electronAPI.webdav.request({
+            url: coverFile, method: 'DELETE',
+            headers: { Authorization: `Basic ${auth}` }
+          })
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3. Clean orphan book source files
+  try {
+    const booksDir = baseUrl + 'books/'
+    const booksResult = await window.electronAPI.webdav.request({
+      url: booksDir, method: 'PROPFIND',
+      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
+    })
+    if (booksResult.status === 207 && booksResult.data) {
+      const bookFiles = extractHrefValues(booksResult.data)
+      const usedBooks: string[] = []
+      const bookRows = await window.electronAPI.db.query('SELECT path FROM books') as any[]
+      for (const row of bookRows) {
+        const fileName = String(row.path || '').split(/[\\/]/).pop()
+        if (fileName) usedBooks.push(fileName)
+      }
+      const usedSet = new Set(usedBooks)
+      for (const bookFile of bookFiles) {
+        const fileName = bookFile.split('/').pop() || ''
+        if (fileName && !usedSet.has(fileName)) {
+          await window.electronAPI.webdav.request({
+            url: bookFile, method: 'DELETE',
+            headers: { Authorization: `Basic ${auth}` }
+          })
+        }
+      }
+    }
+  } catch (_) {}
+}
+
 const refreshReadingStatsSummary = async () => {
   readingStatsLoading.value = true
   try {
@@ -575,6 +729,8 @@ const fullBackup = async () => {
         await window.electronAPI.webdav.uploadFile(dbPath, baseUrl + 'reader.db', auth),
         '上传共享数据库'
       )
+      await uploadBookChapterTextZips(auth)
+      // Also upload individual files for pre-2026-05 client compatibility
       await uploadChapterTextFiles(auth)
       await uploadCoverFiles(auth)
     }
@@ -602,6 +758,9 @@ const fullBackup = async () => {
       webdavSyncStatus.value = '上传阅读统计...'
       await uploadReadingStatsSnapshot()
     }
+
+    webdavSyncStatus.value = '清理远端孤立文件...'
+    await cleanRemoteOrphans(auth)
 
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
@@ -636,7 +795,7 @@ const fullRestore = async () => {
       await window.electronAPI.db.importFromFile(dstPath)
       await restoreLocalOnlySettings(preservedSettings)
       webdavSyncStatus.value = '恢复章节正文...'
-      chapterTextRestore = await downloadChapterTextFiles(auth)
+      chapterTextRestore = await downloadChapterTextZipsAndFiles(auth)
       await downloadCoverFiles(auth)
     }
 
@@ -692,6 +851,7 @@ const incrementalBackup = async () => {
         await window.electronAPI.webdav.uploadFile(litePath, getDesktopDatabaseBaseUrl() + 'reader_lite.db', auth),
         '上传增量数据库'
       )
+      await uploadBookChapterTextZips(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -736,6 +896,9 @@ const incrementalBackup = async () => {
       webdavSyncStatus.value = '上传阅读统计...'
       await uploadReadingStatsSnapshot()
     }
+
+    webdavSyncStatus.value = '清理远端孤立文件...'
+    await cleanRemoteOrphans(auth)
 
     webdavLastLiteSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
