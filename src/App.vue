@@ -3,6 +3,7 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useSettings } from './composables/useSettings'
 import { useAppTheme } from './composables/useAppTheme'
 import { hasReadingStatsHistory } from './composables/useReadingStats'
+import { useDataStore } from './composables/useDataStore'
 import type { BookmarkTarget } from './composables/useBookmarks'
 import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
@@ -214,6 +215,10 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
       showQuitConfirm.value = true
       return
     }
+    if (currentView.value === 'reader') {
+      goBack()
+      return
+    }
   } else if (e.key === 'Enter' && showQuitConfirm.value) {
     window.electronAPI.app.quit()
   }
@@ -245,9 +250,11 @@ onMounted(async () => {
   
   if (autoOpenLastRead.value) {
     try {
-      const b = await window.electronAPI.db.query("SELECT id FROM books ORDER BY last_read DESC LIMIT 1")
-      if (b[0] && b[0].id) {
-        selectedBookId.value = b[0].id
+      const dataStore2 = useDataStore()
+      if (!dataStore2.dataLoaded.value) await dataStore2.loadAllData()
+      const sortedBooks = dataStore2.getBooksSorted()
+      if (sortedBooks.length > 0) {
+        selectedBookId.value = sortedBooks[0].id
         selectedBookmarkTarget.value = null
         currentView.value = 'reader'
       }
