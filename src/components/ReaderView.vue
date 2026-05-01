@@ -10,6 +10,7 @@ import { useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
+import { useDataStore } from '../composables/useDataStore'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -32,7 +33,7 @@ interface Chapter {
   body_text_storage?: string
   body_text_missing?: number
 }
-interface Book { id: number; title: string; author: string | null; path: string; progress_index: number; progress_offset: number; last_read?: string; reading_stats_key: string }
+interface Book { id: number; title: string; author: string | null; bookType: string; progressIndex: number; progressOffset: number; lastReadAt: number; readingStatsKey: string }
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
 const emit = defineEmits<{
@@ -97,7 +98,7 @@ const readingTimeTracker = useReadingTimeTracker({
     return {
       title: book.value.title,
       author: book.value.author,
-      reading_stats_key: book.value.reading_stats_key,
+      reading_stats_key: book.value.readingStatsKey,
     }
   }),
 })
@@ -111,10 +112,21 @@ const toggleAlwaysOnTop = () => {
 // ---- Data fetch ----
 const fetchBook = async () => {
   try {
-    const r = await window.electronAPI.db.query('SELECT * FROM books WHERE id = ?', [props.bookId])
-    if (Array.isArray(r) && r.length > 0) {
-      book.value = r[0] as Book
-      currentChapterIndex.value = book.value.progress_index || 0
+    const dataStore = useDataStore()
+    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
+    const b = dataStore.getBook(props.bookId)
+    if (b) {
+      book.value = {
+        id: b.id,
+        title: b.title,
+        author: b.author,
+        bookType: b.bookType,
+        progressIndex: b.progressIndex,
+        progressOffset: b.progressOffset,
+        lastReadAt: b.lastReadAt,
+        readingStatsKey: b.readingStatsKey,
+      }
+      currentChapterIndex.value = b.progressIndex || 0
     }
   } catch (e) { console.error(e) }
 }
@@ -145,8 +157,12 @@ const nextBody = computed(() => nextChapterData.value ? applyReplacements(nextCh
 const saveProgress = async () => {
   if (!book.value) return
   try {
-    await window.electronAPI.db.query('UPDATE books SET progress_index = ?, progress_offset = ?, last_read = ? WHERE id = ?',
-      [currentChapterIndex.value, pagination.currentPage.value, new Date().toISOString(), props.bookId])
+    const { updateBook } = useDataStore()
+    await updateBook(props.bookId, {
+      progressIndex: currentChapterIndex.value,
+      progressOffset: pagination.currentPage.value,
+      lastReadAt: Date.now(),
+    })
     
     uploadProgressToWebdav({
       bookId: props.bookId,
@@ -230,7 +246,7 @@ const handleCreateBookmark = async () => {
   try {
     await createBookmark({
       bookId: props.bookId,
-      bookIdentity: book.value.reading_stats_key,
+      bookIdentity: book.value.readingStatsKey,
       bookTitle: book.value.title,
       bookAuthor: book.value.author || '',
       chapterOrderIndex: currentChapterData.value.order_index,
@@ -335,7 +351,7 @@ const downloadProgressFromWebdav = async () => {
     const res = await window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/' + encodeURIComponent(filename), method: 'GET', headers: { 'Authorization': `Basic ${auth}` } })
     if (res.status === 200 && res.data) {
       const remote = JSON.parse(res.data)
-      const localTime = book.value.last_read ? new Date(book.value.last_read).getTime() : 0
+      const localTime = book.value.lastReadAt ? new Date(book.value.lastReadAt).getTime() : 0
       const isLocalFresh = currentChapterIndex.value === 0 && currentPage.value === 0
       if (remote.durChapterTime && (remote.durChapterTime > localTime + 5000 || isLocalFresh)) {
         if (remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
@@ -420,10 +436,15 @@ const toggleImmersiveMode = () => {
   if (props.isImmersive) { setTimeout(recalc, 400); setTimeout(recalc, 800) }
 }
 const handleGoBack = async () => {
-  await readingTimeTracker.stop()
-  saveProgress()
-  closeAll()
-  emit('go-back')
+  try {
+    await readingTimeTracker.stop()
+    saveProgress()
+    closeAll()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    emit('go-back')
+  }
 }
 
 const openBookStats = () => {
@@ -476,7 +497,7 @@ onMounted(async () => {
     pendingWebdavPos.value = Math.max(0, props.initialBookmark.chapterOffset)
     currentPage.value = 0
   } else if (book.value) {
-    currentPage.value = book.value.progress_offset || 0
+    currentPage.value = book.value.progressOffset || 0
   }
   if (!props.initialBookmark) {
     await downloadProgressFromWebdav()
