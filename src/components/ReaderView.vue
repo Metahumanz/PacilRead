@@ -4,6 +4,7 @@ import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useTTS } from '../composables/useTTS'
 import { usePagination } from '../composables/usePagination'
+import { useReaderPaginator } from '../composables/useReaderPaginator'
 import { useRules } from '../composables/useRules'
 import { useHUD } from '../composables/useHUD'
 import { useSync } from '../composables/useSync'
@@ -178,11 +179,32 @@ const saveProgress = async () => {
   } catch (e) { console.error(e) }
 }
 
+// ---- Reader Paginator (async prewarm + cache) ----
+const paginator = useReaderPaginator({
+  containerRef, fontSize, lineHeight, letterSpacing, fontWeight, fontFamily,
+  textAlign, marginX, marginY, pageMode, alignBottom, pIndent, pSpacing,
+})
+
+const pagesResult = computed(() => {
+  if (!currentChapterData.value) return null
+  const snap = paginator.capturePaginationSnapshot(currentChapterData.value.id)
+  return paginator.getPagesForChapter(currentChapterData.value.id, snap.hash)
+})
+
 // ---- Pagination (composable) ----
 const pagination = usePagination({
   contentRef, containerRef, prevContentRef, prevContainerRef,
   pageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor,
   chapters, currentChapterIndex, saveProgress,
+  precomputedPages: computed(() => pagesResult.value?.slices ?? null),
+  pageCacheHit: computed(() => pagesResult.value?.isCacheHit ?? false),
+  onBeforeChapterChange: (newIndex: number) => {
+    const ch = chapters.value[newIndex]
+    if (!ch) return
+    const snap = paginator.capturePaginationSnapshot(ch.id)
+    const body = applyReplacements(ch.body)
+    paginator.prewarmChapterText(ch.id, body, ch.body_text, ch.title, snap)
+  },
 })
 const {
   currentPage, totalPages, containerWidth, pendingWebdavPos,
@@ -505,6 +527,20 @@ onMounted(async () => {
   await readingTimeTracker.start()
   loading.value = false
   setTimeout(calculatePages, 300)
+  setTimeout(() => {
+    if (currentChapterData.value) {
+      const snap = paginator.capturePaginationSnapshot(currentChapterData.value.id)
+      paginator.prewarmChapterText(currentChapterData.value.id, currentBody.value, currentChapterData.value.body_text, currentChapterData.value.title, snap)
+    }
+    if (prevChapterData.value) {
+      const snap = paginator.capturePaginationSnapshot(prevChapterData.value.id)
+      paginator.prewarmChapterText(prevChapterData.value.id, prevBody.value, prevChapterData.value.body_text, prevChapterData.value.title, snap)
+    }
+    if (nextChapterData.value) {
+      const snap = paginator.capturePaginationSnapshot(nextChapterData.value.id)
+      paginator.prewarmChapterText(nextChapterData.value.id, nextBody.value, nextChapterData.value.body_text, nextChapterData.value.title, snap)
+    }
+  }, 400)
   window.addEventListener('resize', recalc)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('blur', handleWindowBlur)
@@ -588,7 +624,7 @@ onUnmounted(async () => {
 
         <div class="slide">
           <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px`, justifyContent: alignBottom ? 'flex-end' : 'flex-start' }">
-            <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim }" :style="{
+            <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="{
               ...textStyle, transform: `translateX(${pageOffset})`,
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
               columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
@@ -665,7 +701,7 @@ onUnmounted(async () => {
           <Transition name="sf"><SearchPanel v-if="showSearch" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
-          <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); recalc(); }" /></Transition>
+          <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
           <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>
@@ -730,6 +766,8 @@ onUnmounted(async () => {
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
 .pg-ct { height:100%; column-fill:auto; }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
+.pg-cache-fade { animation: paginator-fade-in 0.1s ease-out; }
+@keyframes paginator-fade-in { from { opacity: 0.85; } to { opacity: 1; } }
 .ch-title { font-weight:700; margin-bottom:1.5em; opacity:0.85; }
 .ch-body { height:100%; }
 .ch-body :deep(p) { text-indent: var(--p-indent); margin-bottom: var(--p-spacing); }

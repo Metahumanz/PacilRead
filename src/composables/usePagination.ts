@@ -1,4 +1,5 @@
 import { ref, computed, nextTick, type Ref } from 'vue'
+import type { PageSlice } from '../types/pagination'
 
 export function usePagination(opts: {
   contentRef: Ref<HTMLElement | null>
@@ -14,6 +15,9 @@ export function usePagination(opts: {
   chapters: Ref<any[]>
   currentChapterIndex: Ref<number>
   saveProgress: () => void
+  precomputedPages?: Ref<PageSlice[] | null>
+  pageCacheHit?: Ref<boolean>
+  onBeforeChapterChange?: (newIndex: number) => void
 }) {
   const currentPage = ref(0)
   const totalPages = ref(1)
@@ -65,7 +69,31 @@ export function usePagination(opts: {
   }
 
   const calculatePages = () => {
-    if (!opts.contentRef.value || !opts.containerRef.value) return
+    if (!opts.containerRef.value) return
+
+    // Use precomputed pages when available
+    if (opts.precomputedPages?.value && opts.precomputedPages.value.length > 0) {
+      const cw = opts.containerRef.value.clientWidth
+      if (cw > 0) containerWidth.value = cw
+      totalPages.value = opts.precomputedPages.value.length
+
+      if (pendingWebdavPos.value >= 0) {
+        const ch = opts.chapters.value[opts.currentChapterIndex.value]
+        const L = ch?.body_text?.length || ch?.body?.length || 0
+        if (L > 0) {
+          currentPage.value = Math.floor((pendingWebdavPos.value / L) * totalPages.value)
+        } else {
+          currentPage.value = 0
+        }
+        pendingWebdavPos.value = -1
+      }
+
+      if (currentPage.value >= totalPages.value) currentPage.value = totalPages.value - 1
+      calcPrevPages()
+      return
+    }
+
+    if (!opts.contentRef.value) return
     const cw = opts.containerRef.value.clientWidth
     if (cw <= 0) return
     containerWidth.value = cw
@@ -114,6 +142,7 @@ export function usePagination(opts: {
   // ---- Chapter transitions ----
   const slideToNextChapter = () => {
     if (flipLock || opts.currentChapterIndex.value >= opts.chapters.value.length - 1) return
+    opts.onBeforeChapterChange?.(opts.currentChapterIndex.value + 1)
     flipLock = true
     suppressAnim.value = true
     
@@ -145,6 +174,7 @@ export function usePagination(opts: {
 
   const slideToPrevChapter = () => {
     if (flipLock || opts.currentChapterIndex.value <= 0) return
+    opts.onBeforeChapterChange?.(opts.currentChapterIndex.value - 1)
     flipLock = true
     suppressAnim.value = true
 
@@ -235,11 +265,19 @@ export function usePagination(opts: {
 
   const goToChapter = (idx: number, keepMenu = false) => {
     if (idx >= 0 && idx < opts.chapters.value.length && idx !== opts.currentChapterIndex.value) {
+      opts.onBeforeChapterChange?.(idx)
       suppressAnim.value = true
       opts.currentChapterIndex.value = idx
       currentPage.value = 0
       opts.saveProgress()
-      nextTick(() => { requestAnimationFrame(() => { calculatePages(); requestAnimationFrame(() => { suppressAnim.value = false }) }) })
+      // If we have precomputed pages, skip the RAF layout wait
+      if (opts.precomputedPages?.value && opts.precomputedPages.value.length > 0) {
+        containerWidth.value = opts.containerRef.value?.clientWidth || 0
+        totalPages.value = opts.precomputedPages.value.length
+        nextTick(() => { requestAnimationFrame(() => { suppressAnim.value = false }) })
+      } else {
+        nextTick(() => { requestAnimationFrame(() => { calculatePages(); requestAnimationFrame(() => { suppressAnim.value = false }) }) })
+      }
     }
     if (!keepMenu) showMenu.value = false
   }

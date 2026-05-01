@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.0] - 2026-05-01
+
+### Added
+
+- **ReaderPaginator 异步分页模块**: 章节切换动画期间通过隐藏离屏 DOM 预渲染和 CSS 列布局测量，将 PageSlice 结果缓存。动画结束时命中缓存则跳过 DOM 测量并以 100ms 渐入显示，未命中回退至现有 scrollWidth 测量。支持预热相邻章节、快照哈希自动失效、LRU 淘汰（上限 50 条）、generation 计数器取消机制。
+
 ## [0.5.1] - 2026-04-30
 
 ### Added
