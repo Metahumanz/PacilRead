@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
+import { useDataStore } from '../composables/useDataStore'
 import BookCover from './common/BookCover.vue'
 
-interface Book {
+interface BookDisplay {
   id: number
   title: string
   author: string | null
-  cover_path: string | null
-  path: string
-  progress_index: number
-  progress_offset: number
-  last_read: string
-  pinned: number
-  current_chapter_title?: string | null
-  chapter_count?: number
+  coverFile: string | null
+  sourceFile: string | null
+  progressIndex: number
+  progressOffset: number
+  lastReadAt: number
+  pinned: boolean
+  currentChapterTitle: string
+  chapterCount: number
 }
 
 const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
@@ -22,7 +23,7 @@ const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
 const settings = useSettings()
 const { viewMode, bookshelfShowAddEntry, saveSetting } = settings
 
-const books = ref<Book[]>([])
+const books = ref<BookDisplay[]>([])
 const loading = ref(true)
 const importing = ref(false)
 
@@ -37,16 +38,21 @@ const filteredBooks = computed(() => {
 const fetchBooks = async () => {
   try {
     loading.value = true
-    const result = await window.electronAPI.db.query(
-      `SELECT
-        b.*,
-        c.title as current_chapter_title,
-        (SELECT COUNT(*) FROM chapters cc WHERE cc.book_id = b.id) as chapter_count
-      FROM books b
-      LEFT JOIN chapters c ON c.book_id = b.id AND c.order_index = b.progress_index
-      ORDER BY b.pinned DESC, b.last_read DESC`
-    )
-    books.value = result as Book[]
+    const dataStore = useDataStore()
+    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
+    books.value = dataStore.getBooksSorted().map(b => ({
+      id: b.id,
+      title: b.title,
+      author: b.author,
+      coverFile: b.coverFile,
+      sourceFile: b.sourceFile,
+      progressIndex: b.progressIndex,
+      progressOffset: b.progressOffset,
+      lastReadAt: b.lastReadAt,
+      pinned: b.pinned,
+      currentChapterTitle: b.currentChapterTitle,
+      chapterCount: b.chapterCount,
+    }))
   } catch (error) {
     console.error('Failed to fetch books:', error)
   } finally {
@@ -61,6 +67,10 @@ const addBook = async () => {
     importing.value = true
     const result = await window.electronAPI.db.importBook(filePath)
     console.log(`Imported ${result.chapterCount} chapters`)
+    // Reload from JSON files after import
+    const dataStore = useDataStore()
+    dataStore.dataLoaded.value = false
+    await dataStore.loadAllData()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to add book:', error)
@@ -74,6 +84,9 @@ const deleteBook = async (bookId: number) => {
   if (!confirm('确定要删除这本书吗？')) return
   try {
     await window.electronAPI.db.deleteBook(bookId)
+    const dataStore = useDataStore()
+    dataStore.dataLoaded.value = false
+    await dataStore.loadAllData()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to delete book:', error)
@@ -83,9 +96,11 @@ const deleteBook = async (bookId: number) => {
 const setCover = async (bookId: number) => {
   const filePath = await window.electronAPI.dialog.openImage()
   if (!filePath) return
-  const fileUrl = 'file:///' + filePath.replace(/\\/g, '/')
+  const fileName = filePath.replace(/\\/g, '/').split('/').pop() || null
   try {
-    await window.electronAPI.db.query('UPDATE books SET cover_path = ? WHERE id = ?', [fileUrl, bookId])
+    const { updateBook } = useDataStore()
+    await updateBook(bookId, { coverFile: fileName })
+    // The actual file copying happens in the importBook handler
     await fetchBooks()
   } catch (error) {
     console.error('Failed to set cover:', error)
@@ -94,30 +109,32 @@ const setCover = async (bookId: number) => {
 
 const removeCover = async (bookId: number) => {
   try {
-    await window.electronAPI.db.query('UPDATE books SET cover_path = NULL WHERE id = ?', [bookId])
+    const { updateBook } = useDataStore()
+    await updateBook(bookId, { coverFile: null })
     await fetchBooks()
   } catch (error) {
     console.error('Failed to remove cover:', error)
   }
 }
 
-const togglePin = async (book: Book) => {
-  const newVal = book.pinned ? 0 : 1
+const togglePin = async (book: BookDisplay) => {
   try {
-    await window.electronAPI.db.query('UPDATE books SET pinned = ? WHERE id = ?', [newVal, book.id])
+    const { updateBook } = useDataStore()
+    await updateBook(book.id, { pinned: !book.pinned })
     await fetchBooks()
   } catch (error) {
     console.error('Failed to toggle pin:', error)
   }
 }
 
-const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleDateString('zh-CN')
+const formatDate = (epochMs: number) => {
+  if (!epochMs) return ''
+  return new Date(epochMs).toLocaleDateString('zh-CN')
 }
 
-const formatChapter = (book: Book) => {
-  if (!book.chapter_count) return '暂无章节'
-  return book.current_chapter_title || `第 ${book.progress_index + 1} 章`
+const formatChapter = (book: BookDisplay) => {
+  if (!book.chapterCount) return '暂无章节'
+  return book.currentChapterTitle || `第 ${book.progressIndex + 1} 章`
 }
 
 onMounted(() => fetchBooks())
@@ -180,7 +197,7 @@ onMounted(() => fetchBooks())
           <!-- Pin badge -->
           <div v-if="book.pinned" class="app-badge is-active absolute top-2 left-2 z-20 text-[10px] font-bold px-1.5 py-0.5">置顶</div>
 
-          <BookCover class="w-full h-full rounded-xl" :cover-path="book.cover_path" :title="book.title" />
+          <BookCover class="w-full h-full rounded-xl" :cover-path="book.coverFile" :title="book.title" />
 
           <!-- Actions -->
           <div class="absolute top-2 right-2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-20">
@@ -191,7 +208,7 @@ onMounted(() => fetchBooks())
             <button @click.stop="setCover(book.id)" class="p-1.5 bg-black/60 hover:bg-black/90 shadow-sm text-white/70 hover:text-white rounded-md backdrop-blur-md transition-colors border border-black/10 dark:border-white/10" title="设置封面">
               <span class="text-sm leading-none block">🖼️</span>
             </button>
-            <button v-if="book.cover_path" @click.stop="removeCover(book.id)" class="p-1.5 bg-black/60 hover:bg-black/90 shadow-sm text-white/70 hover:text-white rounded-md backdrop-blur-md transition-colors border border-black/10 dark:border-white/10" title="取消封面">
+            <button v-if="book.coverFile" @click.stop="removeCover(book.id)" class="p-1.5 bg-black/60 hover:bg-black/90 shadow-sm text-white/70 hover:text-white rounded-md backdrop-blur-md transition-colors border border-black/10 dark:border-white/10" title="取消封面">
               <span class="text-sm leading-none block">✕</span>
             </button>
             <button @click.stop="deleteBook(book.id)" class="p-1.5 bg-red-600/80 hover:bg-red-500 shadow-sm text-white rounded-md backdrop-blur-md transition-colors border border-transparent" title="删除">
@@ -204,7 +221,7 @@ onMounted(() => fetchBooks())
           <h3 class="font-semibold text-[14px] app-title truncate group-hover:text-[var(--app-accent)] transition-colors duration-200">{{ book.title }}</h3>
           <div class="flex items-center justify-between mt-0.5">
             <p v-if="book.author" class="text-[12px] app-muted truncate max-w-[65%]">{{ book.author }}</p>
-            <p class="text-[10px] app-muted font-mono">{{ formatDate(book.last_read) }}</p>
+            <p class="text-[10px] app-muted font-mono">{{ formatDate(book.lastReadAt) }}</p>
           </div>
           <p class="text-[11px] app-muted truncate mt-1">{{ formatChapter(book) }}</p>
         </div>
@@ -227,7 +244,7 @@ onMounted(() => fetchBooks())
            class="app-card app-card-hover group flex items-center p-2 cursor-pointer bookshelf-card"
            :style="{ animationDelay: `${index * 20}ms` }" @click="emit('open-book', book.id)">
         <div class="w-12 h-16 shrink-0 rounded-[var(--app-radius-button)] overflow-hidden shadow relative" :class="{'ring-1 ring-[var(--app-accent)]': book.pinned}">
-            <BookCover class="w-full h-full" :cover-path="book.cover_path" :title="book.title" />
+            <BookCover class="w-full h-full" :cover-path="book.coverFile" :title="book.title" />
             <div v-if="book.pinned" class="absolute -top-1 -right-1 z-10 text-[8px] bg-[var(--app-accent)] text-[var(--app-text-on-primary)] px-1 rounded-sm">★</div>
         </div>
         <div class="flex-1 min-w-0 ml-4">
@@ -237,7 +254,7 @@ onMounted(() => fetchBooks())
         </div>
         <div class="shrink-0 text-right px-4 hidden md:block">
             <p class="text-[12px] app-muted mb-1">上次阅读</p>
-            <p class="text-[12px] font-mono app-muted">{{ formatDate(book.last_read) }}</p>
+            <p class="text-[12px] font-mono app-muted">{{ formatDate(book.lastReadAt) }}</p>
         </div>
         <div class="shrink-0 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <button @click.stop="togglePin(book)" class="app-icon-button p-2" :class="book.pinned ? 'app-accent-text' : ''" title="置顶"><span class="block leading-none">📌</span></button>
@@ -265,7 +282,7 @@ onMounted(() => fetchBooks())
 
             <div v-if="book.pinned" class="absolute top-1 left-1 z-20 text-[var(--app-accent)] text-xs">★</div>
 
-            <BookCover class="w-full h-full" :cover-path="book.cover_path" :title="book.title" />
+            <BookCover class="w-full h-full" :cover-path="book.coverFile" :title="book.title" />
 
             <div class="absolute bottom-0 left-0 right-0 p-2 z-20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 bg-black/80 backdrop-blur-sm">
                 <button @click.stop="deleteBook(book.id)" class="w-full py-1 text-xs text-red-400 hover:text-white hover:bg-red-500 rounded transition-colors border border-transparent hover:border-red-400/50">删除本书</button>

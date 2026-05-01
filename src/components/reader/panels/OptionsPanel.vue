@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
+import { useDataStore } from '../../../composables/useDataStore'
 
 interface Book { id: number; title: string; author: string | null }
 
@@ -41,10 +42,8 @@ const saveBookInfo = () => {
     const title = editTitle.value.trim() || '未命名'
     const author = editAuthor.value.trim()
     try {
-      await window.electronAPI.db.query(
-        'UPDATE books SET title = ?, author = ? WHERE id = ?',
-        [title, author || null, props.book!.id]
-      )
+      const { updateBook } = useDataStore()
+      await updateBook(props.book!.id, { title, author: author || null })
       emit('update-book', { title, author })
     } catch (e) {
       console.error('Save book info failed:', e)

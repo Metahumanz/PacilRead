@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useDataStore } from '../../../composables/useDataStore'
 
 interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
 
@@ -21,10 +22,15 @@ const newIsRegex = ref(false)
 const addRule = async () => {
   if (!newPattern.value.trim()) return
   try {
-    await window.electronAPI.db.query(
-      'INSERT INTO replacement_rules (pattern, replacement, scope, book_id, is_regex, active) VALUES (?, ?, ?, ?, ?, 1)',
-      [newPattern.value, newReplacement.value, newScope.value, newScope.value === 'book' ? props.bookId : null, newIsRegex.value ? 1 : 0]
-    )
+    const { addRule: add } = useDataStore()
+    await add({
+      pattern: newPattern.value,
+      replacement: newReplacement.value,
+      scope: newScope.value,
+      bookId: newScope.value === 'book' ? props.bookId : null,
+      regex: newIsRegex.value,
+      active: true,
+    })
     newPattern.value = ''; newReplacement.value = ''; newIsRegex.value = false
     emit('refresh')
   } catch (e) { console.error(e) }
@@ -32,14 +38,17 @@ const addRule = async () => {
 
 const deleteRule = async (id: number) => {
   try {
-    await window.electronAPI.db.query('DELETE FROM replacement_rules WHERE id = ?', [id])
+    const { deleteRule: del } = useDataStore()
+    await del(id)
     emit('refresh')
   } catch (e) { console.error(e) }
 }
 
 const toggleRuleActive = async (rule: ReplacementRule) => {
   try {
-    await window.electronAPI.db.query('UPDATE replacement_rules SET active = ? WHERE id = ?', [rule.active ? 0 : 1, rule.id])
+    const { updateRule } = useDataStore()
+    const newActive = rule.active ? false : true
+    await updateRule(rule.id, { active: newActive })
     emit('refresh')
   } catch (e) { console.error(e) }
 }

@@ -2,6 +2,9 @@
 import { ref, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import {
+  fullBackupV8, fullRestoreV8, incrementalBackupV8, incrementalRestoreV8,
+} from '../composables/useV8Sync'
+import {
   DESKTOP_DATABASE_DIR,
   buildPacilReadBaseUrl,
   clearLocalReadingStats,
@@ -404,28 +407,6 @@ const uploadChapterTextFiles = async (auth: string, skipExisting = false) => {
   return { uploaded, skipped, total: files.length }
 }
 
-const downloadChapterTextFiles = async (auth: string) => {
-  const baseUrl = getCurrentPacilReadBaseUrl()
-  const files = await window.electronAPI.db.getRequiredChapterTextFiles()
-  let downloaded = 0
-  let missing = 0
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    webdavSyncStatus.value = `下载章节正文 (${i + 1}/${files.length})...`
-    const remotePath = baseUrl + 'chapter_text/' + encodeRemoteRelativePath(file.relativePath)
-    const result = await window.electronAPI.webdav.downloadFile(remotePath, file.localPath, auth)
-    if (result.error) {
-      missing += 1
-      continue
-    }
-    downloaded += 1
-  }
-
-  const stillMissing = await window.electronAPI.db.getMissingChapterTextFiles()
-  return { downloaded, missing: Math.max(missing, stillMissing.length), total: files.length }
-}
-
 const uploadCoverFiles = async (auth: string) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
   const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -722,15 +703,13 @@ const fullBackup = async () => {
     await ensureSyncDirectories(auth, { includeChapterText: true })
 
     if (webdavSyncBookshelf.value) {
-      webdavSyncStatus.value = '导出数据库...'
-      const dbPath = await window.electronAPI.db.export()
-      webdavSyncStatus.value = '上传共享数据库...'
-      assertUploadSucceeded(
-        await window.electronAPI.webdav.uploadFile(dbPath, baseUrl + 'reader.db', auth),
-        '上传共享数据库'
-      )
+      // v8: Upload JSON data files instead of SQLite reader.db
+      webdavSyncStatus.value = '上传 v8 JSON 数据...'
+      const v8Result = await fullBackupV8((msg) => { webdavSyncStatus.value = msg })
+      if (!v8Result.success) {
+        throw new Error(`v8 备份失败: ${v8Result.error}`)
+      }
       await uploadBookChapterTextZips(auth)
-      // Also upload individual files for pre-2026-05 client compatibility
       await uploadChapterTextFiles(auth)
       await uploadCoverFiles(auth)
     }
@@ -738,10 +717,13 @@ const fullBackup = async () => {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     if (webdavSyncFiles.value) {
       const booksDir = appDataPath + '/books/'
-      const bookFiles = await window.electronAPI.db.query('SELECT path FROM books')
-      for (let i = 0; i < (bookFiles as any[]).length; i++) {
-        const fileName = (bookFiles as any[])[i].path.split(/[\\/]/).pop()
-        webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
+      const { useDataStore: getStore } = await import('../composables/useDataStore')
+      const store = getStore()
+      if (!store.dataLoaded.value) await store.loadAllData()
+      const bookFiles = store.books.value.map(b => b.sourceFile).filter(Boolean) as string[]
+      for (let i = 0; i < bookFiles.length; i++) {
+        const fileName = bookFiles[i]
+        webdavSyncStatus.value = `上传书籍 (${i + 1}/${bookFiles.length})...`
         assertUploadSucceeded(
           await window.electronAPI.webdav.uploadFile(booksDir + fileName, baseUrl + 'books/' + fileName, auth),
           '上传书籍'
@@ -781,19 +763,35 @@ const fullRestore = async () => {
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
 
-    const appDataPath = await window.electronAPI.app.getPath('userData')
-    const dstPath = appDataPath + '/reader.db.restore'
-    webdavSyncStatus.value = '下载数据库快照...'
-    const dl = await downloadFirstAvailable(
-      [baseUrl + 'reader.db', getDesktopDatabaseBaseUrl() + 'reader.db'],
-      dstPath,
-      auth
-    )
+    // Try v8 JSON restore first
+    webdavSyncStatus.value = '尝试 v8 JSON 恢复...'
+    let v8Result = await fullRestoreV8((msg) => { webdavSyncStatus.value = msg })
+    const isV8Restore = v8Result.success
+
     let chapterTextRestore = { downloaded: 0, missing: 0, total: 0 }
-    if (!dl.error) {
-      webdavSyncStatus.value = '应用数据库...'
-      await window.electronAPI.db.importFromFile(dstPath)
-      await restoreLocalOnlySettings(preservedSettings)
+    let dlError: string | undefined
+
+    if (!isV8Restore) {
+      // Fallback to v7 SQLite format
+      const appDataPath = await window.electronAPI.app.getPath('userData')
+      const dstPath = appDataPath + '/reader.db.restore'
+      webdavSyncStatus.value = 'v8 数据不存在，尝试旧格式...'
+      const dl = await downloadFirstAvailable(
+        [baseUrl + 'reader.db', getDesktopDatabaseBaseUrl() + 'reader.db'],
+        dstPath,
+        auth
+      )
+      if (!dl.error) {
+        webdavSyncStatus.value = '应用数据库...'
+        await window.electronAPI.db.importFromFile(dstPath)
+        await restoreLocalOnlySettings(preservedSettings)
+        dlError = dl.error
+      } else {
+        dlError = dl.error
+      }
+    }
+
+    if (isV8Restore || !dlError) {
       webdavSyncStatus.value = '恢复章节正文...'
       chapterTextRestore = await downloadChapterTextZipsAndFiles(auth)
       await downloadCoverFiles(auth)
@@ -816,15 +814,16 @@ const fullRestore = async () => {
     await fetchBooks()
     await refreshReadingStatsSummary()
 
-    if (dl.error && !desktopSettingsRestore.applied) {
-      throw new Error(`云端无备份数据: ${dl.error}`)
+    if (!isV8Restore && dlError && !desktopSettingsRestore.applied) {
+      throw new Error(`云端无备份数据: ${dlError}`)
     }
 
-    alert(dl.error
+    const msg = !isV8Restore && dlError
       ? '桌面设置与阅读统计已从云端恢复，数据库快照不存在。'
       : chapterTextRestore.missing > 0
-        ? `数据库已恢复，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个外置章节正文缺失。请确认 WebDAV 的 chapter_text/ 目录完整。`
-        : '数据库、章节正文、封面、桌面设置与阅读统计已成功从云端恢复！')
+        ? `数据已恢复，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个外置章节正文缺失。`
+        : '数据已从云端成功恢复！'
+    alert(msg)
     webdavSyncStatus.value = '从云端恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
@@ -844,27 +843,31 @@ const incrementalBackup = async () => {
     await ensureSyncDirectories(auth, { includeDesktopDatabase: true })
 
     if (webdavSyncBookshelf.value) {
-      webdavSyncStatus.value = '处理增量数据库...'
-      const litePath = await (window.electronAPI.db as any).exportLite()
-      webdavSyncStatus.value = '上传 Win11 私有增量数据库...'
-      assertUploadSucceeded(
-        await window.electronAPI.webdav.uploadFile(litePath, getDesktopDatabaseBaseUrl() + 'reader_lite.db', auth),
-        '上传增量数据库'
-      )
+      // v8: Use JSON-based incremental sync with manifest comparison
+      webdavSyncStatus.value = 'v8 增量备份（JSON 格式）...'
+      const v8Result = await incrementalBackupV8((msg) => { webdavSyncStatus.value = msg })
+      if (!v8Result.success) {
+        throw new Error(`v8 增量备份失败: ${v8Result.error}`)
+      }
+      webdavSyncStatus.value = v8Result.uploadedFiles.length > 0
+        ? `上传了 ${v8Result.uploadedFiles.length} 个文件`
+        : '没有文件需要更新'
       await uploadBookChapterTextZips(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
     if (webdavSyncFiles.value) {
       const booksDir = appDataPath + '/books/'
-      const bookFiles = await window.electronAPI.db.query('SELECT path FROM books')
-      for (let i = 0; i < (bookFiles as any[]).length; i++) {
-        const fileName = (bookFiles as any[])[i].path.split(/[\\/]/).pop()
+      const { useDataStore: getStore } = await import('../composables/useDataStore')
+      const store = getStore()
+      if (!store.dataLoaded.value) await store.loadAllData()
+      const bookFiles = store.books.value.map(b => b.sourceFile).filter(Boolean) as string[]
+      for (let i = 0; i < bookFiles.length; i++) {
+        const fileName = bookFiles[i]
         const remotePath = baseUrl + 'books/' + fileName
-        // Check if exists using PROPFIND/HEAD
         const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
         if (check.status !== 200) {
-          webdavSyncStatus.value = `上传书籍 (${i + 1}/${(bookFiles as any[]).length})...`
+          webdavSyncStatus.value = `上传书籍 (${i + 1}/${bookFiles.length})...`
           assertUploadSucceeded(
             await window.electronAPI.webdav.uploadFile(booksDir + fileName, remotePath, auth),
             '上传书籍'
@@ -872,13 +875,13 @@ const incrementalBackup = async () => {
         }
       }
       const coversDir = appDataPath + '/covers/'
-      const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL')
-      for (let i = 0; i < (coverFiles as any[]).length; i++) {
-        const fileName = (coverFiles as any[])[i].cover_path.split(/[\\/]/).pop()
+      const coverFiles = store.books.value.map(b => b.coverFile).filter(Boolean) as string[]
+      for (let i = 0; i < coverFiles.length; i++) {
+        const fileName = coverFiles[i]
         const remotePath = baseUrl + 'covers/' + fileName
         const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
         if (check.status !== 200) {
-          webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
+          webdavSyncStatus.value = `上传封面 (${i + 1}/${coverFiles.length})...`
           assertUploadSucceeded(
             await window.electronAPI.webdav.uploadFile(coversDir + fileName, remotePath, auth),
             '上传封面'
@@ -917,21 +920,28 @@ const incrementalRestore = async () => {
     const preservedSettings = await getLocalOnlySettingsSnapshot()
     const preservedDesktopSettings = await getCurrentDesktopSettingsSnapshot()
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    const baseUrl = getCurrentPacilReadBaseUrl()
 
-    const appDataPath = await window.electronAPI.app.getPath('userData')
-    const dstPath = appDataPath + '/reader_lite.db.restore'
-    webdavSyncStatus.value = '下载增量快照...'
-    const dl = await downloadFirstAvailable(
-      [getDesktopDatabaseBaseUrl() + 'reader_lite.db', baseUrl + 'reader_lite.db'],
-      dstPath,
-      auth
-    )
-    let liteRestore: Awaited<ReturnType<typeof window.electronAPI.db.importLiteFromFile>> | null = null
-    if (!dl.error) {
-      webdavSyncStatus.value = '应用增量数据库...'
-      liteRestore = await window.electronAPI.db.importLiteFromFile(dstPath)
-      await restoreLocalOnlySettings(preservedSettings)
+    // Try v8 JSON incremental restore first
+    webdavSyncStatus.value = '尝试 v8 JSON 增量恢复...'
+    const v8Result = await incrementalRestoreV8((msg) => { webdavSyncStatus.value = msg })
+    const isV8Restore = v8Result.success
+
+    if (!isV8Restore) {
+      // Fallback to v7 SQLite format
+      const appDataPath = await window.electronAPI.app.getPath('userData')
+      const dstPath = appDataPath + '/reader_lite.db.restore'
+      const baseUrl = getCurrentPacilReadBaseUrl()
+      webdavSyncStatus.value = 'v8 数据不存在，尝试旧格式...'
+      const dl = await downloadFirstAvailable(
+        [getDesktopDatabaseBaseUrl() + 'reader_lite.db', baseUrl + 'reader_lite.db'],
+        dstPath,
+        auth
+      )
+      if (!dl.error) {
+        webdavSyncStatus.value = '应用增量数据库...'
+        await window.electronAPI.db.importLiteFromFile(dstPath)
+        await restoreLocalOnlySettings(preservedSettings)
+      }
     }
 
     webdavSyncStatus.value = '应用桌面设置...'
@@ -950,13 +960,16 @@ const incrementalRestore = async () => {
     await fetchBooks()
     await refreshReadingStatsSummary()
 
-    if (dl.error && !desktopSettingsRestore.applied) {
-      throw new Error('云端无增量备份数据，请考虑全量恢复: ' + dl.error)
+    if (!isV8Restore && !desktopSettingsRestore.applied) {
+      throw new Error('云端无增量备份数据，请考虑全量恢复')
     }
 
-    alert(dl.error
-      ? '桌面设置与阅读统计已恢复，增量数据库快照不存在。'
-      : `增量数据、桌面设置与阅读统计已恢复！\n已保留本地缓存章节：${liteRestore?.currentChapters ?? 0}，重挂章节：${liteRestore?.remappedChapters ?? 0}。`)
+    const msg = isV8Restore
+      ? (v8Result.mergedFiles.length > 0
+          ? `v8增量恢复成功！合并了 ${v8Result.mergedFiles.length} 个文件。`
+          : 'v8增量恢复完成，数据已是最新。')
+      : '桌面设置与阅读统计已恢复。'
+    alert(msg)
     webdavSyncStatus.value = '增量恢复成功'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
