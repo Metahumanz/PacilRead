@@ -380,7 +380,7 @@ async function ensurePacilReadStructure(options: {
   }
 }
 
-function extractHrefValues(xmlText: string): string[] {
+export function extractHrefValues(xmlText: string): string[] {
   const hrefs: string[] = []
   const regex = /<[^>]*:?href[^>]*>([^<]+)<\/[^>]*:?href>/gi
   let match: RegExpExecArray | null
