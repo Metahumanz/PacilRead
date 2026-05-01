@@ -15,10 +15,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listChapterTextFiles: () => ipcRenderer.invoke('db:listChapterTextFiles'),
     getRequiredChapterTextFiles: () => ipcRenderer.invoke('db:getRequiredChapterTextFiles'),
     getMissingChapterTextFiles: () => ipcRenderer.invoke('db:getMissingChapterTextFiles'),
+    getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('db:getBookIdsWithFileGzipChapters'),
+    createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('db:createBookChapterTextZip', bookId),
+    extractBookChapterTextZip: (zipPath: string) => ipcRenderer.invoke('db:extractBookChapterTextZip', zipPath),
+    checkHealth: () => ipcRenderer.invoke('db:checkHealth'),
+    hasPendingMaintenance: () => ipcRenderer.invoke('db:hasPendingMaintenance'),
+    getMaintenanceStatus: () => ipcRenderer.invoke('db:getMaintenanceStatus'),
     onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => {
       const listener = (_: any, data: any) => cb(data)
       ipcRenderer.on('db:optimize-progress', listener)
       return () => ipcRenderer.removeListener('db:optimize-progress', listener)
+    },
+    onHealthWarning: (cb: (message: string) => void) => {
+      const listener = (_: any, message: string) => cb(message)
+      ipcRenderer.on('db:health-warning', listener)
+      return () => ipcRenderer.removeListener('db:health-warning', listener)
     }
   },
   dialog: {

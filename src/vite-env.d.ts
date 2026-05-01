@@ -36,10 +36,13 @@ export interface ElectronAPI {
       body_text: string
       body_text_storage: string
       body_text_missing: number
+      body_text_fallback: string | null
     }>>
     optimizeStorage: () => Promise<{
       optimizedChapters: number
+      repairedChapters: number
       clearedBodyHtml: number
+      wasVacuumed: boolean
       before: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
       after: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; totalBytes: number }
     }>
@@ -47,7 +50,20 @@ export interface ElectronAPI {
     listChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string; sizeBytes: number }>>
     getRequiredChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
     getMissingChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
+    getBookIdsWithFileGzipChapters: () => Promise<number[]>
+    createBookChapterTextZip: (bookId: number) => Promise<string | null>
+    extractBookChapterTextZip: (zipPath: string) => Promise<number>
+    checkHealth: () => Promise<{ healthy: boolean; reason: string | null }>
+    hasPendingMaintenance: () => Promise<boolean>
+    getMaintenanceStatus: () => Promise<{
+      hasPendingWork: boolean
+      nonEmptyBodyHtml: number
+      needsExport: number
+      missingChapterFiles: number
+      freelistCount: number
+    }>
     onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => () => void
+    onHealthWarning: (cb: (message: string) => void) => () => void
   }
   dialog: {
     openFile: () => Promise<string | null>
