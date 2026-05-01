@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } from 
 import { dirname, join, extname, isAbsolute } from 'path'
 import { is } from '@electron-toolkit/utils'
 import initSqlJs, { Database } from 'sql.js'
-import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, renameSync, rmSync } from 'fs'
 import { gzipSync, gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
 import AdmZip from 'adm-zip'
@@ -17,7 +17,83 @@ let dbPath: string = ''
 let mimoAbortController: AbortController | null = null
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
+const DATA_DIR = join(app.getPath('userData'), 'data')
 const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
+
+const JSON_FILES: Record<string, string> = {
+  books: 'books.json',
+  chapters: 'chapters.json',
+  rules: 'rules.json',
+  themes: 'themes.json',
+  bookmarks: 'bookmarks.json',
+  readingStats: 'reading_stats.json',
+  settings: 'settings.json',
+}
+
+function ensureDataDir(): void {
+  mkdirSync(DATA_DIR, { recursive: true })
+}
+
+function readJsonEntity<T>(entityType: keyof typeof JSON_FILES, defaultVal: T): T {
+  const filePath = join(DATA_DIR, JSON_FILES[entityType])
+  if (!existsSync(filePath)) return defaultVal
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'))
+  } catch (e) {
+    console.error(`[DataStore] Failed to read ${entityType}.json:`, e)
+    return defaultVal
+  }
+}
+
+function writeJsonEntity(entityType: keyof typeof JSON_FILES, data: unknown): void {
+  const filePath = join(DATA_DIR, JSON_FILES[entityType])
+  mkdirSync(DATA_DIR, { recursive: true })
+  const tmpPath = filePath + '.tmp'
+  const jsonStr = JSON.stringify(data, null, 2)
+  writeFileSync(tmpPath, jsonStr, 'utf8')
+  renameSync(tmpPath, filePath)
+}
+
+function fileSha256Hex(filePath: string): string | null {
+  if (!existsSync(filePath)) return null
+  try {
+    return createHash('sha256').update(readFileSync(filePath)).digest('hex')
+  } catch { return null }
+}
+
+function fileSizeBytes(filePath: string): number {
+  try { return statSync(filePath).size } catch { return 0 }
+}
+
+function extractFileName(path: string | null): string | null {
+  if (!path) return null
+  try {
+    const url = new URL(path)
+    if (url.protocol === 'file:') {
+      const basename = url.pathname.split('/').pop() || url.pathname.split('\\').pop()
+      return basename || null
+    }
+  } catch {}
+  const parts = path.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || null
+}
+
+function detectBookType(path: string | null): string {
+  if (!path) return 'text'
+  const ext = extname(path).toLowerCase()
+  switch (ext) {
+    case '.epub': return 'epub'
+    case '.txt': return 'txt'
+    case '.pdf': return 'pdf'
+    default: return 'text'
+  }
+}
+
+function parseDateToEpochMillis(dateStr: string | null): number {
+  if (!dateStr) return Date.now()
+  const parsed = Date.parse(dateStr)
+  return Number.isNaN(parsed) ? Date.now() : parsed
+}
 
 // ---- Window bounds persistence ----
 const boundsFile = join(app.getPath('userData'), 'window-bounds.json')
@@ -732,6 +808,146 @@ async function initDatabase(): Promise<void> {
   saveDatabase()
 }
 
+async function migrateSqliteToJson(force = false): Promise<boolean> {
+  if (!db || !SQL) return false
+  if (!force && existsSync(join(DATA_DIR, '.migrated'))) {
+    console.log('[Migration] Already migrated to JSON')
+    return false
+  }
+
+  console.log('[Migration] Starting SQLite -> JSON migration')
+
+  try {
+    // 1. Read all entities from SQLite
+    const bookRows = queryRows(db, 'SELECT id, title, author, cover_path, path, progress_index, progress_offset, last_read, pinned, reading_stats_key FROM books ORDER BY id')
+    const chapterRows = queryRows(db, 'SELECT id, book_id, title, order_index, body_text_path, body_text_storage, body_text_size FROM chapters ORDER BY id')
+    const ruleRows = queryRows(db, 'SELECT id, pattern, replacement, scope, book_id, is_regex, active FROM replacement_rules ORDER BY id')
+    const bookmarkRows = queryRows(db, 'SELECT uuid, book_id, book_identity, book_title, book_author, chapter_order_index, chapter_title, chapter_offset, progress_percent, summary, created_at, updated_at FROM bookmarks ORDER BY uuid')
+    const statsRows = queryRows(db, 'SELECT date, source_device_id, book_identity, book_title, book_author, duration_seconds, char_count, updated_at FROM reading_stats ORDER BY date, source_device_id, book_identity')
+    const settingsRows = queryRows(db, 'SELECT key, value FROM settings')
+
+    // 2. Extract custom themes from settings, build settings map
+    let customThemesRaw: any[] = []
+    const settingsMap: Record<string, string> = {}
+    for (const row of settingsRows) {
+      if (row.key === 'custom_themes') {
+        try { customThemesRaw = JSON.parse(row.value) || [] } catch {}
+      } else {
+        settingsMap[row.key] = row.value || ''
+      }
+    }
+
+    // 3. Transform to v8 JSON format
+    const now = Date.now()
+
+    const migratedBooks = bookRows.map((b: any) => ({
+      id: Number(b.id),
+      title: String(b.title || ''),
+      author: b.author ? String(b.author) : null,
+      bookType: detectBookType(b.path),
+      readingStatsKey: String(b.reading_stats_key || ''),
+      progressIndex: Number(b.progress_index || 0),
+      progressOffset: Number(b.progress_offset || 0),
+      lastReadAt: parseDateToEpochMillis(b.last_read),
+      pinned: Number(b.pinned || 0) === 1,
+      chapterCount: countChaptersForBook(db!, Number(b.id)),
+      currentChapterTitle: '',
+      createdAt: now,
+      updatedAt: now,
+      coverFile: extractFileName(b.cover_path),
+      sourceFile: extractFileName(b.path),
+    }))
+
+    // Compute currentChapterTitle for each book
+    for (const book of migratedBooks) {
+      const matchingChapter = chapterRows.find(
+        (c: any) => Number(c.book_id) === book.id && Number(c.order_index) === book.progressIndex
+      )
+      if (matchingChapter) book.currentChapterTitle = String(matchingChapter.title || '')
+    }
+
+    const migratedChapters = chapterRows.map((c: any) => ({
+      id: Number(c.id),
+      bookId: Number(c.book_id),
+      title: String(c.title || ''),
+      orderIndex: Number(c.order_index || 0),
+      bodyTextPath: c.body_text_path ? String(c.body_text_path) : null,
+      bodyTextStorage: String(c.body_text_storage || 'db'),
+      bodyTextSize: Number(c.body_text_size || 0),
+    }))
+
+    const migratedRules = ruleRows.map((r: any) => ({
+      id: Number(r.id),
+      pattern: String(r.pattern || ''),
+      replacement: String(r.replacement || ''),
+      scope: String(r.scope || 'global'),
+      bookId: r.book_id ? Number(r.book_id) : null,
+      regex: Number(r.is_regex || 0) === 1,
+      active: Number(r.active || 0) === 1,
+      updatedAt: now,
+    }))
+
+    const migratedThemes = customThemesRaw.map((t: any, index: number) => ({
+      id: t.id ?? (index + 1),
+      name: String(t.name || `主题 ${index + 1}`),
+      configJson: JSON.stringify(t),
+      updatedAt: now,
+    }))
+
+    const migratedBookmarks = bookmarkRows.map((b: any, index: number) => ({
+      id: index + 1,
+      uuid: String(b.uuid || ''),
+      bookId: b.book_id ? Number(b.book_id) : null,
+      bookIdentity: String(b.book_identity || ''),
+      bookTitle: String(b.book_title || ''),
+      bookAuthor: b.book_author ? String(b.book_author) : '',
+      chapterOrderIndex: Number(b.chapter_order_index || 0),
+      chapterTitle: String(b.chapter_title || ''),
+      chapterOffset: Number(b.chapter_offset || 0),
+      progressPercent: Number(b.progress_percent || 0),
+      summary: String(b.summary || ''),
+      createdAt: Number(b.created_at || now),
+      updatedAt: Number(b.updated_at || now),
+    }))
+
+    const migratedReadingStats = statsRows.map((s: any) => ({
+      date: String(s.date || ''),
+      sourceDeviceId: String(s.source_device_id || ''),
+      bookIdentity: String(s.book_identity || ''),
+      bookTitle: String(s.book_title || ''),
+      bookAuthor: s.book_author ? String(s.book_author) : '',
+      durationSeconds: Number(s.duration_seconds || 0),
+      charCount: Number(s.char_count || 0),
+      updatedAt: Number(s.updated_at || now),
+    }))
+
+    // 4. Write all JSON files
+    ensureDataDir()
+    writeJsonEntity('books', migratedBooks)
+    writeJsonEntity('chapters', migratedChapters)
+    writeJsonEntity('rules', migratedRules)
+    writeJsonEntity('themes', migratedThemes)
+    writeJsonEntity('bookmarks', migratedBookmarks)
+    writeJsonEntity('readingStats', migratedReadingStats)
+    writeJsonEntity('settings', settingsMap)
+
+    // 5. Create migration marker
+    writeFileSync(join(DATA_DIR, '.migrated'), JSON.stringify({
+      migratedAt: now,
+      fromSchemaVersion: 7,
+      toSchemaVersion: 8,
+      bookCount: migratedBooks.length,
+      chapterCount: migratedChapters.length,
+    }, null, 2))
+
+    console.log(`[Migration] Completed: ${migratedBooks.length} books, ${migratedChapters.length} chapters, ${migratedRules.length} rules, ${migratedThemes.length} themes, ${migratedBookmarks.length} bookmarks, ${migratedReadingStats.length} stats rows`)
+    return true
+  } catch (error) {
+    console.error('[Migration] Failed:', error)
+    return false
+  }
+}
+
 // Requirement 1: Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
@@ -753,6 +969,8 @@ app.whenReady().then(async () => {
   try {
     await initDatabase()
     console.log('Database initialized successfully')
+    // Migrate SQLite data to JSON files (v7 → v8)
+    await migrateSqliteToJson()
   } catch (error) {
     console.error('Database init failed:', String(error))
     dialog.showErrorBox('数据库初始化失败', String(error))
@@ -889,6 +1107,8 @@ ipcMain.handle('db:importBook', async (_, filePath: string) => {
 
     if (bookId === null) throw new Error('导入失败：未生成书籍 ID')
     saveDatabase()
+    // Keep JSON files in sync
+    migrateSqliteToJson(true).catch(e => console.error('[Import] JSON sync failed:', e))
     return { bookId, chapterCount: chapters.length }
   } catch (error) { console.error('Import error:', error); throw error }
 })
@@ -972,7 +1192,7 @@ ipcMain.handle('db:getBookChapters', async (_, bookId: number) => {
   const columns = getTableColumns(db, 'chapters')
   const hasLegacyBody = columns.includes('body')
   const bodyColumn = hasLegacyBody ? ', body' : ''
-  const rows = queryRows(
+  let rows = queryRows(
     db,
     `SELECT id, book_id, title, body_html, body_text, order_index,
       body_text_path, body_text_storage, body_text_size${bodyColumn}
@@ -981,6 +1201,38 @@ ipcMain.handle('db:getBookChapters', async (_, bookId: number) => {
      ORDER BY order_index`,
     [bookId]
   )
+
+  // Fallback: if SQLite returns no chapters, try reading from JSON (v8 format)
+  if (rows.length === 0) {
+    const jsonChapters = readJsonEntity('chapters', []) as Array<{
+      id: number; bookId: number; title: string; orderIndex: number
+      bodyTextPath: string | null; bodyTextStorage: string; bodyTextSize: number
+    }>
+    const matching = jsonChapters
+      .filter(c => c.bookId === bookId)
+      .sort((a, b) => a.orderIndex - b.orderIndex)
+
+    if (matching.length > 0) {
+      return matching.map(c => {
+        const bodyText = (c.bodyTextStorage === 'file_gzip' && c.bodyTextPath)
+          ? (readChapterTextGzip(c.bodyTextPath) || '')
+          : ''
+        const missing = (c.bodyTextStorage === 'file_gzip' && c.bodyTextPath)
+          ? (readChapterTextGzip(c.bodyTextPath) === null)
+          : false
+        return {
+          id: c.id,
+          title: c.title,
+          order_index: c.orderIndex,
+          body: bodyText ? textToHtml(bodyText) : '',
+          body_text: bodyText,
+          body_text_storage: c.bodyTextStorage,
+          body_text_missing: missing ? 1 : 0,
+          body_text_fallback: null as string | null,
+        }
+      })
+    }
+  }
 
   return rows.map(row => {
     const readable = getReadableChapterText(row)
@@ -1256,6 +1508,8 @@ ipcMain.handle('db:deleteBook', async (_, bookId: number) => {
   }
   rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
   saveDatabase()
+  // Keep JSON files in sync
+  migrateSqliteToJson(true).catch(e => console.error('[Delete] JSON sync failed:', e))
   return { success: true }
 })
 
@@ -1605,5 +1859,46 @@ ipcMain.handle('tts:stop-mimo', async () => {
   if (mimoAbortController) {
     mimoAbortController.abort()
     mimoAbortController = null
+  }
+})
+
+// ---- v8 JSON data IPC handlers ----
+const ENTITY_DEFAULTS: Record<string, unknown> = {
+  books: [],
+  chapters: [],
+  rules: [],
+  themes: [],
+  bookmarks: [],
+  readingStats: [],
+  settings: {},
+}
+
+ipcMain.handle('data:readEntity', async (_, entityType: string) => {
+  if (!(entityType in ENTITY_DEFAULTS)) throw new Error(`Unknown entity type: ${entityType}`)
+  return readJsonEntity(entityType as keyof typeof JSON_FILES, ENTITY_DEFAULTS[entityType])
+})
+
+ipcMain.handle('data:writeEntity', async (_, entityType: string, data: unknown) => {
+  if (!(entityType in JSON_FILES)) throw new Error(`Unknown entity type: ${entityType}`)
+  writeJsonEntity(entityType as keyof typeof JSON_FILES, data)
+})
+
+ipcMain.handle('data:hashFile', async (_, entityType: string) => {
+  const filePath = join(DATA_DIR, JSON_FILES[entityType])
+  return { sha256: fileSha256Hex(filePath), size: fileSizeBytes(filePath) }
+})
+
+ipcMain.handle('data:getDataDir', async () => DATA_DIR)
+
+ipcMain.handle('data:isMigrated', async () => {
+  return existsSync(join(DATA_DIR, '.migrated'))
+})
+
+ipcMain.handle('data:writeAll', async (_, entities: Record<string, unknown>) => {
+  ensureDataDir()
+  for (const [entityType, data] of Object.entries(entities)) {
+    if (entityType in JSON_FILES) {
+      writeJsonEntity(entityType as keyof typeof JSON_FILES, data)
+    }
   }
 })

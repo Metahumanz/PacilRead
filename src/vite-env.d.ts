@@ -7,6 +7,14 @@ declare module '*.vue' {
 }
 
 export interface ElectronAPI {
+  data: {
+    readEntity: (entityType: string) => Promise<any>
+    writeEntity: (entityType: string, data: unknown) => Promise<void>
+    hashFile: (entityType: string) => Promise<{ sha256: string | null; size: number }>
+    getDataDir: () => Promise<string>
+    isMigrated: () => Promise<boolean>
+    writeAll: (entities: Record<string, unknown>) => Promise<void>
+  }
   db: {
     query: (sql: string, params?: any[]) => Promise<any>
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>

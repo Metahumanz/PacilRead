@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  data: {
+    readEntity: (entityType: string) => ipcRenderer.invoke('data:readEntity', entityType),
+    writeEntity: (entityType: string, data: unknown) => ipcRenderer.invoke('data:writeEntity', entityType, data),
+    hashFile: (entityType: string) => ipcRenderer.invoke('data:hashFile', entityType),
+    getDataDir: () => ipcRenderer.invoke('data:getDataDir'),
+    isMigrated: () => ipcRenderer.invoke('data:isMigrated'),
+    writeAll: (entities: Record<string, unknown>) => ipcRenderer.invoke('data:writeAll', entities),
+  },
   db: {
     query: (sql: string, params?: any[]) => ipcRenderer.invoke('db:query', sql, params),
     importBook: (filePath: string) => ipcRenderer.invoke('db:importBook', filePath),
