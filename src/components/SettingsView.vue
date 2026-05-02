@@ -438,19 +438,21 @@ const downloadChapterTextZipsAndFiles = async (auth: string) => {
     missing += 1
   }
 
-  // Fallback: individual file download for any books still missing chapters
+  // Fallback: only download individual files that are still missing locally
   if (missing > 0) {
-    const files = await window.electronAPI.db.getRequiredChapterTextFiles()
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      webdavSyncStatus.value = `下载章节正文散文件 (${i + 1}/${files.length})...`
-      const relPath = encodeRemoteRelativePath(file.relativePath)
-      const ok = !(await window.electronAPI.webdav.downloadFile(
-        baseUrl + 'chapter_text/' + relPath, file.localPath, auth
-      )).error || !(await window.electronAPI.webdav.downloadFile(
-        legacyBase + 'chapter_text/' + relPath, file.localPath, auth
-      )).error
-      if (ok) downloaded += 1
+    const files = await window.electronAPI.db.getMissingChapterTextFiles()
+    if (files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        webdavSyncStatus.value = `下载章节正文散文件 (${i + 1}/${files.length})...`
+        const relPath = encodeRemoteRelativePath(file.relativePath)
+        const ok = !(await window.electronAPI.webdav.downloadFile(
+          baseUrl + 'chapter_text/' + relPath, file.localPath, auth
+        )).error || !(await window.electronAPI.webdav.downloadFile(
+          legacyBase + 'chapter_text/' + relPath, file.localPath, auth
+        )).error
+        if (ok) downloaded += 1
+      }
     }
   }
 
