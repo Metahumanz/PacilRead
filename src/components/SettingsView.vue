@@ -408,23 +408,33 @@ const uploadBookChapterTextZips = async (auth: string) => {
 
 const downloadChapterTextZipsAndFiles = async (auth: string) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
+  // Fallback: old backups may be under a nested PacilRead/ prefix
+  const legacyBase = baseUrl + 'PacilRead/'
   const appDataPath = await window.electronAPI.app.getPath('userData')
   const bookIds = await window.electronAPI.db.getBookIdsWithFileGzipChapters()
   let downloaded = 0
   let missing = 0
 
+  const tryDownloadZip = async (remotePath: string, tempZipPath: string): Promise<boolean> => {
+    const result = await window.electronAPI.webdav.downloadFile(remotePath, tempZipPath, auth)
+    if (!result.error) {
+      await window.electronAPI.db.extractBookChapterTextZip(tempZipPath)
+      return true
+    }
+    return false
+  }
+
   for (let i = 0; i < bookIds.length; i++) {
     const bookId = bookIds[i]
     webdavSyncStatus.value = `下载章节正文 ZIP (${i + 1}/${bookIds.length})...`
 
-    const zipRemotePath = baseUrl + 'chapter_text/chapters_' + bookId + '.zip'
     const tempZipPath = appDataPath + '/chapters_' + bookId + '.tmp.zip'
-    const zipResult = await window.electronAPI.webdav.downloadFile(zipRemotePath, tempZipPath, auth)
-    if (!zipResult.error) {
-      await window.electronAPI.db.extractBookChapterTextZip(tempZipPath)
-      downloaded += 1
-      continue
-    }
+    const ok = await tryDownloadZip(
+      baseUrl + 'chapter_text/chapters_' + bookId + '.zip', tempZipPath
+    ) || await tryDownloadZip(
+      legacyBase + 'chapter_text/chapters_' + bookId + '.zip', tempZipPath
+    )
+    if (ok) { downloaded += 1; continue }
     missing += 1
   }
 
@@ -434,11 +444,13 @@ const downloadChapterTextZipsAndFiles = async (auth: string) => {
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       webdavSyncStatus.value = `下载章节正文散文件 (${i + 1}/${files.length})...`
-      const remotePath = baseUrl + 'chapter_text/' + encodeRemoteRelativePath(file.relativePath)
-      const result = await window.electronAPI.webdav.downloadFile(remotePath, file.localPath, auth)
-      if (!result.error) {
-        downloaded += 1
-      }
+      const relPath = encodeRemoteRelativePath(file.relativePath)
+      const ok = !(await window.electronAPI.webdav.downloadFile(
+        baseUrl + 'chapter_text/' + relPath, file.localPath, auth
+      )).error || !(await window.electronAPI.webdav.downloadFile(
+        legacyBase + 'chapter_text/' + relPath, file.localPath, auth
+      )).error
+      if (ok) downloaded += 1
     }
   }
 
