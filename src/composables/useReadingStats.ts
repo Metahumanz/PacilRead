@@ -185,9 +185,10 @@ function buildWebdavBaseUrl(rawUrl: string, rawDir: string): string {
 }
 
 export function buildPacilReadBaseUrl(rawUrl: string, rawDir: string): string {
-  let url = buildWebdavBaseUrl(rawUrl, rawDir)
-  if (!url.endsWith('/')) url += '/'
-  return `${url}${PACILREAD_ROOT_DIR}/`
+  let baseUrl = buildWebdavBaseUrl(rawUrl, rawDir)
+  if (!baseUrl.endsWith('/')) baseUrl += '/'
+  // If user configured a subdir, it serves as the namespace; otherwise default to PacilRead.
+  return rawDir.trim() ? baseUrl : `${baseUrl}${PACILREAD_ROOT_DIR}/`
 }
 
 function buildRemoteReadingStatsFileName(deviceId: string): string {

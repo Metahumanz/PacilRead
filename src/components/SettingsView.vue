@@ -359,15 +359,6 @@ const getFileNameFromPath = (value: string) => {
   return clean.split(/[\\/]/).pop() || ''
 }
 
-const fileUrlToLocalPath = (value: string) => {
-  if (!value.startsWith('file:///')) return value
-  try {
-    return decodeURIComponent(value.replace(/^file:\/\/\//, ''))
-  } catch (_) {
-    return value.replace(/^file:\/\/\//, '')
-  }
-}
-
 const localPathToFileUrl = (value: string) => 'file:///' + value.replace(/\\/g, '/')
 
 const ensureRemoteRelativeDir = async (baseUrl: string, relativeDir: string, auth: string) => {
@@ -412,24 +403,6 @@ const uploadChapterTextFiles = async (auth: string, skipExisting = false) => {
   }
 
   return { uploaded, skipped, total: files.length }
-}
-
-const uploadCoverFiles = async (auth: string) => {
-  const baseUrl = getCurrentPacilReadBaseUrl()
-  const appDataPath = await window.electronAPI.app.getPath('userData')
-  const coversDir = appDataPath + '/covers/'
-  const coverFiles = await window.electronAPI.db.query('SELECT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ""')
-  for (let i = 0; i < (coverFiles as any[]).length; i++) {
-    const source = String((coverFiles as any[])[i].cover_path || '')
-    const fileName = getFileNameFromPath(source)
-    if (!fileName) continue
-    const localPath = source.startsWith('file:///') ? fileUrlToLocalPath(source) : coversDir + fileName
-    webdavSyncStatus.value = `上传封面 (${i + 1}/${(coverFiles as any[]).length})...`
-    assertUploadSucceeded(
-      await window.electronAPI.webdav.uploadFile(localPath, baseUrl + 'covers/' + encodeURIComponent(fileName), auth),
-      '上传封面'
-    )
-  }
 }
 
 const downloadCoverFiles = async (auth: string) => {
@@ -718,7 +691,6 @@ const fullBackup = async () => {
       }
       await uploadBookChapterTextZips(auth)
       await uploadChapterTextFiles(auth)
-      await uploadCoverFiles(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -801,7 +773,9 @@ const fullRestore = async () => {
     if (isV8Restore || !dlError) {
       webdavSyncStatus.value = '恢复章节正文...'
       chapterTextRestore = await downloadChapterTextZipsAndFiles(auth)
-      await downloadCoverFiles(auth)
+      if (!isV8Restore) {
+        await downloadCoverFiles(auth)
+      }
     }
 
     webdavSyncStatus.value = '应用桌面设置...'
@@ -878,20 +852,6 @@ const incrementalBackup = async () => {
           assertUploadSucceeded(
             await window.electronAPI.webdav.uploadFile(booksDir + fileName, remotePath, auth),
             '上传书籍'
-          )
-        }
-      }
-      const coversDir = appDataPath + '/covers/'
-      const coverFiles = store.books.value.map(b => b.coverFile).filter(Boolean) as string[]
-      for (let i = 0; i < coverFiles.length; i++) {
-        const fileName = coverFiles[i]
-        const remotePath = baseUrl + 'covers/' + fileName
-        const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
-        if (check.status !== 200) {
-          webdavSyncStatus.value = `上传封面 (${i + 1}/${coverFiles.length})...`
-          assertUploadSucceeded(
-            await window.electronAPI.webdav.uploadFile(coversDir + fileName, remotePath, auth),
-            '上传封面'
           )
         }
       }

@@ -26,20 +26,25 @@ function getWebdavContext() {
   const store = useDataStore()
   const s = store.settingsMap.value
   const url = s['webdavUrl'] || ''
+  const dir = s['webdavDir'] || ''
   const user = s['webdavUser'] || ''
   const pass = s['webdavPass'] || ''
+  // If user configured a subdirectory, use it as the namespace;
+  // otherwise default to "PacilRead" for bare-root setups.
+  const namespace = dir ? dir.replace(/\/+$/, '') : 'PacilRead'
+  const baseUrl = (url + namespace).replace(/\/+$/, '')
   return {
     url,
     user,
     pass,
     auth: btoa(`${user}:${pass}`),
-    baseUrl: url.replace(/\/+$/, ''),
+    baseUrl,
   }
 }
 
 function remoteUrl(path: string): string {
   const ctx = getWebdavContext()
-  return `${ctx.baseUrl}/PacilRead/${path}`
+  return `${ctx.baseUrl}/${path}`
 }
 
 async function webdavPut(path: string, body: string, contentType?: string): Promise<boolean> {
@@ -102,6 +107,35 @@ async function webdavFileExists(path: string): Promise<boolean> {
   } catch { return false }
 }
 
+// ---- Backward-compat helpers ----
+
+async function checkManifestAt(baseUrl: string): Promise<boolean> {
+  const ctx = getWebdavContext()
+  const url = `${baseUrl}/database/manifest.json`
+  try {
+    const response = await window.electronAPI.webdav.request({
+      url,
+      method: 'HEAD',
+      headers: { Authorization: `Basic ${ctx.auth}` },
+    })
+    return response.status === 200
+  } catch { return false }
+}
+
+async function getJsonAt(baseUrl: string, path: string): Promise<string | null> {
+  const ctx = getWebdavContext()
+  const url = `${baseUrl}/${path}`
+  try {
+    const response = await window.electronAPI.webdav.request({
+      url,
+      method: 'GET',
+      headers: { Authorization: `Basic ${ctx.auth}` },
+    })
+    if (response.status === 200 && response.data) return response.data
+    return null
+  } catch { return null }
+}
+
 // ---- Cover asset helpers ----
 
 async function getCoversDir(): Promise<string> {
@@ -152,17 +186,19 @@ async function uploadCovers(
 async function downloadCovers(
   books: any[],
   onProgress?: (message: string) => void,
+  baseOverride?: string,
 ): Promise<string[]> {
   const downloaded: string[] = []
   const coversDir = await getCoversDir()
   const ctx = getWebdavContext()
+  const base = baseOverride || ctx.baseUrl
   const filenames = getCoverFilenames(books)
 
   for (const filename of filenames) {
     const localPath = `${coversDir}/${filename}`
     try {
       const response = await window.electronAPI.webdav.downloadFile(
-        remoteUrl(`covers/${encodeURIComponent(filename)}`),
+        `${base}/covers/${encodeURIComponent(filename)}`,
         localPath,
         ctx.auth,
       )
@@ -317,9 +353,22 @@ export async function fullRestoreV8(
     const dataStore = useDataStore()
     onProgress?.('正在检查远程数据格式...')
 
-    // Check if v8 JSON format exists
-    const hasV8 = await webdavFileExists('database/manifest.json')
-    if (!hasV8) {
+    // Check if v8 JSON format exists at configured subdir
+    let base = getWebdavContext().baseUrl
+    let manifestExists = await checkManifestAt(base)
+    if (!manifestExists) {
+      // Fallback: old code uploaded to root/PacilRead (without webdavDir)
+      const rootBase = `${getWebdavContext().url.replace(/\/+$/, '')}/PacilRead`
+      if (rootBase !== base) {
+        onProgress?.('子目录未找到 v8 数据，尝试根目录 PacilRead...')
+        manifestExists = await checkManifestAt(rootBase)
+        if (manifestExists) {
+          // Use root-level base for all subsequent downloads
+          base = rootBase
+        }
+      }
+    }
+    if (!manifestExists) {
       return { success: false, error: '远程没有 v8 JSON 格式数据，请尝试旧格式恢复' }
     }
 
@@ -328,18 +377,18 @@ export async function fullRestoreV8(
 
     for (const entity of ENTITY_TYPES) {
       onProgress?.(`正在下载 ${entity}.json...`)
-      const data = await webdavGetJson(`${entity}.json`)
-      if (data !== null) {
-        entities[entity] = data
+      const raw = await getJsonAt(base, `database/${entity}.json`)
+      if (raw !== null) {
+        try { entities[entity] = JSON.parse(raw) } catch {}
       }
     }
 
     // Also try from sync/ directory as fallback
     for (const entity of ENTITY_TYPES) {
       if (!entities[entity]) {
-        const data = await webdavGetJson(`sync/${entity}.json`)
-        if (data !== null) {
-          entities[entity] = data
+        const raw = await getJsonAt(base, `sync/${entity}.json`)
+        if (raw !== null) {
+          try { entities[entity] = JSON.parse(raw) } catch {}
         }
       }
     }
@@ -351,7 +400,7 @@ export async function fullRestoreV8(
     // Download cover image files
     if (entities.books) {
       onProgress?.('正在下载封面文件...')
-      await downloadCovers(entities.books, onProgress)
+      await downloadCovers(entities.books, onProgress, base)
     }
 
     onProgress?.('全量恢复完成!')
