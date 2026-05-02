@@ -96,14 +96,15 @@ const deleteBook = async (bookId: number) => {
 const setCover = async (bookId: number) => {
   const filePath = await window.electronAPI.dialog.openImage()
   if (!filePath) return
-  const fileName = filePath.replace(/\\/g, '/').split('/').pop() || null
   try {
+    const result = await window.electronAPI.app.copyCover(filePath)
+    if (!result.success) throw new Error(result.error || '复制封面失败')
     const { updateBook } = useDataStore()
-    await updateBook(bookId, { coverFile: fileName })
-    // The actual file copying happens in the importBook handler
+    await updateBook(bookId, { coverFile: result.filename! })
     await fetchBooks()
   } catch (error) {
     console.error('Failed to set cover:', error)
+    alert('设置封面失败: ' + (error as Error).message)
   }
 }
 

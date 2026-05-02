@@ -1855,6 +1855,21 @@ ipcMain.handle('webdav:downloadFile', async (_, remoteUrl: string, localPath: st
   }
 })
 
+ipcMain.handle('fs:copyCover', async (_, sourcePath: string) => {
+  try {
+    const ext = extname(sourcePath).toLowerCase()
+    const coversDir = join(app.getPath('userData'), 'covers')
+    if (!existsSync(coversDir)) mkdirSync(coversDir, { recursive: true })
+    const uniqueId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+    const filename = `manual_${uniqueId}${ext}`
+    const destPath = join(coversDir, filename)
+    copyFileSync(sourcePath, destPath)
+    return { success: true, filename }
+  } catch (error: any) {
+    return { success: false, error: error.message || String(error) }
+  }
+})
+
 ipcMain.handle('webdav:request', async (_, opts: { url: string; method: string; headers?: any; body?: string }) => {
   try {
     const res = await fetch(opts.url, {

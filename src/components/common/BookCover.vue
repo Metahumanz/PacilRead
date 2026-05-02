@@ -8,6 +8,7 @@ const props = defineProps<{
 }>()
 
 const imageFailed = ref(false)
+const coversReady = ref(false)
 const coversBaseUrl = ref('')
 
 onMounted(async () => {
@@ -15,6 +16,7 @@ onMounted(async () => {
     const userData = await window.electronAPI.app.getPath('userData')
     coversBaseUrl.value = 'file:///' + userData.replace(/\\/g, '/') + '/covers/'
   } catch {}
+  coversReady.value = true
 })
 
 const resolvedCoverSrc = computed(() => {
@@ -38,6 +40,10 @@ const initials = computed(() => {
 
 watch(() => props.coverPath, () => {
   imageFailed.value = false
+})
+
+watch(resolvedCoverSrc, (newVal, oldVal) => {
+  if (newVal !== oldVal) imageFailed.value = false
 })
 </script>
 

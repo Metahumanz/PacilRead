@@ -106,6 +106,7 @@ export interface ElectronAPI {
     getVersion: () => Promise<string>
     getPath: (name: string) => Promise<string>
     quit: () => Promise<void>
+    copyCover: (sourcePath: string) => Promise<{ success: boolean; filename?: string; error?: string }>
   }
   webdav: {
     request: (opts: { url: string; method: string; headers?: Record<string, string>; body?: string }) => Promise<{ status?: number; data?: string; error?: string }>

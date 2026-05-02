@@ -78,7 +78,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
-    quit: () => ipcRenderer.invoke('app:quit')
+    quit: () => ipcRenderer.invoke('app:quit'),
+    copyCover: (sourcePath: string) => ipcRenderer.invoke('fs:copyCover', sourcePath),
   },
   webdav: {
     request: (opts: any) => ipcRenderer.invoke('webdav:request', opts),
