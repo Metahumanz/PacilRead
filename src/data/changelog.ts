@@ -7,6 +7,17 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.6.2',
+    date: '2026-05-02',
+    changes: [
+      '修复 BookCover 封面竞态条件：coversBaseUrl 异步加载期间 imageFailed 被永久置 true，导致所有封面回退到渐变色占位',
+      '修复手动设置封面不显示：新增 fs:copyCover IPC 通道，设置封面时自动将图片文件拷贝至 covers 目录',
+      '修复 WebDAV 同步路径多嵌套一层 PacilRead/ 的问题：webdavDir 设了子目录后不再追加 PacilRead 前缀，子目录自身即为命名空间',
+      '修复全量恢复误报"v8 数据不存在"：新增根目录 PacilRead/ 回退查找，兼容旧版本备份路径',
+      'SettingsView 清理重复封面逻辑：移除 uploadCoverFiles/fileUrlToLocalPath 函数，封面操作统一由 useV8Sync 处理'
+    ]
+  },
+  {
     version: '0.6.1',
     date: '2026-05-01',
     changes: [
