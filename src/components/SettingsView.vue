@@ -361,50 +361,6 @@ const getFileNameFromPath = (value: string) => {
 
 const localPathToFileUrl = (value: string) => 'file:///' + value.replace(/\\/g, '/')
 
-const ensureRemoteRelativeDir = async (baseUrl: string, relativeDir: string, auth: string) => {
-  const parts = relativeDir.split('/').filter(Boolean)
-  let current = baseUrl
-  for (const part of parts) {
-    current += encodeURIComponent(part) + '/'
-    await ensureWebdavCollection(current, auth)
-  }
-}
-
-const uploadChapterTextFiles = async (auth: string, skipExisting = false) => {
-  const baseUrl = getCurrentPacilReadBaseUrl()
-  const files = await window.electronAPI.db.getRequiredChapterTextFiles()
-  if (files.length === 0) return { uploaded: 0, skipped: 0, total: 0 }
-
-  const chapterBaseUrl = baseUrl + 'chapter_text/'
-  await ensureWebdavCollection(chapterBaseUrl, auth)
-  const dirs = Array.from(new Set(files.map(file => file.relativePath.split('/').slice(0, -1).join('/')).filter(Boolean)))
-  for (const dir of dirs) {
-    await ensureRemoteRelativeDir(chapterBaseUrl, dir, auth)
-  }
-
-  let uploaded = 0
-  let skipped = 0
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    const remotePath = chapterBaseUrl + encodeRemoteRelativePath(file.relativePath)
-    if (skipExisting) {
-      const check = await window.electronAPI.webdav.request({ url: remotePath, method: 'HEAD', headers: { 'Authorization': `Basic ${auth}` } })
-      if (check.status === 200) {
-        skipped += 1
-        continue
-      }
-    }
-    webdavSyncStatus.value = `上传章节正文 (${i + 1}/${files.length})...`
-    const result = await window.electronAPI.webdav.uploadFile(file.localPath, remotePath, auth)
-    if (result.error || result.success === false) {
-      throw new Error(result.error || `上传章节正文失败 (HTTP ${result.status || 'unknown'})`)
-    }
-    uploaded += 1
-  }
-
-  return { uploaded, skipped, total: files.length }
-}
-
 const downloadCoverFiles = async (auth: string) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
   const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -690,7 +646,6 @@ const fullBackup = async () => {
         throw new Error(`v8 备份失败: ${v8Result.error}`)
       }
       await uploadBookChapterTextZips(auth)
-      await uploadChapterTextFiles(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
