@@ -183,7 +183,8 @@ function getChapterCountForBook(bookId: number): number {
 }
 
 function getCurrentChapterTitle(bookId: number, progressIndex: number): string {
-  const chapter = chapters.value.find(c => c.bookId === bookId && c.orderIndex === progressIndex)
+  const bookChapters = getChaptersForBook(bookId)
+  const chapter = bookChapters[Math.min(Math.max(progressIndex, 0), bookChapters.length - 1)]
   return chapter?.title || ''
 }
 

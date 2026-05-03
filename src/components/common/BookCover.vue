@@ -63,6 +63,10 @@ watch(resolvedCoverSrc, (newVal, oldVal) => {
 </template>
 
 <style scoped>
+.app-book-cover {
+  container-type: inline-size;
+}
+
 .book-cover-fallback {
   width: 100%;
   height: 100%;
@@ -71,11 +75,15 @@ watch(resolvedCoverSrc, (newVal, oldVal) => {
   justify-content: center;
   padding: 0.5rem;
   color: var(--app-text-on-primary);
-  font-size: clamp(1rem, 14%, 2.75rem);
+  font-size: clamp(1rem, 28cqw, 2.5rem);
   font-weight: 800;
   letter-spacing: 0;
   text-align: center;
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--app-accent-hover) 85%, #111 15%), var(--app-accent));
+}
+
+.app-book-cover.bookshelf-grid-cover .book-cover-fallback {
+  font-size: clamp(2rem, 30cqw, 5.5rem);
 }
 </style>

@@ -105,7 +105,7 @@ const autoOpenLastRead = ref(false)
 const silentUpdate = ref(false)
 const sliderMode = ref<'book' | 'chapter'>('book')
 const sidebarCollapsed = ref(false)
-const viewMode = ref<'grid' | 'list' | 'icon'>('grid')
+const viewMode = ref<'grid' | 'list'>('grid')
 const bookshelfShowAddEntry = ref(true)
 
 // Home navigation preferences are desktop-private WebDAV settings.
@@ -328,7 +328,7 @@ export function useSettings() {
       if (v('hud_br') !== undefined) hudBottomRight.value = v('hud_br')!
       if (v('chapterTitleDisplay') !== undefined) chapterTitleDisplay.value = v('chapterTitleDisplay')! as any || 'left'
       if (v('sidebarCollapsed') !== undefined) sidebarCollapsed.value = v('sidebarCollapsed')! === 'true'
-      if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! as any || 'grid'
+      if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! === 'list' ? 'list' : 'grid'
       if (v('bookshelf_show_add_entry') !== undefined) bookshelfShowAddEntry.value = v('bookshelf_show_add_entry')! !== 'false'
       if (v('home_nav_auto_switch_enabled') !== undefined) homeNavAutoSwitchEnabled.value = v('home_nav_auto_switch_enabled')! !== 'false'
       if (v('home_nav_manual_mode') !== undefined) homeNavManualMode.value = v('home_nav_manual_mode')! === 'bottom' ? 'bottom' : 'sidebar'
