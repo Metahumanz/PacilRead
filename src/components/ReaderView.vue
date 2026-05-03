@@ -74,7 +74,7 @@ const settings = useSettings()
 const {
   fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
   fontFamily, fontColor, coverColor, bgImage, blurAmount,
-  textAlign, alignBottom, pageMode, doublePageStep,
+  textAlign, pageMode, doublePageStep,
   flipMode, flipSpeed, autoPageSpeed,
   ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
@@ -182,7 +182,7 @@ const saveProgress = async () => {
 // ---- Reader Paginator (async prewarm + cache) ----
 const paginator = useReaderPaginator({
   containerRef, fontSize, lineHeight, letterSpacing, fontWeight, fontFamily,
-  textAlign, marginX, marginY, pageMode, alignBottom, pIndent, pSpacing,
+  textAlign, marginX, marginY, pageMode, pIndent, pSpacing,
 })
 
 const pagesResult = computed(() => {
@@ -610,11 +610,11 @@ onUnmounted(async () => {
       <!-- Carousel -->
       <div class="carousel" :class="{ sliding: carouselSliding }" :style="{ transform: carouselTransform }">
         <div class="slide">
-          <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px`, justifyContent: alignBottom ? 'flex-end' : 'flex-start' }">
+          <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div ref="prevContentRef" class="pg-ct" :style="{
               ...textStyle, transform: `translateX(${prevPageOffset})`,
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
+              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: 'start'
             }" v-if="prevChapterData">
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
               <div v-html="prevBody" class="ch-body"></div>
@@ -623,11 +623,11 @@ onUnmounted(async () => {
         </div>
 
         <div class="slide">
-          <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px`, justifyContent: alignBottom ? 'flex-end' : 'flex-start' }">
+          <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="{
               ...textStyle, transform: `translateX(${pageOffset})`,
               columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: alignBottom ? 'end' : 'start'
+              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: 'start'
             }">
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
@@ -764,7 +764,7 @@ onUnmounted(async () => {
 .carousel.sliding { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .slide { width:100vw; height:100%; flex-shrink:0; overflow:hidden; }
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
-.pg-ct { height:100%; column-fill:auto; }
+.pg-ct { height:100%; column-fill:auto; align-content:start; }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .pg-cache-fade { animation: paginator-fade-in 0.1s ease-out; }
 @keyframes paginator-fade-in { from { opacity: 0.85; } to { opacity: 1; } }

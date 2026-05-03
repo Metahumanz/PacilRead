@@ -19,7 +19,6 @@ export interface PaginationSnapshot {
   marginX: number
   marginY: number
   pageMode: string
-  alignBottom: boolean
   pIndent: number
   pSpacing: number
   chapterId: number

@@ -13,7 +13,7 @@ function computeSnapshotHash(snap: Omit<PaginationSnapshot, 'hash'>): string {
     snap.containerWidth, snap.containerHeight, snap.pageWidth,
     snap.fontSize, snap.lineHeight, snap.letterSpacing, snap.fontWeight,
     snap.fontFamily, snap.textAlign, snap.pageMode, snap.marginX, snap.marginY,
-    snap.alignBottom ? 1 : 0, snap.pIndent, snap.pSpacing, snap.chapterId,
+    snap.pIndent, snap.pSpacing, snap.chapterId,
   ]
   const str = parts.join('|')
   let hash = 5381
@@ -92,7 +92,6 @@ export function useReaderPaginator(opts: {
   marginX: Ref<number>
   marginY: Ref<number>
   pageMode: Ref<'single' | 'double'>
-  alignBottom: Ref<boolean>
   pIndent: Ref<number>
   pSpacing: Ref<number>
 }) {
@@ -116,7 +115,6 @@ export function useReaderPaginator(opts: {
       marginX: opts.marginX.value,
       marginY: opts.marginY.value,
       pageMode: opts.pageMode.value,
-      alignBottom: opts.alignBottom.value,
       pIndent: opts.pIndent.value,
       pSpacing: opts.pSpacing.value,
       chapterId,

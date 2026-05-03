@@ -9,7 +9,7 @@ const { recalc } = defineProps<{
 const settings = useSettings()
 const {
   fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
-  fontFamily, fontColor, coverColor, textAlign, alignBottom, 
+  fontFamily, fontColor, coverColor, textAlign,
   pageMode, doublePageStep, blurAmount, chapterTitleDisplay,
   customThemes, systemFonts, saveAllStyling, pIndent, pSpacing
 } = settings
@@ -123,14 +123,6 @@ const updateStyling = () => {
         <button @click="chapterTitleDisplay='left'; updateStyling()" :class="{active: chapterTitleDisplay==='left'}">靠左</button>
         <button @click="chapterTitleDisplay='center'; updateStyling()" :class="{active: chapterTitleDisplay==='center'}">居中</button>
         <button @click="chapterTitleDisplay='none'; updateStyling()" :class="{active: chapterTitleDisplay==='none'}">隐藏</button>
-      </div>
-    </div>
-
-    <div class="sr">
-      <label>垂直对齐</label>
-      <div class="btn-group">
-        <button @click="alignBottom=false; updateStyling()" :class="{active: !alignBottom}">常规（靠上）</button>
-        <button @click="alignBottom=true; updateStyling()" :class="{active: alignBottom}">靠底沉降</button>
       </div>
     </div>
 
