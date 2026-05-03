@@ -6,6 +6,25 @@ export interface PageSlice {
   isLast: boolean
 }
 
+export type FlipMode = 'slide' | 'cover' | 'simulation' | 'scroll' | 'none'
+
+export type PagingDirection = -1 | 1
+
+export interface PagingTarget {
+  chapterIndex: number
+  pageIndex: number
+}
+
+export interface PagingAnimationState {
+  active: boolean
+  phase: 'idle' | 'dragging' | 'settling'
+  mode: FlipMode
+  direction: PagingDirection
+  progress: number
+  touchYRatio: number
+  currentSnapshotHtml: string
+}
+
 export interface PaginationSnapshot {
   containerWidth: number
   containerHeight: number

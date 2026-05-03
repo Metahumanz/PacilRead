@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 import { useDataStore } from './useDataStore'
+import type { FlipMode } from '../types/pagination'
 
 /*
  * 设置系统架构说明（与 Android 端兼容性）
@@ -62,7 +63,7 @@ const textAlign = ref('left')
 const alignBottom = ref(false)
 const pageMode = ref<'single' | 'double'>('single')
 const doublePageStep = ref<1 | 2>(2)
-const flipMode = ref<'slide' | 'cover' | 'curl'>('slide')
+const flipMode = ref<FlipMode>('slide')
 const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
 const pIndent = ref(2)
 const pSpacing = ref(0.8)
@@ -157,6 +158,15 @@ const customThemes = ref<CustomTheme[]>([])
 
 // System fonts
 const systemFonts = ref<string[]>([])
+
+const normalizeFlipMode = (value: string | undefined): FlipMode => {
+  if (value === 'cover' || value === 'slide' || value === 'simulation' || value === 'scroll' || value === 'none') {
+    return value
+  }
+  if (value === 'curl' || value === 'flip') return 'simulation'
+  if (value === 'fade') return 'scroll'
+  return 'slide'
+}
 
 function resetSettingsState() {
   fontSize.value = 20
@@ -263,10 +273,7 @@ export function useSettings() {
       if (v('reader_coverColor') !== undefined) coverColor.value = v('reader_coverColor')! || '#0f172a'
       if (v('bgImage') !== undefined) bgImage.value = v('bgImage')! || ''
       if (v('reader_flipMode') !== undefined) {
-        const fm = v('reader_flipMode')!
-        if (fm === 'curl') flipMode.value = 'curl'
-        else if (fm === 'cover') flipMode.value = 'cover'
-        else flipMode.value = 'slide'
+        flipMode.value = normalizeFlipMode(v('reader_flipMode'))
       }
       if (v('reader_flipSpeed') !== undefined) flipSpeed.value = v('reader_flipSpeed')! as any || 'medium'
       if (v('reader_autoPageSpeed') !== undefined) autoPageSpeed.value = parseInt(v('reader_autoPageSpeed')!) || 10

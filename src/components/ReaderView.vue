@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed, onUnmounted } from 'vue'
+import { ref, onMounted, watch, computed, onUnmounted, type CSSProperties } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useTTS } from '../composables/useTTS'
@@ -208,10 +208,21 @@ const pagination = usePagination({
 })
 const {
   currentPage, totalPages, containerWidth, pendingWebdavPos,
-  carouselSliding, suppressAnim, showingCover, sweepDir, snapshotHtml,
-  flipDurationMap, pageOffset, prevPageOffset, carouselTransform, progressPercent,
+  suppressAnim, incomingTarget, animationState, pagingVisuals,
+  flipDurationMap, pageOffset, prevPageOffset, incomingPageOffset, progressPercent,
   recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
+  handlePointerDown: paginationPointerDown,
+  handlePointerMove: paginationPointerMove,
+  handlePointerUp: paginationPointerUp,
+  handlePointerCancel: paginationPointerCancel,
+  consumeClickAfterDrag,
 } = pagination
+
+const incomingChapterData = computed(() => {
+  const target = incomingTarget.value
+  return target ? chapters.value[target.chapterIndex] || null : null
+})
+const incomingBody = computed(() => incomingChapterData.value ? applyReplacements(incomingChapterData.value.body) : '')
 
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
@@ -315,6 +326,15 @@ const textStyle = computed(() => ({
   textAlign: textAlign.value as any,
 }))
 
+const pageContentStyle = (offset: string): CSSProperties => ({
+  ...textStyle.value,
+  transform: `translateX(${offset})`,
+  columnWidth: pageMode.value === 'double' ? `calc(50vw - ${marginX.value * 2}px)` : `calc(100vw - ${marginX.value * 2}px)`,
+  columnGap: `${marginX.value * 2}px`,
+  columnFill: 'auto',
+  alignContent: 'start',
+})
+
 const isAutoNightActive = computed(() => readerAutoNightEnabled.value && resolvedBucket.value === 'dark')
 const shouldOverrideAutoNight = computed(() => (
   isAutoNightActive.value && readerAutoNightCustomPolicy.value === 'override'
@@ -395,9 +415,14 @@ const closeAll = () => {
 const closeKeyHints = () => { showKeyHints.value = false }
 const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
 
+const isReaderChromeTarget = (target: EventTarget | null) => {
+  const t = target as HTMLElement | null
+  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p')
+}
+
 const handleClick = (e: MouseEvent) => {
-  const t = e.target as HTMLElement
-  if (t.closest('.m-top') || t.closest('.m-bot') || t.closest('.m-info') || t.closest('.sty-p') || t.closest('.toc-p') || t.closest('.search-p') || t.closest('.rules-p') || t.closest('.copy-modal') || t.closest('.reader-options-p')) return
+  if (consumeClickAfterDrag()) return
+  if (isReaderChromeTarget(e.target)) return
   recordReadingActivity()
   if (showMenu.value) { closeAll(); return }
   const x = e.clientX, y = e.clientY
@@ -409,21 +434,21 @@ const handleClick = (e: MouseEvent) => {
   else if (x < w / 3 || (isCenterCol && y < h / 3)) trackedPrevPage()
   else trackedNextPage()
 }
-let touchStartX = 0, touchStartY = 0
-const handleTouchStart = (e: TouchEvent) => {
-  if (!showMenu.value) {
-    recordReadingActivity()
-    touchStartX = e.changedTouches[0].screenX
-    touchStartY = e.changedTouches[0].screenY
-  }
+
+const handlePointerDown = (e: PointerEvent) => {
+  if (showMenu.value || isReaderChromeTarget(e.target)) return
+  recordReadingActivity()
+  paginationPointerDown(e)
 }
-const handleTouchEnd = (e: TouchEvent) => {
+const handlePointerMove = (e: PointerEvent) => {
   if (showMenu.value) return
-  const endX = e.changedTouches[0].screenX, endY = e.changedTouches[0].screenY
-  if (Math.abs(endX - touchStartX) > Math.abs(endY - touchStartY) * 1.5) {
-    const diff = endX - touchStartX
-    if (diff < -50) trackedNextPage(); else if (diff > 50) trackedPrevPage()
-  }
+  paginationPointerMove(e)
+}
+const handlePointerUp = (e: PointerEvent) => {
+  paginationPointerUp(e)
+}
+const handlePointerCancel = (e: PointerEvent) => {
+  paginationPointerCancel(e)
 }
 const handleContextMenu = (e: MouseEvent) => {
   if (showMenu.value) return
@@ -567,10 +592,11 @@ onUnmounted(async () => {
     touchAction: showMenu ? 'auto' : 'none',
     '--dur-slide': flipDurationMap.slide,
     '--dur-cover': flipDurationMap.cover,
-    '--dur-curl': flipDurationMap.curl,
+    '--dur-simulation': flipDurationMap.simulation,
+    '--dur-scroll': flipDurationMap.scroll,
     '--p-indent': pIndent + 'em',
     '--p-spacing': pSpacing + 'em'
-  }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
+  }" @wheel="handleWheel" @click="handleClick" @contextmenu.prevent="handleContextMenu" @pointerdown="handlePointerDown" @pointermove="handlePointerMove" @pointerup="handlePointerUp" @pointercancel="handlePointerCancel">
     <!-- Background layer -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
          :style="[effectiveReaderBgStyle, { filter: blurAmount > 0 && !shouldOverrideAutoNight ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 && !shouldOverrideAutoNight ? 'scale(1.1)' : 'none' }]"
@@ -597,50 +623,40 @@ onUnmounted(async () => {
       </div>
 
       <template v-else>
-      <!-- Reveal animation overlay -->
-      <div v-if="showingCover" class="snapshot-layer" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']">
-        <div class="absolute inset-0 pointer-events-none transform-gpu origin-center" 
-             :style="[effectiveReaderBgStyle, { filter: blurAmount > 0 && !shouldOverrideAutoNight ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 && !shouldOverrideAutoNight ? 'scale(1.1)' : 'none' }]"
-             :class="{ 'bg-[#0f172a]': !bgImage }"></div>
-        <div v-if="bgImage && blurAmount > 0 && !shouldOverrideAutoNight" class="absolute inset-0 pointer-events-none bg-black/40"></div>
-        <div class="absolute inset-0" v-html="snapshotHtml"></div>
-      </div>
-      <div v-if="showingCover" class="sweep-line" :class="[sweepDir, flipMode === 'curl' ? 'is-curl' : '']"></div>
-
-      <!-- Carousel -->
-      <div class="carousel" :class="{ sliding: carouselSliding }" :style="{ transform: carouselTransform }">
-        <div class="slide">
-          <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
-            <div ref="prevContentRef" class="pg-ct" :style="{
-              ...textStyle, transform: `translateX(${prevPageOffset})`,
-              columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: 'start'
-            }" v-if="prevChapterData">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
-              <div v-html="prevBody" class="ch-body"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="slide">
+      <div class="page-stage" :style="{ backgroundColor: coverColor }">
+        <div class="page-layer page-current" :style="pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
-            <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="{
-              ...textStyle, transform: `translateX(${pageOffset})`,
-              columnWidth: pageMode === 'double' ? `calc(50vw - ${marginX * 2}px)` : `calc(100vw - ${marginX * 2}px)`,
-              columnGap: `${marginX * 2}px`, columnFill: 'auto', alignContent: 'start'
-            }">
+            <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="pageContentStyle(pageOffset)">
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
             </div>
           </div>
         </div>
 
-        <div class="slide">
+        <div v-if="incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
           <div class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
-            <div class="pg-ct" :style="textStyle" v-if="nextChapterData">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ nextChapterData.title }}</h2>
-              <div v-html="nextBody" class="ch-body"></div>
+            <div class="pg-ct" :style="pageContentStyle(incomingPageOffset)">
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ incomingChapterData?.title }}</h2>
+              <div v-html="incomingBody" class="ch-body"></div>
             </div>
+          </div>
+        </div>
+
+        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-snapshot" :style="pagingVisuals.currentSnapshot">
+          <div v-html="animationState.currentSnapshotHtml"></div>
+        </div>
+        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold" :style="pagingVisuals.fold">
+          <div class="page-fold-inner" :style="pagingVisuals.foldInner" v-html="animationState.currentSnapshotHtml"></div>
+        </div>
+        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
+        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
+      </div>
+
+      <div class="measure-layer" aria-hidden="true">
+        <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
+          <div ref="prevContentRef" class="pg-ct" :style="pageContentStyle(prevPageOffset)" v-if="prevChapterData">
+            <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
+            <div v-html="prevBody" class="ch-body"></div>
           </div>
         </div>
       </div>
@@ -738,31 +754,21 @@ onUnmounted(async () => {
 .empty-reader button { padding:10px 18px; border-radius:12px; background:#2563eb; color:white; font-weight:700; border:0; cursor:pointer; }
 .empty-reader button:hover { background:#3b82f6; }
 
-.snapshot-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
-.snapshot-layer.left:not(.is-curl) { animation: clipLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.snapshot-layer.right:not(.is-curl) { animation: clipRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-@keyframes clipLeft { from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } to { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); } }
-@keyframes clipRight { from { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } to { clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); } }
-
-.sweep-line { position: absolute; top: 0; bottom: 0; width: 40px; z-index: 21; pointer-events: none; background: linear-gradient(to right, transparent, rgba(0,0,0,0.15), rgba(0,0,0,0.4), transparent); }
-.sweep-line.left:not(.is-curl) { animation: sweepLeft var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.sweep-line.right:not(.is-curl) { animation: sweepRight var(--dur-cover) cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-@keyframes sweepLeft { from { transform: translateX(100vw); } to { transform: translateX(-40px); } }
-@keyframes sweepRight { from { transform: translateX(-40px); } to { transform: translateX(100vw); } }
-
-.sweep-line.is-curl { width: 120px; background: linear-gradient(to right, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); transform-origin: center; }
-.sweep-line.is-curl.left { animation: curlSweepLeft var(--dur-curl) ease-in-out forwards; }
-@keyframes curlSweepLeft { 0% { transform: translateX(100vw) rotate(15deg) scaleX(1); opacity: 1; } 100% { transform: translateX(-50vw) rotate(15deg) scaleX(2.5); opacity: 0; } }
-.sweep-line.is-curl.right { animation: curlSweepRight var(--dur-curl) ease-in-out forwards; background: linear-gradient(to left, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.1) 40%, transparent 100%); }
-@keyframes curlSweepRight { 0% { transform: translateX(-50vw) rotate(-15deg) scaleX(1); opacity: 1; } 100% { transform: translateX(100vw) rotate(-15deg) scaleX(2.5); opacity: 0; } }
-.snapshot-layer.is-curl.left { animation: curlClipLeft var(--dur-curl) ease-in-out forwards; }
-@keyframes curlClipLeft { 0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } 100% { clip-path: polygon(0 0, -20% 0, -50% 100%, 0 100%); } }
-.snapshot-layer.is-curl.right { animation: curlClipRight var(--dur-curl) ease-in-out forwards; }
-@keyframes curlClipRight { 0% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); } 100% { clip-path: polygon(100% 0, 120% 0, 150% 100%, 100% 100%); } }
-
-.carousel { display:flex; width:300vw; height:100%; transform:translateX(-100vw); z-index:1; }
-.carousel.sliding { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
-.slide { width:100vw; height:100%; flex-shrink:0; overflow:hidden; }
+.page-stage { position:absolute; inset:0; z-index:1; overflow:hidden; contain:layout paint; }
+.page-layer,
+.page-snapshot,
+.page-fold,
+.page-fold-shadow,
+.page-fold-highlight { position:absolute; inset:0; overflow:hidden; pointer-events:none; will-change:transform, clip-path, opacity; backface-visibility:hidden; transform-style:preserve-3d; }
+.page-current { z-index:3; pointer-events:auto; }
+.page-incoming { z-index:2; }
+.page-snapshot :deep(.pg-ctr),
+.page-fold-inner :deep(.pg-ctr) { width:100vw; height:100vh; }
+.page-fold { background:rgba(255,255,255,0.03); box-shadow:-18px 0 32px rgba(0,0,0,0.18), inset 18px 0 28px rgba(255,255,255,0.12); }
+.page-fold::after { content:""; position:absolute; inset:0; background:linear-gradient(to right, rgba(255,255,255,0.24), rgba(0,0,0,0.08) 48%, rgba(0,0,0,0.28)); mix-blend-mode:soft-light; pointer-events:none; }
+.page-fold-shadow { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(0,0,0,0.34), transparent); }
+.page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.26), transparent); mix-blend-mode:screen; }
+.measure-layer { position:fixed; left:-9999px; top:0; width:100vw; height:100vh; overflow:hidden; pointer-events:none; opacity:0; }
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
 .pg-ct { height:100%; column-fill:auto; align-content:start; }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }

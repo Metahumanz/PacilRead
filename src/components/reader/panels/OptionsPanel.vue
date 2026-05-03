@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
 import { useDataStore } from '../../../composables/useDataStore'
+import type { FlipMode } from '../../../types/pagination'
 
 interface Book { id: number; title: string; author: string | null }
 
@@ -64,7 +65,7 @@ const hudOptions = [
   { value: 'timeAndBattery', label: '时间及电量' },
 ]
 
-const setFlipMode = (mode: 'slide' | 'cover' | 'curl') => {
+const setFlipMode = (mode: FlipMode) => {
   flipMode.value = mode
   saveSetting('reader_flipMode', mode)
 }
@@ -104,9 +105,11 @@ const saveAutoNight = () => {
     <div class="sr">
       <label>翻页效果</label>
       <div class="btn-group">
-        <button @click="setFlipMode('slide')" :class="{active: flipMode==='slide'}">平移</button>
         <button @click="setFlipMode('cover')" :class="{active: flipMode==='cover'}">覆盖</button>
-        <button @click="setFlipMode('curl')" :class="{active: flipMode==='curl'}">仿真</button>
+        <button @click="setFlipMode('slide')" :class="{active: flipMode==='slide'}">平移</button>
+        <button @click="setFlipMode('simulation')" :class="{active: flipMode==='simulation'}">仿真</button>
+        <button @click="setFlipMode('scroll')" :class="{active: flipMode==='scroll'}">滚动</button>
+        <button @click="setFlipMode('none')" :class="{active: flipMode==='none'}">无动画</button>
       </div>
     </div>
 
@@ -181,8 +184,8 @@ const saveAutoNight = () => {
 .px:hover { color:white; }
 .sr { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
 .sr label { font-size:12px; font-weight:600; opacity:0.6; min-width:56px; flex-shrink:0; }
-.btn-group { display:flex; gap:6px; flex:1; }
-.btn-group button { flex:1; padding:6px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:white; font-size:12px; cursor:pointer; transition:all .2s; }
+.btn-group { display:flex; gap:6px; flex:1; flex-wrap:wrap; }
+.btn-group button { flex:1 1 64px; min-width:0; padding:6px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:white; font-size:12px; cursor:pointer; transition:all .2s; }
 .btn-group button:hover { background:rgba(255,255,255,0.1); }
 .btn-group button.active { background:#3b82f6; border-color:#3b82f6; font-weight:700; }
 .sp-divider { height:1px; background:rgba(255,255,255,0.06); margin:12px 0; }
