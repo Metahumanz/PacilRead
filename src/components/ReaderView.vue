@@ -623,7 +623,7 @@ onUnmounted(async () => {
       </div>
 
       <template v-else>
-      <div class="page-stage" :style="{ backgroundColor: coverColor }">
+      <div class="page-stage" :style="{ backgroundColor: (bgImage || shouldOverrideAutoNight) ? 'transparent' : coverColor }">
         <div class="page-layer page-current" :style="pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="pageContentStyle(pageOffset)">
