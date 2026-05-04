@@ -4,11 +4,10 @@ import { useSettings } from '../../composables/useSettings'
 
 const {
   appVersion,
-  dbSize,
-  dbTextSize,
-  dbJsonSize,
-  dbTotalSize,
-  onOpenMigration,
+  dataSize,
+  chapterTextSize,
+  jsonDataSize,
+  totalDataSize,
   updateStatus,
   updateDetail,
   updateAvailable,
@@ -20,11 +19,10 @@ const {
   toggleSilentUpdate
 } = defineProps<{
   appVersion: string
-  dbSize: string
-  dbTextSize: string
-  dbJsonSize: string
-  dbTotalSize: string
-  onOpenMigration: () => void
+  dataSize: string
+  chapterTextSize: string
+  jsonDataSize: string
+  totalDataSize: string
   updateStatus: string
   updateDetail: string
   updateAvailable: boolean
@@ -56,7 +54,7 @@ const { silentUpdate } = settings
         </div>
         <div class="flex items-center gap-3">
            <span class="app-badge text-[12px] font-mono px-2 py-1">v{{ appVersion }}</span>
-          <span v-if="dbSize" class="text-[12px] app-muted font-mono">{{ dbSize }}</span>
+          <span v-if="dataSize" class="text-[12px] app-muted font-mono">{{ dataSize }}</span>
           <template v-if="updateAvailable">
             <button @click="downloadUpdate" class="app-button app-button-primary px-4 py-1.5 text-[13px]">后台下载最新版</button>
           </template>
@@ -71,23 +69,17 @@ const { silentUpdate } = settings
         </div>
       </div>
 
-      <!-- 数据库维护 -->
+      <!-- 本地数据 -->
       <div class="flex items-center justify-between p-4 app-row">
         <div class="flex items-center gap-4">
-          <span class="text-xl opacity-80">🗄️</span>
+          <span class="text-xl opacity-80">🧩</span>
           <div>
-            <div class="text-[14px] font-medium app-title">本地数据库</div>
+            <div class="text-[14px] font-medium app-title">本地 JSON 数据</div>
             <div class="text-[12px] app-muted mt-0.5">
-              reader.db {{ dbSize || '—' }} · 正文 {{ dbTextSize || '—' }} · JSON {{ dbJsonSize || '—' }} · 合计 {{ dbTotalSize || '—' }} · v8
+              JSON {{ jsonDataSize || '—' }} · 正文 {{ chapterTextSize || '—' }} · 合计 {{ totalDataSize || '—' }} · JSON-only
             </div>
           </div>
         </div>
-        <button
-          @click="onOpenMigration"
-          class="app-button px-4 py-1.5 text-[13px]"
-        >
-          优化数据库存储
-        </button>
       </div>
 
       <!-- 行为控制 -->

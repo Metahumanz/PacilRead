@@ -133,7 +133,7 @@ const fetchBook = async () => {
 }
 const fetchChapters = async () => {
   try {
-    const r = await window.electronAPI.db.getBookChapters(props.bookId)
+    const r = await window.electronAPI.library.getBookChapters(props.bookId)
     chapters.value = r as Chapter[]
     if (chapters.value.length > 0) {
       currentChapterIndex.value = Math.min(Math.max(currentChapterIndex.value, 0), chapters.value.length - 1)
@@ -191,10 +191,19 @@ const pagesResult = computed(() => {
   return paginator.getPagesForChapter(currentChapterData.value.id, snap.hash)
 })
 
+const readerPaperColor = computed(() => (
+  readerAutoNightEnabled.value && resolvedBucket.value === 'dark' && readerAutoNightCustomPolicy.value === 'override'
+    ? '#0f172a'
+    : coverColor.value
+))
+const readerPaperImage = computed(() => (
+  bgImage.value && !shouldOverrideAutoNight.value ? `url('${bgImage.value}')` : 'none'
+))
+
 // ---- Pagination (composable) ----
 const pagination = usePagination({
   contentRef, containerRef, prevContentRef, prevContainerRef,
-  pageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor,
+  pageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor: readerPaperColor,
   chapters, currentChapterIndex, saveProgress,
   precomputedPages: computed(() => pagesResult.value?.slices ?? null),
   pageCacheHit: computed(() => pagesResult.value?.isCacheHit ?? false),
@@ -614,7 +623,7 @@ onUnmounted(async () => {
           <h2>{{ book ? '这本书暂无可读取正文' : '未找到书籍记录' }}</h2>
           <p>
             {{ book
-              ? '数据库里保留了书籍信息，但没有对应章节内容。请先从完整备份恢复，或重新导入这本书。'
+              ? '本地 JSON 里保留了书籍信息，但没有对应章节内容。请先从完整备份恢复，或重新导入这本书。'
               : '当前书籍记录不存在，可能已被删除或同步数据不完整。'
             }}
           </p>
@@ -623,7 +632,14 @@ onUnmounted(async () => {
       </div>
 
       <template v-else>
-      <div class="page-stage" :style="{ backgroundColor: (bgImage || shouldOverrideAutoNight) ? 'transparent' : coverColor }">
+      <div
+        class="page-stage"
+        :style="{
+          '--reader-paper': readerPaperColor,
+          '--reader-paper-image': readerPaperImage,
+          backgroundColor: (bgImage || shouldOverrideAutoNight) ? 'transparent' : readerPaperColor
+        }"
+      >
         <div class="page-layer page-current" :style="pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
             <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="pageContentStyle(pageOffset)">
@@ -764,10 +780,12 @@ onUnmounted(async () => {
 .page-incoming { z-index:2; }
 .page-snapshot :deep(.pg-ctr),
 .page-fold-inner :deep(.pg-ctr) { width:100vw; height:100vh; }
-.page-fold { background:rgba(255,255,255,0.03); box-shadow:-18px 0 32px rgba(0,0,0,0.18), inset 18px 0 28px rgba(255,255,255,0.12); }
-.page-fold::after { content:""; position:absolute; inset:0; background:linear-gradient(to right, rgba(255,255,255,0.24), rgba(0,0,0,0.08) 48%, rgba(0,0,0,0.28)); mix-blend-mode:soft-light; pointer-events:none; }
-.page-fold-shadow { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(0,0,0,0.34), transparent); }
-.page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.26), transparent); mix-blend-mode:screen; }
+.page-fold { background-color:var(--reader-paper, #f7f2e6); background-image:var(--reader-paper-image, none); background-size:cover; background-position:center; box-shadow:-10px 0 18px rgba(0,0,0,0.12), inset 8px 0 14px rgba(255,255,255,0.14); }
+.page-fold::before { content:""; position:absolute; inset:0; z-index:0; background-color:var(--reader-paper, #f7f2e6); background-image:var(--reader-paper-image, none); background-size:cover; background-position:center; pointer-events:none; }
+.page-fold::after { content:""; position:absolute; inset:0; z-index:2; background:linear-gradient(to right, rgba(255,255,255,0.16), rgba(0,0,0,0.025) 52%, rgba(0,0,0,0.055)); pointer-events:none; }
+.page-fold-inner { position:absolute; inset:0; z-index:1; overflow:hidden; background-color:var(--reader-paper, #f7f2e6); background-image:var(--reader-paper-image, none); background-size:cover; background-position:center; }
+.page-fold-shadow { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(0,0,0,0.14), transparent); }
+.page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.18), transparent); mix-blend-mode:screen; }
 .measure-layer { position:fixed; left:-9999px; top:0; width:100vw; height:100vh; overflow:hidden; pointer-events:none; opacity:0; }
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
 .pg-ct { height:100%; column-fill:auto; align-content:start; }

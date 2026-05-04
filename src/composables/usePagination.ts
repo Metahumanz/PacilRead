@@ -478,22 +478,37 @@ export function usePagination(opts: {
     const height = stageHeight()
     const state = animationState.value
     const progress = clamp(state.progress, 0, 1)
+    const turnedWidth = width * progress
+    const remainingWidth = width - turnedWidth
     const bias = (state.touchYRatio - 0.5) * Math.min(180, width * 0.18) * (1 - progress * 0.35)
-    const crease = state.direction > 0 ? width * (1 - progress) : width * progress
+    const crease = state.direction > 0 ? remainingWidth : turnedWidth
     const top = clamp(crease + bias, 0, width)
     const bottom = clamp(crease - bias, 0, width)
     const middle = (top + bottom) / 2
-    const foldWidth = clamp(width * 0.16, 72, 180)
+    const maxFoldWidth = clamp(width * 0.18, 140, 320)
+    const foldWidth = clamp(
+      Math.min(turnedWidth * 0.58, remainingWidth * 0.58, maxFoldWidth),
+      0,
+      maxFoldWidth,
+    )
     const foldLeft = state.direction > 0
       ? clamp(middle, 0, width)
       : clamp(middle - foldWidth, 0, width)
+    const foldRight = clamp(foldLeft + foldWidth, 0, width)
+    const incomingEdgeTop = state.direction > 0
+      ? clamp(top + foldWidth, 0, width)
+      : clamp(top - foldWidth, 0, width)
+    const incomingEdgeBottom = state.direction > 0
+      ? clamp(bottom + foldWidth, 0, width)
+      : clamp(bottom - foldWidth, 0, width)
     const currentClip = state.direction > 0
       ? `polygon(0 0, ${top}px 0, ${bottom}px ${height}px, 0 ${height}px)`
       : `polygon(${top}px 0, ${width}px 0, ${width}px ${height}px, ${bottom}px ${height}px)`
     const incomingClip = state.direction > 0
-      ? `polygon(${top}px 0, ${width}px 0, ${width}px ${height}px, ${bottom}px ${height}px)`
-      : `polygon(0 0, ${top}px 0, ${bottom}px ${height}px, 0 ${height}px)`
-    return { width, height, progress, middle, foldWidth, foldLeft, currentClip, incomingClip }
+      ? `polygon(${incomingEdgeTop}px 0, ${width}px 0, ${width}px ${height}px, ${incomingEdgeBottom}px ${height}px)`
+      : `polygon(0 0, ${incomingEdgeTop}px 0, ${incomingEdgeBottom}px ${height}px, 0 ${height}px)`
+    const foldInnerTranslate = state.direction > 0 ? foldRight : middle
+    return { width, height, progress, middle, foldWidth, foldLeft, foldRight, foldInnerTranslate, currentClip, incomingClip }
   }
 
   const pagingVisuals = computed<{
@@ -533,39 +548,42 @@ export function usePagination(opts: {
 
     if (state.mode === 'simulation') {
       const geo = simulationGeometry()
-      const sourceX = direction > 0 ? Math.max(0, width - geo.foldWidth) : 0
-      const foldRotation = direction > 0 ? -16 - (1 - progress) * 28 : 16 + (1 - progress) * 28
+      const foldRotation = direction > 0 ? -10 - (1 - progress) * 18 : 10 + (1 - progress) * 18
+      const foldVisible = geo.foldWidth > 1 && progress > 0.005 && progress < 0.995
       return {
         current: { ...baseLayer, visibility: 'hidden' },
         incoming: { ...baseLayer, zIndex: 2, clipPath: geo.incomingClip },
         currentSnapshot: { ...baseLayer, display: 'block', zIndex: 4, clipPath: geo.currentClip },
         fold: {
-          display: 'block',
+          display: foldVisible ? 'block' : 'none',
           zIndex: 5,
           width: `${geo.foldWidth}px`,
           transform: `translate3d(${geo.foldLeft}px, 0, 0) perspective(900px) rotateY(${foldRotation}deg)`,
           transformOrigin: direction > 0 ? 'left center' : 'right center',
           opacity: 0.98,
+          backgroundColor: opts.coverColor.value,
         },
         foldInner: {
           width: `${width}px`,
           height: `${height}px`,
-          transform: `translate3d(${-sourceX}px, 0, 0) ${direction > 0 ? 'scaleX(-1)' : ''}`,
-          transformOrigin: 'center',
+          transform: `translate3d(${geo.foldInnerTranslate}px, 0, 0) scaleX(-1)`,
+          transformOrigin: 'left top',
+          backgroundColor: opts.coverColor.value,
+          opacity: 0.16,
         },
         shadow: {
-          display: 'block',
+          display: foldVisible ? 'block' : 'none',
           zIndex: 6,
-          width: '132px',
-          transform: `translate3d(${geo.middle - 66}px, 0, 0)`,
-          opacity: clamp(0.18 + progress * 0.42, 0, 0.6),
+          width: `${clamp(geo.foldWidth * 0.82, 0, 120)}px`,
+          transform: `translate3d(${direction > 0 ? geo.foldLeft - geo.foldWidth * 0.2 : geo.foldRight - geo.foldWidth * 1.05}px, 0, 0)`,
+          opacity: clamp(0.08 + Math.sin(progress * Math.PI) * 0.2, 0, 0.3),
         },
         highlight: {
-          display: 'block',
+          display: foldVisible ? 'block' : 'none',
           zIndex: 7,
-          width: '72px',
-          transform: `translate3d(${geo.middle - 36}px, 0, 0)`,
-          opacity: clamp(0.1 + progress * 0.28, 0, 0.38),
+          width: `${clamp(geo.foldWidth * 0.52, 0, 82)}px`,
+          transform: `translate3d(${direction > 0 ? geo.foldLeft + geo.foldWidth * 0.18 : geo.foldRight - geo.foldWidth * 0.72}px, 0, 0)`,
+          opacity: clamp(0.08 + Math.sin(progress * Math.PI) * 0.2, 0, 0.28),
         },
       }
     }

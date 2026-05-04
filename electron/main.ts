@@ -1,19 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } from 'electron'
 import { dirname, join, extname, isAbsolute } from 'path'
 import { is } from '@electron-toolkit/utils'
-import initSqlJs, { Database } from 'sql.js'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, renameSync, rmSync } from 'fs'
 import { gzipSync, gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
 import AdmZip from 'adm-zip'
-import { parseTxt, parseEpub, parsePdf, stripHtmlTags, type Chapter } from './parsers'
+import { parseTxt, parseEpub, parsePdf, type Chapter } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
-let db: Database | null = null
-let SQL: any = null
-let dbPath: string = ''
 let mimoAbortController: AbortController | null = null
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
@@ -112,17 +108,15 @@ function saveBounds(): void {
 // ---- Migrate data from old EleWinReader installation ----
 function migrateOldData(): void {
   const newUserData = app.getPath('userData')
-  const newDbPath = join(newUserData, 'reader.db')
-  // If the new location already has a database, skip migration
-  if (existsSync(newDbPath)) return
+  const newBoundsPath = join(newUserData, 'window-bounds.json')
+  if (existsSync(newBoundsPath)) return
 
-  // Possible old userData directories (production: EleWinReader, dev: ele-win-reader)
   const parentDir = join(newUserData, '..')
   const oldNames = ['EleWinReader', 'ele-win-reader']
   let oldUserData: string | null = null
   for (const name of oldNames) {
     const candidate = join(parentDir, name)
-    if (existsSync(join(candidate, 'reader.db'))) {
+    if (existsSync(join(candidate, 'window-bounds.json'))) {
       oldUserData = candidate
       break
     }
@@ -133,15 +127,11 @@ function migrateOldData(): void {
   try {
     // Ensure new directory exists
     if (!existsSync(newUserData)) mkdirSync(newUserData, { recursive: true })
-    // Copy key files
-    const filesToMigrate = ['reader.db', 'window-bounds.json']
-    for (const file of filesToMigrate) {
-      const src = join(oldUserData, file)
-      const dst = join(newUserData, file)
-      if (existsSync(src) && !existsSync(dst)) {
-        copyFileSync(src, dst)
-        console.log(`[Migration] Copied: ${file}`)
-      }
+    const src = join(oldUserData, 'window-bounds.json')
+    const dst = join(newUserData, 'window-bounds.json')
+    if (existsSync(src) && !existsSync(dst)) {
+      copyFileSync(src, dst)
+      console.log('[Migration] Copied: window-bounds.json')
     }
     console.log('[Migration] Data migration completed successfully')
   } catch (e) {
@@ -247,24 +237,6 @@ function createWindow(): void {
   }
 }
 
-function saveDatabase(): void {
-  if (db) { writeFileSync(dbPath, Buffer.from(db.export())) }
-}
-
-function getWasmPath(): string {
-  const wasmFileName = 'sql-wasm.wasm'
-  const paths = [
-    join(process.resourcesPath, 'sql.js', wasmFileName),
-    join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist', wasmFileName),
-    join(app.getAppPath(), 'node_modules/sql.js/dist/', wasmFileName),
-    join(process.cwd(), 'node_modules/sql.js/dist/', wasmFileName),
-    join(__dirname, '../node_modules/sql.js/dist/', wasmFileName),
-    join(__dirname, '../../node_modules/sql.js/dist/', wasmFileName)
-  ]
-  for (const p of paths) { if (existsSync(p)) return p }
-  throw new Error(`WASM not found. Tried:\n${paths.join('\n')}`)
-}
-
 function parseBookNameAndAuthor(rawName: string): { title: string, author: string | null } {
   let title = rawName.replace(/\.[^/.]+$/, '').trim()
   let author: string | null = null
@@ -352,12 +324,22 @@ function normalizeChapterTextRelativePath(value: unknown): string | null {
   return parts.join('/')
 }
 
+function normalizeChapterTextStoragePath(value: unknown): string | null {
+  const normalized = normalizeChapterTextRelativePath(value)
+  if (!normalized) return null
+  const chapterTextPrefix = `${CHAPTER_TEXT_DIR}/`
+  if (normalized === CHAPTER_TEXT_DIR) return null
+  return normalized.startsWith(chapterTextPrefix)
+    ? normalized.slice(chapterTextPrefix.length)
+    : normalized
+}
+
 function getChapterTextRelativePath(bookId: number, chapterId: number): string {
   return `book_${bookId}/chapter_${chapterId}.txt.gz`
 }
 
 function getChapterTextAbsolutePath(relativePath: string): string {
-  const safePath = normalizeChapterTextRelativePath(relativePath)
+  const safePath = normalizeChapterTextStoragePath(relativePath)
   if (!safePath) throw new Error(`Invalid chapter text path: ${relativePath}`)
   return join(getChapterTextRoot(), ...safePath.split('/'))
 }
@@ -367,28 +349,36 @@ function getBookChapterTextDir(bookId: number): string {
 }
 
 function resolveChapterTextPath(bodyTextPath: string, dataDir: string): string | null {
-  const relativePath = join(dataDir, CHAPTER_TEXT_DIR, ...bodyTextPath.replace(/\\/g, '/').split('/').filter(Boolean))
-  if (existsSync(relativePath)) return relativePath
   if (isAbsolute(bodyTextPath) && existsSync(bodyTextPath)) return bodyTextPath
+  const normalized = normalizeChapterTextRelativePath(bodyTextPath)
+  const storagePath = normalizeChapterTextStoragePath(bodyTextPath)
+  if (!normalized || !storagePath) return null
+
+  const candidates = [
+    join(getChapterTextRoot(), ...storagePath.split('/')),
+    join(dataDir, ...normalized.split('/')),
+  ]
+  if (normalized.startsWith(`${CHAPTER_TEXT_DIR}/`)) {
+    candidates.push(join(getChapterTextRoot(), ...normalized.split('/')))
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
   return null
 }
 
 function createBookChapterTextZip(bookId: number): string | null {
-  if (!db) return null
-  const rows = queryRows(
-    db,
-    `SELECT body_text_path FROM chapters
-     WHERE book_id = ? AND body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL AND body_text_path <> ''
-     ORDER BY order_index`,
-    [bookId]
-  )
+  const rows = (readJsonEntity('chapters', []) as any[])
+    .filter((chapter) => Number(chapter.bookId) === bookId
+      && chapter.bodyTextStorage === 'file_gzip'
+      && chapter.bodyTextPath)
+    .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
   if (rows.length === 0) return null
 
   const zip = new AdmZip()
-  const chapterTextRoot = getChapterTextRoot()
   for (const row of rows) {
-    const relativePath = normalizeChapterTextRelativePath(row.body_text_path)
+    const relativePath = normalizeChapterTextStoragePath(row.bodyTextPath)
     if (!relativePath) continue
     const absolutePath = getChapterTextAbsolutePath(relativePath)
     if (!existsSync(absolutePath)) continue
@@ -397,7 +387,7 @@ function createBookChapterTextZip(bookId: number): string | null {
   if (zip.getEntryCount() === 0) return null
 
   const tempDir = app.getPath('temp')
-  const zipPath = join(tempDir, `chapters_${bookId}_${Date.now()}.zip`)
+  const zipPath = join(tempDir, `book_${bookId}_${Date.now()}.zip`)
   zip.writeZip(zipPath)
   return zipPath
 }
@@ -410,9 +400,9 @@ function extractBookChapterTextZip(zipPath: string): number {
 
   for (const entry of entries) {
     if (entry.isDirectory) continue
-    const normalized = normalizeChapterTextRelativePath(entry.entryName)
+    const normalized = normalizeChapterTextStoragePath(entry.entryName)
     if (!normalized) {
-      console.warn('[DB] Skipping unsafe ZIP entry:', entry.entryName)
+      console.warn('[Library] Skipping unsafe ZIP entry:', entry.entryName)
       continue
     }
     const absolutePath = join(chapterTextRoot, ...normalized.split('/'))
@@ -424,15 +414,13 @@ function extractBookChapterTextZip(zipPath: string): number {
 }
 
 function getBookIdsWithFileGzipChapters(): number[] {
-  if (!db) return []
-  const rows = queryRows(
-    db,
-    `SELECT DISTINCT book_id FROM chapters
-     WHERE body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL AND body_text_path <> ''
-     ORDER BY book_id`
-  )
-  return rows.map(row => Number(row.book_id))
+  const ids = new Set<number>()
+  for (const chapter of readJsonEntity('chapters', []) as any[]) {
+    if (chapter.bodyTextStorage === 'file_gzip' && chapter.bodyTextPath) {
+      ids.add(Number(chapter.bookId))
+    }
+  }
+  return Array.from(ids).filter(Number.isFinite).sort((a, b) => a - b)
 }
 
 function writeChapterTextGzip(bookId: number, chapterId: number, bodyText: string): {
@@ -461,42 +449,9 @@ function readChapterTextGzip(bodyTextPath: string): string | null {
   try {
     return gunzipSync(readFileSync(resolvedPath)).toString('utf8')
   } catch (error) {
-    console.error('[DB] Failed to read chapter text file:', resolvedPath, error)
+    console.error('[Library] Failed to read chapter text file:', resolvedPath, error)
     return null
   }
-}
-
-function getReadableChapterText(chapter: any): { bodyText: string; missing: boolean; fallbackUsed: string | null } {
-  const storage = String(chapter.body_text_storage || 'db')
-
-  // Tier 1: file_gzip external storage
-  if (storage === 'file_gzip' && chapter.body_text_path) {
-    const fileText = readChapterTextGzip(chapter.body_text_path)
-    if (fileText !== null) return { bodyText: fileText, missing: false, fallbackUsed: null }
-    console.warn(`[DB] External chapter text file missing for chapter ${chapter.id}: ${chapter.body_text_path}`)
-  }
-
-  // Tier 2: inline body_text
-  const inlineText = String(chapter.body_text || '')
-  if (inlineText) return { bodyText: inlineText, missing: false, fallbackUsed: storage === 'file_gzip' ? 'body_text' : null }
-
-  // Tier 3: chunked body_text read — body_text might be null if CursorWindow-limited; direct DB query
-  if (chapter.body_text === null || chapter.body_text === undefined) {
-    try {
-      const rows = queryRows(db!, 'SELECT body_text FROM chapters WHERE id = ?', [chapter.id])
-      const directText = String(rows[0]?.body_text || '')
-      if (directText) return { bodyText: directText, missing: false, fallbackUsed: 'chunked_body_text' }
-    } catch (_) {}
-  }
-
-  // Tier 4: legacy body column (pre-v6 HTML content, strip HTML to get plain text)
-  if (chapter.body !== undefined && chapter.body !== null) {
-    const legacyBody = stripHtmlTags(String(chapter.body || ''))
-    if (legacyBody) return { bodyText: legacyBody, missing: false, fallbackUsed: 'legacy_body' }
-  }
-
-  // Tier 5: placeholder text
-  return { bodyText: EMPTY_CHAPTER_TEXT_PLACEHOLDER, missing: true, fallbackUsed: 'placeholder' }
 }
 
 function directorySizeBytes(dirPath: string): number {
@@ -510,493 +465,182 @@ function directorySizeBytes(dirPath: string): number {
   return total
 }
 
-function getStorageSizeInfo(): { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number } {
-  let databaseBytes = 0
-  try {
-    databaseBytes = statSync(dbPath).size
-  } catch {}
+function getStorageSizeInfo(): { sizeBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number } {
   const chapterTextBytes = directorySizeBytes(getChapterTextRoot())
   const jsonDataBytes = directorySizeBytes(DATA_DIR)
+  const totalBytes = chapterTextBytes + jsonDataBytes
   return {
-    sizeBytes: databaseBytes,
-    databaseBytes,
+    sizeBytes: totalBytes,
     chapterTextBytes,
     jsonDataBytes,
-    totalBytes: databaseBytes + chapterTextBytes + jsonDataBytes
+    totalBytes
   }
 }
 
-function listFilesRecursive(rootPath: string, prefix = ''): Array<{ relativePath: string; localPath: string; sizeBytes: number }> {
-  if (!existsSync(rootPath)) return []
-  const files: Array<{ relativePath: string; localPath: string; sizeBytes: number }> = []
-  for (const entry of readdirSync(rootPath, { withFileTypes: true })) {
-    const localPath = join(rootPath, entry.name)
-    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
-    if (entry.isDirectory()) {
-      files.push(...listFilesRecursive(localPath, relativePath))
-    } else if (entry.isFile()) {
-      files.push({ relativePath, localPath, sizeBytes: statSync(localPath).size })
+function initializeJsonStore(): void {
+  ensureDataDir()
+  for (const [entityType, fileName] of Object.entries(JSON_FILES)) {
+    const filePath = join(DATA_DIR, fileName)
+    if (!existsSync(filePath)) {
+      const defaultValue = entityType === 'settings' ? {} : []
+      writeJsonEntity(entityType as keyof typeof JSON_FILES, defaultValue)
     }
   }
-  return files
+  const markerPath = join(DATA_DIR, '.migrated')
+  if (!existsSync(markerPath)) {
+    writeFileSync(markerPath, JSON.stringify({
+      migratedAt: Date.now(),
+      toSchemaVersion: 8,
+      storage: 'json',
+    }, null, 2), 'utf8')
+  }
 }
 
-function getCurrentUserVersion(database: Database): number {
+function nextJsonId(items: Array<{ id: number }>): number {
+  return items.length === 0 ? 1 : Math.max(...items.map(item => Number(item.id) || 0)) + 1
+}
+
+function safeAssetFileName(value: string): string {
+  const fallback = 'book'
+  const raw = value.split(/[/\\]/).pop() || fallback
+  const cleaned = raw.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, ' ').trim()
+  return cleaned || fallback
+}
+
+function copyImportedBookSource(bookId: number, filePath: string): string {
+  const booksDir = join(app.getPath('userData'), 'books')
+  mkdirSync(booksDir, { recursive: true })
+  const originalName = safeAssetFileName(filePath)
+  const filename = `book_${bookId}_${originalName}`
+  copyFileSync(filePath, join(booksDir, filename))
+  return filename
+}
+
+async function importBookJson(filePath: string): Promise<{ bookId: number; chapterCount: number }> {
+  let bookId = 0
   try {
-    const result = database.exec('PRAGMA user_version')
-    if (result.length > 0 && result[0].values.length > 0) {
-      return Number(result[0].values[0][0]) || 0
-    }
-  } catch (_) {}
-  return 0
-}
+    const ext = extname(filePath).toLowerCase()
+    const fileName = filePath.split(/[/\\]/).pop() || 'Unknown'
+    const parsed = parseBookNameAndAuthor(fileName)
+    const title = parsed.title || fileName.replace(/\.[^/.]+$/, '')
+    const author = parsed.author
+    const readingStatsKey = buildReadingStatsKey(title, author)
+    let parsedChapters: Chapter[]
+    let coverBuffer: Buffer | undefined
+    let coverExtension: string | undefined
 
-function createChaptersTable(database: Database, tableName = 'chapters'): void {
-  database.run(`CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    book_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    body_html TEXT NOT NULL DEFAULT '',
-    body_text TEXT NOT NULL DEFAULT '',
-    order_index INTEGER NOT NULL,
-    body_text_path TEXT,
-    body_text_storage TEXT NOT NULL DEFAULT 'db',
-    body_text_size INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
-  )`)
-}
-
-function ensureChapterV7Columns(database: Database): void {
-  const addColumn = (column: string, sql: string) => {
-    const columns = getTableColumns(database, 'chapters')
-    if (!columns.includes(column)) database.run(sql)
-  }
-
-  addColumn('body_text', "ALTER TABLE chapters ADD COLUMN body_text TEXT NOT NULL DEFAULT ''")
-  addColumn('body_html', "ALTER TABLE chapters ADD COLUMN body_html TEXT NOT NULL DEFAULT ''")
-  addColumn('body_text_path', 'ALTER TABLE chapters ADD COLUMN body_text_path TEXT')
-  addColumn('body_text_storage', "ALTER TABLE chapters ADD COLUMN body_text_storage TEXT NOT NULL DEFAULT 'db'")
-  addColumn('body_text_size', 'ALTER TABLE chapters ADD COLUMN body_text_size INTEGER NOT NULL DEFAULT 0')
-}
-
-function backfillChapterTextFromLegacyColumns(database: Database): number {
-  const columns = getTableColumns(database, 'chapters')
-  const bodyExpression = columns.includes('body') ? 'body' : "'' AS body"
-  const bodyHtmlExpression = columns.includes('body_html') ? 'body_html' : "'' AS body_html"
-  const rows = queryRows(
-    database,
-    `SELECT id, body_text, ${bodyExpression}, ${bodyHtmlExpression}
-     FROM chapters
-     WHERE (body_text IS NULL OR body_text = '')`
-  )
-
-  let updated = 0
-  for (const row of rows) {
-    const bodyHtml = String(row.body_html || '')
-    const body = String(row.body || '')
-    const bodyText = bodyHtml ? stripHtmlTags(bodyHtml) : (body ? stripHtmlTags(body) : '')
-    if (!bodyText) continue
-    database.run('UPDATE chapters SET body_text = ? WHERE id = ?', [bodyText, row.id])
-    updated += database.getRowsModified()
-  }
-  return updated
-}
-
-function rebuildChaptersTableToV7(database: Database): boolean {
-  const desiredColumns = [
-    'id',
-    'book_id',
-    'title',
-    'body_html',
-    'body_text',
-    'order_index',
-    'body_text_path',
-    'body_text_storage',
-    'body_text_size'
-  ]
-  const columns = getTableColumns(database, 'chapters')
-  const needsRebuild = columns.length !== desiredColumns.length ||
-    columns.some(column => !desiredColumns.includes(column)) ||
-    desiredColumns.some(column => !columns.includes(column))
-  if (!needsRebuild) return false
-
-  database.run('PRAGMA foreign_keys = OFF')
-  database.run('DROP TABLE IF EXISTS chapters_v7_old')
-  database.run('ALTER TABLE chapters RENAME TO chapters_v7_old')
-  createChaptersTable(database, 'chapters')
-  database.run(`INSERT INTO chapters (
-      id, book_id, title, body_html, body_text, order_index,
-      body_text_path, body_text_storage, body_text_size
-    )
-    SELECT
-      id,
-      book_id,
-      title,
-      COALESCE(body_html, ''),
-      COALESCE(body_text, ''),
-      order_index,
-      body_text_path,
-      COALESCE(NULLIF(body_text_storage, ''), 'db'),
-      COALESCE(body_text_size, 0)
-    FROM chapters_v7_old`)
-  database.run('DROP TABLE chapters_v7_old')
-  database.run('PRAGMA foreign_keys = ON')
-  return true
-}
-
-function recoverInterruptedChapterRebuild(database: Database): void {
-  if (!tableExists(database, 'chapters') && tableExists(database, 'chapters_v7_old')) {
-    database.run('ALTER TABLE chapters_v7_old RENAME TO chapters')
-  }
-}
-
-function runV7Migration(
-  database: Database,
-  onProgress?: (step: number, total: number, message: string) => void
-): { migrated: boolean } {
-  const currentVersion = getCurrentUserVersion(database)
-
-  const totalSteps = 5
-  let step = 0
-  const progress = (message: string) => {
-    step++
-    onProgress?.(step, totalSteps, message)
-  }
-
-  console.log(`[DB Migration] Ensuring v7 schema (current user_version = ${currentVersion})`)
-  try {
-    progress('正在补齐 v7 正文字段...')
-    ensureChapterV7Columns(database)
-
-    progress('正在从旧正文列回填纯文本...')
-    const backfilled = backfillChapterTextFromLegacyColumns(database)
-
-    progress('正在清理 body_html 与存储状态...')
-    database.run("UPDATE chapters SET body_html = '' WHERE body_html IS NOT NULL AND body_html <> ''")
-    database.run("UPDATE chapters SET body_text_storage = 'db' WHERE body_text_storage IS NULL OR body_text_storage = ''")
-    database.run(`UPDATE chapters
-      SET body_text_size = length(CAST(body_text AS BLOB))
-      WHERE (body_text_size IS NULL OR body_text_size = 0)
-        AND body_text IS NOT NULL
-        AND body_text <> ''`)
-
-    progress('正在移除旧版冗余列...')
-    const rebuilt = rebuildChaptersTableToV7(database)
-
-    progress('正在设置数据库版本号...')
-    database.run('PRAGMA user_version = 7')
-
-    database.run('CREATE INDEX IF NOT EXISTS idx_chapters_book_order ON chapters(book_id, order_index)')
-    console.log('[DB Migration] v7 schema ready')
-    return { migrated: currentVersion < 7 || backfilled > 0 || rebuilt }
-  } catch (e) {
-    console.error('[DB Migration] v7 migration error:', e)
-    throw e
-  }
-}
-
-function runDatabaseMigrations(database: Database): void {
-  database.run(`CREATE TABLE IF NOT EXISTS books (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL, author TEXT, cover_path TEXT, path TEXT,
-    progress_index INTEGER DEFAULT 0, progress_offset INTEGER DEFAULT 0,
-    last_read DATETIME DEFAULT CURRENT_TIMESTAMP, source_id INTEGER,
-    pinned INTEGER DEFAULT 0, reading_stats_key TEXT NOT NULL DEFAULT ''
-  )`)
-  try { database.run('ALTER TABLE books ADD COLUMN pinned INTEGER DEFAULT 0') } catch (_) {}
-  try { database.run("ALTER TABLE books ADD COLUMN reading_stats_key TEXT NOT NULL DEFAULT ''") } catch (_) {}
-  database.run('CREATE INDEX IF NOT EXISTS idx_books_reading_stats_key ON books (reading_stats_key)')
-
-  recoverInterruptedChapterRebuild(database)
-  createChaptersTable(database)
-  database.run('CREATE INDEX IF NOT EXISTS idx_chapters_book_order ON chapters(book_id, order_index)')
-
-  database.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`)
-  database.run(`CREATE TABLE IF NOT EXISTS replacement_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern TEXT NOT NULL, replacement TEXT NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'global', book_id INTEGER,
-    is_regex INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
-    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
-  )`)
-  try { database.run('ALTER TABLE replacement_rules ADD COLUMN book_id INTEGER') } catch (_) {}
-
-  database.run(`CREATE TABLE IF NOT EXISTS reading_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,
-    source_device_id TEXT NOT NULL,
-    book_identity TEXT NOT NULL,
-    book_title TEXT NOT NULL,
-    book_author TEXT,
-    duration_seconds INTEGER NOT NULL DEFAULT 0,
-    char_count INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0
-  )`)
-  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_stats_bucket ON reading_stats (source_device_id, date, book_identity)')
-  database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_date ON reading_stats (date)')
-  database.run('CREATE INDEX IF NOT EXISTS idx_reading_stats_identity ON reading_stats (book_identity)')
-
-  database.run(`CREATE TABLE IF NOT EXISTS bookmarks (
-    uuid TEXT PRIMARY KEY,
-    book_id INTEGER,
-    book_identity TEXT NOT NULL,
-    book_title TEXT NOT NULL,
-    book_author TEXT,
-    chapter_order_index INTEGER NOT NULL DEFAULT 0,
-    chapter_title TEXT NOT NULL DEFAULT '',
-    chapter_offset INTEGER NOT NULL DEFAULT 0,
-    progress_percent INTEGER NOT NULL DEFAULT 0,
-    summary TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE SET NULL
-  )`)
-  database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_identity ON bookmarks (book_identity)')
-  database.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks (book_id)')
-
-  // ---- v7 schema migration ----
-  runV7Migration(database)
-
-  // Existing title/author normalization
-  try {
-    const books = database.exec('SELECT id, title, author, reading_stats_key FROM books')
-    if (books.length > 0) {
-      const { values } = books[0]
-      for (const row of values) {
-        const id = row[0] as number
-        const oldTitle = row[1] as string
-        const oldAuthor = row[2] as string | null
-        const oldReadingStatsKey = row[3] as string | null
-
-        let nextTitle = oldTitle
-        let nextAuthor = oldAuthor
-
-        if (!oldAuthor || oldAuthor === '未知' || oldTitle.includes('作者') || oldTitle.includes('《') || oldTitle.includes('(') || oldTitle.includes('（')) {
-          const parsed = parseBookNameAndAuthor(oldTitle)
-          if (parsed.title !== oldTitle || parsed.author) {
-            nextTitle = parsed.title
-            nextAuthor = parsed.author || oldAuthor
-          }
-        }
-
-        const nextReadingStatsKey = oldReadingStatsKey || buildReadingStatsKey(nextTitle, nextAuthor)
-
-        if (nextTitle !== oldTitle || nextAuthor !== oldAuthor || nextReadingStatsKey !== oldReadingStatsKey) {
-          database.run(
-            'UPDATE books SET title = ?, author = ?, reading_stats_key = ? WHERE id = ?',
-            [nextTitle, nextAuthor, nextReadingStatsKey, id]
-          )
-        }
-      }
-    }
-  } catch (_) {}
-}
-
-async function initDatabase(): Promise<void> {
-  const wasmPath = getWasmPath()
-  const wasmBuffer = readFileSync(wasmPath)
-  SQL = await initSqlJs({ wasmBinary: wasmBuffer.buffer })
-  dbPath = join(app.getPath('userData'), 'reader.db')
-  db = existsSync(dbPath) ? new SQL.Database(readFileSync(dbPath)) : new SQL.Database()
-
-  // Startup health check — warn if core tables are missing
-  if (existsSync(dbPath) && !isDatabaseHealthyForStartup(db)) {
-    console.warn('[DB] Database health check failed on startup: books or chapters table missing')
-    mainWindow?.webContents.send('db:health-warning', '数据库可能已损坏，缺少核心表。建议从备份恢复。')
-  }
-
-  runDatabaseMigrations(db)
-
-  saveDatabase()
-}
-
-async function migrateSqliteToJson(force = false): Promise<boolean> {
-  if (!db || !SQL) return false
-  if (!force && existsSync(join(DATA_DIR, '.migrated'))) {
-    console.log('[Migration] Already migrated to JSON')
-    return false
-  }
-
-  console.log('[Migration] Starting SQLite -> JSON migration')
-
-  try {
-    // 1. Read all entities from SQLite
-    const bookRows = queryRows(db, 'SELECT id, title, author, cover_path, path, progress_index, progress_offset, last_read, pinned, reading_stats_key FROM books ORDER BY id')
-    const chapterRows = queryRows(db, 'SELECT id, book_id, title, order_index, body_text_path, body_text_storage, body_text_size FROM chapters ORDER BY id')
-    const ruleRows = queryRows(db, 'SELECT id, pattern, replacement, scope, book_id, is_regex, active FROM replacement_rules ORDER BY id')
-    const bookmarkRows = queryRows(db, 'SELECT uuid, book_id, book_identity, book_title, book_author, chapter_order_index, chapter_title, chapter_offset, progress_percent, summary, created_at, updated_at FROM bookmarks ORDER BY uuid')
-    const statsRows = queryRows(db, 'SELECT date, source_device_id, book_identity, book_title, book_author, duration_seconds, char_count, updated_at FROM reading_stats ORDER BY date, source_device_id, book_identity')
-    const settingsRows = queryRows(db, 'SELECT key, value FROM settings')
-
-    // 2. Extract custom themes from settings, build settings map
-    let customThemesRaw: any[] = []
-    const settingsMap: Record<string, string> = {}
-    for (const row of settingsRows) {
-      if (row.key === 'custom_themes') {
-        try { customThemesRaw = JSON.parse(row.value) || [] } catch {}
-      } else {
-        settingsMap[row.key] = row.value || ''
-      }
+    if (ext === '.txt') {
+      parsedChapters = parseTxt(filePath)
+    } else if (ext === '.epub') {
+      const epubResult = await parseEpub(filePath)
+      parsedChapters = epubResult.chapters
+      coverBuffer = epubResult.coverBuffer
+      coverExtension = epubResult.coverExtension
+    } else if (ext === '.pdf') {
+      parsedChapters = await parsePdf(filePath)
+    } else {
+      throw new Error(`Unsupported: ${ext}`)
     }
 
-    // 3. Transform to v8 JSON format
+    const books = readJsonEntity('books', []) as any[]
+    const chapters = readJsonEntity('chapters', []) as any[]
     const now = Date.now()
+    bookId = nextJsonId(books)
+    let nextChapterId = nextJsonId(chapters)
+    const sourceFile = copyImportedBookSource(bookId, filePath)
+    let coverFile: string | null = null
 
-    const migratedBooks = bookRows.map((b: any) => ({
-      id: Number(b.id),
-      title: String(b.title || ''),
-      author: b.author ? String(b.author) : null,
-      bookType: detectBookType(b.path),
-      readingStatsKey: String(b.reading_stats_key || ''),
-      progressIndex: Number(b.progress_index || 0),
-      progressOffset: Number(b.progress_offset || 0),
-      lastReadAt: parseDateToEpochMillis(b.last_read),
-      pinned: Number(b.pinned || 0) === 1,
-      chapterCount: countChaptersForBook(db!, Number(b.id)),
-      currentChapterTitle: '',
+    if (coverBuffer && coverExtension) {
+      const coversDir = join(app.getPath('userData'), 'covers')
+      mkdirSync(coversDir, { recursive: true })
+      coverFile = `epub_cover_${bookId}.${coverExtension}`
+      writeFileSync(join(coversDir, coverFile), coverBuffer)
+    }
+
+    const chapterRows = parsedChapters.map((chapter, index) => {
+      const chapterId = nextChapterId++
+      const bodyText = chapter.bodyText || ''
+      const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
+      return {
+        id: chapterId,
+        bookId,
+        title: String(chapter.title || `第 ${index + 1} 章`),
+        orderIndex: Number.isFinite(chapter.orderIndex) ? chapter.orderIndex : index,
+        bodyTextPath: stored.relativePath,
+        bodyTextStorage: 'file_gzip',
+        bodyTextSize: stored.sizeBytes,
+      }
+    })
+
+    books.push({
+      id: bookId,
+      title,
+      author,
+      bookType: detectBookType(filePath),
+      readingStatsKey,
+      progressIndex: 0,
+      progressOffset: 0,
+      lastReadAt: now,
+      pinned: false,
+      chapterCount: chapterRows.length,
+      currentChapterTitle: chapterRows[0]?.title || '',
       createdAt: now,
       updatedAt: now,
-      coverFile: extractFileName(b.cover_path),
-      sourceFile: extractFileName(b.path),
-    }))
+      coverFile,
+      sourceFile,
+    })
 
-    // Compute currentChapterTitle for each book
-    for (const book of migratedBooks) {
-      const matchingChapter = chapterRows.find(
-        (c: any) => Number(c.book_id) === book.id && Number(c.order_index) === book.progressIndex
-      )
-      if (matchingChapter) book.currentChapterTitle = String(matchingChapter.title || '')
-    }
-
-    const migratedChapters = chapterRows.map((c: any) => ({
-      id: Number(c.id),
-      bookId: Number(c.book_id),
-      title: String(c.title || ''),
-      orderIndex: Number(c.order_index || 0),
-      bodyTextPath: c.body_text_path ? String(c.body_text_path) : null,
-      bodyTextStorage: String(c.body_text_storage || 'db'),
-      bodyTextSize: Number(c.body_text_size || 0),
-    }))
-
-    const migratedRules = ruleRows.map((r: any) => ({
-      id: Number(r.id),
-      pattern: String(r.pattern || ''),
-      replacement: String(r.replacement || ''),
-      scope: String(r.scope || 'global'),
-      bookId: r.book_id ? Number(r.book_id) : null,
-      regex: Number(r.is_regex || 0) === 1,
-      active: Number(r.active || 0) === 1,
-      updatedAt: now,
-    }))
-
-    const migratedThemes = customThemesRaw.map((t: any, index: number) => ({
-      id: t.id ?? (index + 1),
-      name: String(t.name || `主题 ${index + 1}`),
-      configJson: JSON.stringify(t),
-      updatedAt: now,
-    }))
-
-    const migratedBookmarks = bookmarkRows.map((b: any, index: number) => ({
-      id: index + 1,
-      uuid: String(b.uuid || ''),
-      bookId: b.book_id ? Number(b.book_id) : null,
-      bookIdentity: String(b.book_identity || ''),
-      bookTitle: String(b.book_title || ''),
-      bookAuthor: b.book_author ? String(b.book_author) : '',
-      chapterOrderIndex: Number(b.chapter_order_index || 0),
-      chapterTitle: String(b.chapter_title || ''),
-      chapterOffset: Number(b.chapter_offset || 0),
-      progressPercent: Number(b.progress_percent || 0),
-      summary: String(b.summary || ''),
-      createdAt: Number(b.created_at || now),
-      updatedAt: Number(b.updated_at || now),
-    }))
-
-    const migratedReadingStats = statsRows.map((s: any) => ({
-      date: String(s.date || ''),
-      sourceDeviceId: String(s.source_device_id || ''),
-      bookIdentity: String(s.book_identity || ''),
-      bookTitle: String(s.book_title || ''),
-      bookAuthor: s.book_author ? String(s.book_author) : '',
-      durationSeconds: Number(s.duration_seconds || 0),
-      charCount: Number(s.char_count || 0),
-      updatedAt: Number(s.updated_at || now),
-    }))
-
-    // 4. Write all JSON files
-    ensureDataDir()
-    writeJsonEntity('books', migratedBooks)
-    writeJsonEntity('chapters', migratedChapters)
-    writeJsonEntity('rules', migratedRules)
-    writeJsonEntity('themes', migratedThemes)
-    writeJsonEntity('bookmarks', migratedBookmarks)
-    writeJsonEntity('readingStats', migratedReadingStats)
-    writeJsonEntity('settings', settingsMap)
-
-    // 5. Create migration marker
-    writeFileSync(join(DATA_DIR, '.migrated'), JSON.stringify({
-      migratedAt: now,
-      fromSchemaVersion: 7,
-      toSchemaVersion: 8,
-      bookCount: migratedBooks.length,
-      chapterCount: migratedChapters.length,
-    }, null, 2))
-
-    console.log(`[Migration] Completed: ${migratedBooks.length} books, ${migratedChapters.length} chapters, ${migratedRules.length} rules, ${migratedThemes.length} themes, ${migratedBookmarks.length} bookmarks, ${migratedReadingStats.length} stats rows`)
-    return true
+    writeJsonEntity('books', books)
+    writeJsonEntity('chapters', [...chapters, ...chapterRows])
+    return { bookId, chapterCount: chapterRows.length }
   } catch (error) {
-    console.error('[Migration] Failed:', error)
-    return false
+    if (bookId > 0) {
+      rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
+    }
+    console.error('Import error:', error)
+    throw error
   }
 }
 
-// Strip inline body_text/body_html from SQLite chapters that have already been
-// exported to external .txt.gz files. Safe to call repeatedly and at any time —
-// only clears text whose canonical copy lives outside the database.
-function trimSqliteInlineText(): void {
-  if (!db) return
-  try {
-    const columns = getTableColumns(db, 'chapters')
-    const hasLegacyBody = columns.includes('body')
-    const hasBodyHtml = columns.includes('body_html')
+function getBookChaptersJson(bookId: number) {
+  const chapters = (readJsonEntity('chapters', []) as any[])
+    .filter(chapter => Number(chapter.bookId) === bookId)
+    .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
 
-    // Only clear inline text for chapters where the canonical text is already external
-    db.run(
-      "UPDATE chapters SET body_text = '' WHERE body_text_storage = 'file_gzip' AND body_text IS NOT NULL AND body_text <> ''"
-    )
-    const clearedRows = db.getRowsModified()
+  return chapters.map(chapter => {
+    const rawStorage = String(chapter.bodyTextStorage || (chapter.bodyTextPath ? 'file_gzip' : 'inline'))
+    const storage = rawStorage === 'file_gzip' ? 'file_gzip' : 'inline'
+    const bodyTextPath = chapter.bodyTextPath ? String(chapter.bodyTextPath) : ''
+    const bodyText = storage === 'file_gzip' && bodyTextPath
+      ? readChapterTextGzip(bodyTextPath)
+      : String(chapter.bodyText || '')
+    const missing = bodyText === null || bodyText === ''
+    const readableText = missing ? EMPTY_CHAPTER_TEXT_PLACEHOLDER : bodyText
+    return {
+      id: Number(chapter.id),
+      title: String(chapter.title || ''),
+      order_index: Number(chapter.orderIndex || 0),
+      body: readableText ? textToHtml(readableText) : '',
+      body_text: readableText,
+      body_text_storage: storage,
+      body_text_missing: missing ? 1 : 0,
+      body_text_fallback: missing ? 'placeholder' : null,
+    }
+  })
+}
 
-    if (hasBodyHtml) {
-      db.run("UPDATE chapters SET body_html = '' WHERE body_html IS NOT NULL AND body_html <> ''")
-    }
-    if (hasLegacyBody) {
-      try { db.run("UPDATE chapters SET body = ''") } catch (_) {}
-    }
-
-    if (clearedRows > 0) {
-      saveDatabase()
-      console.log(`[Trim] Cleared inline text for ${clearedRows} chapters`)
-    } else {
-      console.log('[Trim] No db-stored inline text to clear')
-    }
-
-    // VACUUM if freelist is above threshold — always worth checking
-    const freelist = getFreePageCount()
-    if (freelist >= VACUUM_FREE_PAGE_THRESHOLD) {
-      console.log(`[Trim] Freelist ${freelist} pages, running VACUUM...`)
-      try {
-        db.run('VACUUM')
-        saveDatabase()
-        console.log('[Trim] VACUUM complete')
-      } catch (e) {
-        console.error('[Trim] VACUUM failed:', e)
-      }
-    } else {
-      console.log(`[Trim] Freelist ${freelist} pages, below threshold — skipping VACUUM`)
-    }
-  } catch (e) {
-    console.error('[Trim] Failed:', e)
+function deleteBookJson(bookId: number): { success: boolean } {
+  const books = readJsonEntity('books', []) as any[]
+  const target = books.find(book => Number(book.id) === bookId)
+  writeJsonEntity('books', books.filter(book => Number(book.id) !== bookId))
+  writeJsonEntity('chapters', (readJsonEntity('chapters', []) as any[]).filter(chapter => Number(chapter.bookId) !== bookId))
+  writeJsonEntity('rules', (readJsonEntity('rules', []) as any[]).filter(rule => Number(rule.bookId) !== bookId))
+  writeJsonEntity('bookmarks', (readJsonEntity('bookmarks', []) as any[]).filter(bookmark => Number(bookmark.bookId) !== bookId))
+  rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
+  if (target?.sourceFile) {
+    rmSync(join(app.getPath('userData'), 'books', safeAssetFileName(String(target.sourceFile))), { force: true })
   }
+  return { success: true }
 }
 
 // Requirement 1: Single instance lock
@@ -1018,15 +662,11 @@ app.whenReady().then(async () => {
   migrateOldData()
   createWindow()
   try {
-    await initDatabase()
-    console.log('Database initialized successfully')
-    // Migrate SQLite data to JSON files (v7 → v8)
-    await migrateSqliteToJson()
-    // Always trim inline text from SQLite — even if migration was already done
-    trimSqliteInlineText()
+    initializeJsonStore()
+    console.log('JSON data store initialized successfully')
   } catch (error) {
-    console.error('Database init failed:', String(error))
-    dialog.showErrorBox('数据库初始化失败', String(error))
+    console.error('JSON data store init failed:', String(error))
+    dialog.showErrorBox('数据初始化失败', String(error))
   }
   setupAutoUpdater()
 
@@ -1054,118 +694,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   saveBounds()
-  saveDatabase()
   if (process.platform !== 'darwin') app.quit()
 })
 
 // ---- IPC handlers ----
-ipcMain.handle('db:query', async (_, sql: string, params?: any[]) => {
-  if (!db) throw new Error('Database not initialized')
-  try {
-    const t = sql.trim().toUpperCase()
-    if (t.startsWith('SELECT')) {
-      const result = db.exec(sql, params || [])
-      if (result.length === 0) return []
-      const { columns, values } = result[0]
-      return values.map(row => { const o: any = {}; columns.forEach((c, i) => o[c] = row[i]); return o })
-    } else {
-      db.run(sql, params || [])
-      saveDatabase()
-      const r = db.exec('SELECT last_insert_rowid() as id')
-      return { lastInsertRowid: r[0]?.values[0]?.[0] || 0, changes: db.getRowsModified() }
-    }
-  } catch (error) { console.error('DB error:', error); throw error }
-})
-
-ipcMain.handle('db:importBook', async (_, filePath: string) => {
-  if (!db) throw new Error('Database not initialized')
-  let bookId: number | null = null
-  try {
-    const ext = extname(filePath).toLowerCase()
-    const fileName = filePath.split(/[/\\]/).pop() || 'Unknown'
-    const parsed = parseBookNameAndAuthor(fileName)
-    const title = parsed.title || fileName.replace(/\.[^/.]+$/, '')
-    const author = parsed.author
-    const readingStatsKey = buildReadingStatsKey(title, author)
-    let chapters: Chapter[]
-    let coverBuffer: Buffer | undefined
-    let coverExtension: string | undefined
-    if (ext === '.txt') {
-      chapters = parseTxt(filePath)
-    } else if (ext === '.epub') {
-      const epubResult = await parseEpub(filePath)
-      chapters = epubResult.chapters
-      coverBuffer = epubResult.coverBuffer
-      coverExtension = epubResult.coverExtension
-    } else if (ext === '.pdf') {
-      chapters = await parsePdf(filePath)
-    } else {
-      throw new Error(`Unsupported: ${ext}`)
-    }
-
-    db.run('BEGIN TRANSACTION')
-    try {
-      db.run(
-        'INSERT INTO books (title, author, path, last_read, reading_stats_key) VALUES (?, ?, ?, ?, ?)',
-        [title, author, filePath, new Date().toISOString(), readingStatsKey]
-      )
-      const result = db.exec('SELECT last_insert_rowid() as id')
-      bookId = result[0].values[0][0] as number
-
-      if (coverBuffer && coverExtension) {
-        try {
-          const coversDir = join(app.getPath('userData'), 'covers')
-          if (!existsSync(coversDir)) mkdirSync(coversDir, { recursive: true })
-          const coverFilename = `epub_cover_${bookId}.${coverExtension}`
-          const coverDestPath = join(coversDir, coverFilename)
-          writeFileSync(coverDestPath, coverBuffer)
-          const coverUrl = 'file:///' + coverDestPath.replace(/\\/g, '/')
-          db.run('UPDATE books SET cover_path = ? WHERE id = ?', [coverUrl, bookId])
-        } catch (e) { console.error('Failed to save EPUB cover:', e) }
-      }
-
-      for (const ch of chapters) {
-        const bodyText = ch.bodyText || ''
-        const bodyTextSize = Buffer.byteLength(bodyText, 'utf8')
-        db.run(
-          `INSERT INTO chapters (
-            book_id, title, body_html, body_text, order_index,
-            body_text_storage, body_text_size
-          ) VALUES (?, ?, '', ?, ?, 'db', ?)`,
-          [bookId, ch.title, bodyText, ch.orderIndex, bodyTextSize]
-        )
-        const chapterIdResult = db.exec('SELECT last_insert_rowid() as id')
-        const chapterId = Number(chapterIdResult[0].values[0][0])
-        const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
-        db.run(
-          `UPDATE chapters
-           SET body_text = '',
-             body_text_path = ?,
-             body_text_storage = 'file_gzip',
-             body_text_size = ?,
-             body_html = ''
-           WHERE id = ?`,
-          [stored.relativePath, stored.sizeBytes, chapterId]
-        )
-      }
-
-      db.run('COMMIT')
-    } catch (error) {
-      try { db.run('ROLLBACK') } catch {}
-      if (bookId !== null) {
-        rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
-      }
-      throw error
-    }
-
-    if (bookId === null) throw new Error('导入失败：未生成书籍 ID')
-    saveDatabase()
-    // Keep JSON files in sync
-    migrateSqliteToJson(true).catch(e => console.error('[Import] JSON sync failed:', e))
-    return { bookId, chapterCount: chapters.length }
-  } catch (error) { console.error('Import error:', error); throw error }
-})
-
 ipcMain.handle('dialog:openFile', async () => {
   const r = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'E-books', extensions: ['txt', 'epub', 'pdf'] }, { name: 'All Files', extensions: ['*'] }] })
   return r.canceled ? null : r.filePaths[0]
@@ -1235,595 +767,14 @@ ipcMain.handle('updater:install', async (_, silent?: boolean) => {
 ipcMain.handle('app:getVersion', async () => app.getVersion())
 ipcMain.handle('app:getPath', async (_, name: any) => app.getPath(name))
 ipcMain.handle('app:quit', async () => app.quit())
-ipcMain.handle('db:getSize', async () => {
-  saveDatabase()
-  return getStorageSizeInfo()
-})
 
-ipcMain.handle('db:getBookChapters', async (_, bookId: number) => {
-  if (!db) throw new Error('Database not initialized')
-  const columns = getTableColumns(db, 'chapters')
-  const hasLegacyBody = columns.includes('body')
-  const bodyColumn = hasLegacyBody ? ', body' : ''
-  let rows = queryRows(
-    db,
-    `SELECT id, book_id, title, body_html, body_text, order_index,
-      body_text_path, body_text_storage, body_text_size${bodyColumn}
-     FROM chapters
-     WHERE book_id = ?
-     ORDER BY order_index`,
-    [bookId]
-  )
-
-  // Fallback: if SQLite returns no chapters, try reading from JSON (v8 format)
-  if (rows.length === 0) {
-    const jsonChapters = readJsonEntity('chapters', []) as Array<{
-      id: number; bookId: number; title: string; orderIndex: number
-      bodyTextPath: string | null; bodyTextStorage: string; bodyTextSize: number
-    }>
-    const matching = jsonChapters
-      .filter(c => c.bookId === bookId)
-      .sort((a, b) => a.orderIndex - b.orderIndex)
-
-    if (matching.length > 0) {
-      return matching.map(c => {
-        const bodyText = (c.bodyTextStorage === 'file_gzip' && c.bodyTextPath)
-          ? (readChapterTextGzip(c.bodyTextPath) || '')
-          : ''
-        const missing = (c.bodyTextStorage === 'file_gzip' && c.bodyTextPath)
-          ? (readChapterTextGzip(c.bodyTextPath) === null)
-          : false
-        return {
-          id: c.id,
-          title: c.title,
-          order_index: c.orderIndex,
-          body: bodyText ? textToHtml(bodyText) : '',
-          body_text: bodyText,
-          body_text_storage: c.bodyTextStorage,
-          body_text_missing: missing ? 1 : 0,
-          body_text_fallback: null as string | null,
-        }
-      })
-    }
-  }
-
-  return rows.map(row => {
-    const readable = getReadableChapterText(row)
-    return {
-      id: Number(row.id),
-      title: String(row.title || ''),
-      order_index: Number(row.order_index || 0),
-      body: readable.bodyText ? textToHtml(readable.bodyText) : '',
-      body_text: readable.bodyText,
-      body_text_storage: String(row.body_text_storage || 'db'),
-      body_text_missing: readable.missing ? 1 : 0,
-      body_text_fallback: readable.fallbackUsed
-    }
-  })
-})
-
-function isDatabaseHealthyForStartup(database: Database): boolean {
-  try {
-    const result = database.exec(
-      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('books','chapters')"
-    )
-    const count = result.length > 0 && result[0].values.length > 0 ? Number(result[0].values[0][0]) : 0
-    return count >= 2
-  } catch (e) {
-    console.warn('[DB] Health check failed:', e)
-    return false
-  }
-}
-
-function countNonEmptyBodyHtml(): number {
-  if (!db) return 0
-  const result = db.exec(
-    "SELECT COUNT(*) FROM chapters WHERE body_html IS NOT NULL AND body_html != ''"
-  )
-  return Number(result[0]?.values[0]?.[0] || 0)
-}
-
-function countChaptersNeedingExport(): number {
-  if (!db) return 0
-  const result = db.exec(
-    `SELECT COUNT(*) FROM chapters
-     WHERE COALESCE(body_text_storage, 'db') = 'db'
-       AND body_text IS NOT NULL AND body_text != ''`
-  )
-  return Number(result[0]?.values[0]?.[0] || 0)
-}
-
-function countMissingChapterTextFiles(): number {
-  if (!db) return 0
-  const rows = queryRows(
-    db,
-    `SELECT id, body_text_path FROM chapters
-     WHERE body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL AND body_text_path <> ''
-       AND (body_text IS NULL OR body_text = '')`
-  )
-  let missing = 0
-  const dataDir = app.getPath('userData')
-  for (const row of rows) {
-    if (!resolveChapterTextPath(row.body_text_path, dataDir)) missing++
-  }
-  return missing
-}
-
-function getFreePageCount(): number {
-  if (!db) return 0
-  try {
-    const result = db.exec('PRAGMA freelist_count')
-    return Number(result[0]?.values[0]?.[0] || 0)
-  } catch (_) { return 0 }
-}
-
-const VACUUM_FREE_PAGE_THRESHOLD = 256
-
-function hasPendingMaintenanceWork(): boolean {
-  if (countNonEmptyBodyHtml() > 0) return true
-  if (countChaptersNeedingExport() > 0) return true
-  if (countMissingChapterTextFiles() > 0) return true
-  if (getFreePageCount() >= VACUUM_FREE_PAGE_THRESHOLD) return true
-  return false
-}
-
-ipcMain.handle('db:optimizeStorage', async (event) => {
-  if (!db) throw new Error('Database not initialized')
-
-  // Phase 0: Health check
-  if (!isDatabaseHealthyForStartup(db)) {
-    throw new Error('数据库可能已损坏，缺少 books 或 chapters 表。建议从备份恢复。')
-  }
-
-  runV7Migration(db)
-  saveDatabase()
-  const before = getStorageSizeInfo()
-
-  // Count work for progress reporting
-  const exportRows = queryRows(
-    db,
-    `SELECT id, book_id, body_text
-     FROM chapters
-     WHERE COALESCE(body_text_storage, 'db') = 'db'
-       AND body_text IS NOT NULL
-       AND body_text <> ''
-     ORDER BY book_id, order_index`
-  )
-  const missingRows = queryRows(
-    db,
-    `SELECT id, book_id, body_text, body_text_path FROM chapters
-     WHERE body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL AND body_text_path <> ''`
-  )
-  const columns = getTableColumns(db, 'chapters')
-  const hasLegacyBody = columns.includes('body')
-  const dataDir = app.getPath('userData')
-  const missingWithFileGone = missingRows.filter(row => !resolveChapterTextPath(row.body_text_path, dataDir))
-
-  const total = 4 + missingWithFileGone.length + exportRows.length
-  let step = 0
-  const progress = (message: string) => {
-    step += 1
-    event.sender.send('db:optimize-progress', { step, total, message })
-  }
-
-  // Phase 1: Clear body_html
-  progress('正在清理 body_html...')
-  db.run("UPDATE chapters SET body_html = '' WHERE body_html IS NOT NULL AND body_html <> ''")
-  const clearedBodyHtml = db.getRowsModified()
-
-  // Phase 2: Repair missing external chapter text files
-  let repairedChapters = 0
-  if (missingWithFileGone.length > 0) {
-    for (let i = 0; i < missingWithFileGone.length; i++) {
-      const row = missingWithFileGone[i]
-      const chapterId = Number(row.id)
-      const bookId = Number(row.book_id)
-      progress(`正在修复缺失正文 ${i + 1}/${missingWithFileGone.length}`)
-
-      // Priority 1: From database body_text
-      let bodyText = String(row.body_text || '')
-      if (!bodyText && hasLegacyBody) {
-        // Priority 2: From legacy body column (pre-v6 HTML)
-        try {
-          const legacyRows = queryRows(db, 'SELECT body FROM chapters WHERE id = ?', [chapterId])
-          bodyText = stripHtmlTags(String(legacyRows[0]?.body || ''))
-        } catch (_) {}
-      }
-      if (!bodyText) continue // Priority 3: Skip, source reparsing needed
-
-      try {
-        const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
-        db.run(
-          `UPDATE chapters
-           SET body_text = '',
-             body_text_path = ?,
-             body_text_storage = 'file_gzip',
-             body_text_size = ?,
-             body_html = ''
-           WHERE id = ?`,
-          [stored.relativePath, stored.sizeBytes, chapterId]
-        )
-        if (hasLegacyBody) {
-          try { db.run("UPDATE chapters SET body = '' WHERE id = ?", [chapterId]) } catch (_) {}
-        }
-        repairedChapters += db.getRowsModified()
-      } catch (e) {
-        console.error('[DB] Failed to repair chapter text for chapter', chapterId, e)
-      }
-    }
-  }
-
-  // Phase 3: Export body_text to external .txt.gz
-  let optimizedChapters = 0
-  for (let i = 0; i < exportRows.length; i++) {
-    const row = exportRows[i]
-    const chapterId = Number(row.id)
-    const bookId = Number(row.book_id)
-    const bodyText = String(row.body_text || '')
-    progress(`正在外置章节正文 ${i + 1}/${exportRows.length}`)
-    try {
-      const stored = writeChapterTextGzip(bookId, chapterId, bodyText)
-      db.run(
-        `UPDATE chapters
-         SET body_text = '',
-           body_text_path = ?,
-           body_text_storage = 'file_gzip',
-           body_text_size = ?,
-           body_html = ''
-         WHERE id = ?`,
-        [stored.relativePath, stored.sizeBytes, chapterId]
-      )
-      optimizedChapters += db.getRowsModified()
-    } catch (e) {
-      console.error('[DB] Failed to export chapter text for chapter', chapterId, e)
-    }
-  }
-
-  // Phase 4: WAL checkpoint
-  progress('正在同步数据库状态...')
-  try { db.run('PRAGMA wal_checkpoint(TRUNCATE)') } catch (_) {}
-
-  // Phase 5: VACUUM — always after export, otherwise only if freelist >= threshold
-  let wasVacuumed = false
-  const shouldVacuum = optimizedChapters > 0 || repairedChapters > 0 || getFreePageCount() >= VACUUM_FREE_PAGE_THRESHOLD
-  if (shouldVacuum) {
-    progress('正在回收 reader.db 空间...')
-    try { db.run('VACUUM'); wasVacuumed = true } catch (error) { console.error('[DB] VACUUM failed:', error) }
-  }
-
-  progress('正在刷新空间统计...')
-  saveDatabase()
-  const after = getStorageSizeInfo()
-  return { optimizedChapters, repairedChapters, clearedBodyHtml, wasVacuumed, before, after }
-})
-
-ipcMain.handle('db:checkHealth', async () => {
-  if (!db) return { healthy: false, reason: 'Database not initialized' }
-  if (!isDatabaseHealthyForStartup(db)) return { healthy: false, reason: '缺少 books 或 chapters 核心表，数据库可能已损坏' }
-  return { healthy: true, reason: null }
-})
-
-ipcMain.handle('db:hasPendingMaintenance', async () => {
-  return hasPendingMaintenanceWork()
-})
-
-ipcMain.handle('db:getMaintenanceStatus', async () => {
-  return {
-    hasPendingWork: hasPendingMaintenanceWork(),
-    nonEmptyBodyHtml: countNonEmptyBodyHtml(),
-    needsExport: countChaptersNeedingExport(),
-    missingChapterFiles: countMissingChapterTextFiles(),
-    freelistCount: getFreePageCount()
-  }
-})
-
-ipcMain.handle('db:export', async () => {
-  if (!db) throw new Error('Database not initialized')
-  const data = db.export()
-  const tempPath = join(app.getPath('temp'), `pacilread_export_${Date.now()}.db`)
-  writeFileSync(tempPath, Buffer.from(data))
-  return tempPath
-})
-
-ipcMain.handle('db:exportLite', async () => {
-  if (!db || !SQL) throw new Error('Database not initialized')
-  // Clone current database
-  const data = db.export()
-  const tempDb = new SQL.Database(data)
-  try {
-    runDatabaseMigrations(tempDb)
-    tempDb.run("UPDATE chapters SET body_text = '', body_html = ''")
-    tempDb.run('VACUUM')
-  } catch (e) {
-    console.error('Lite export cleanup failed:', e)
-  }
-  const liteData = tempDb.export()
-  const tempPath = join(app.getPath('temp'), `pacilread_lite_${Date.now()}.db`)
-  writeFileSync(tempPath, Buffer.from(liteData))
-  tempDb.close()
-  return tempPath
-})
-
-ipcMain.handle('db:deleteBook', async (_, bookId: number) => {
-  if (!db) throw new Error('Database not initialized')
-  db.run('BEGIN TRANSACTION')
-  try {
-    db.run('DELETE FROM replacement_rules WHERE book_id = ?', [bookId])
-    db.run('DELETE FROM bookmarks WHERE book_id = ?', [bookId])
-    db.run('DELETE FROM chapters WHERE book_id = ?', [bookId])
-    db.run('DELETE FROM books WHERE id = ?', [bookId])
-    db.run('COMMIT')
-  } catch (error) {
-    try { db.run('ROLLBACK') } catch {}
-    throw error
-  }
-  rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
-  saveDatabase()
-  // Keep JSON files in sync
-  migrateSqliteToJson(true).catch(e => console.error('[Delete] JSON sync failed:', e))
-  return { success: true }
-})
-
-ipcMain.handle('db:listChapterTextFiles', async () => {
-  return listFilesRecursive(getChapterTextRoot())
-})
-
-ipcMain.handle('db:getRequiredChapterTextFiles', async () => {
-  if (!db) throw new Error('Database not initialized')
-  const rows = queryRows(
-    db,
-    `SELECT DISTINCT body_text_path AS relativePath
-     FROM chapters
-     WHERE body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL
-       AND body_text_path <> ''
-     ORDER BY body_text_path`
-  )
-
-  return rows
-    .map(row => normalizeChapterTextRelativePath(row.relativePath))
-    .filter((relativePath): relativePath is string => Boolean(relativePath))
-    .map(relativePath => ({
-      relativePath,
-      localPath: getChapterTextAbsolutePath(relativePath)
-    }))
-})
-
-ipcMain.handle('db:getMissingChapterTextFiles', async () => {
-  if (!db) throw new Error('Database not initialized')
-  const rows = queryRows(
-    db,
-    `SELECT DISTINCT body_text_path AS relativePath
-     FROM chapters
-     WHERE body_text_storage = 'file_gzip'
-       AND body_text_path IS NOT NULL
-       AND body_text_path <> ''
-       AND (body_text IS NULL OR body_text = '')
-     ORDER BY body_text_path`
-  )
-
-  return rows
-    .map(row => normalizeChapterTextRelativePath(row.relativePath))
-    .filter((relativePath): relativePath is string => Boolean(relativePath))
-    .filter(relativePath => !existsSync(getChapterTextAbsolutePath(relativePath)))
-    .map(relativePath => ({ relativePath, localPath: getChapterTextAbsolutePath(relativePath) }))
-})
-
-ipcMain.handle('db:getBookIdsWithFileGzipChapters', async () => {
-  return getBookIdsWithFileGzipChapters()
-})
-
-ipcMain.handle('db:createBookChapterTextZip', async (_, bookId: number) => {
-  return createBookChapterTextZip(bookId)
-})
-
-ipcMain.handle('db:extractBookChapterTextZip', async (_, zipPath: string) => {
-  return extractBookChapterTextZip(zipPath)
-})
-
-function quoteIdentifier(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    throw new Error(`Invalid database identifier: ${name}`)
-  }
-  return `"${name}"`
-}
-
-function tableExists(database: Database, tableName: string): boolean {
-  const result = database.exec(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-    [tableName]
-  )
-  return result.length > 0 && result[0].values.length > 0
-}
-
-function countRows(database: Database, tableName: string): number {
-  if (!tableExists(database, tableName)) return 0
-  const result = database.exec(`SELECT COUNT(*) as count FROM ${quoteIdentifier(tableName)}`)
-  return Number(result[0]?.values[0]?.[0] || 0)
-}
-
-function queryRows(database: Database, sql: string, params?: any[]): any[] {
-  const result = database.exec(sql, params || [])
-  if (result.length === 0) return []
-  const { columns, values } = result[0]
-  return values.map(row => {
-    const item: any = {}
-    columns.forEach((column, index) => { item[column] = row[index] })
-    return item
-  })
-}
-
-function getTableColumns(database: Database, tableName: string): string[] {
-  const result = database.exec(`PRAGMA table_info(${quoteIdentifier(tableName)})`)
-  if (result.length === 0) return []
-  const nameIndex = result[0].columns.indexOf('name')
-  return result[0].values.map(row => String(row[nameIndex]))
-}
-
-function readTableRows(database: Database, tableName: string, columns: string[]): any[][] {
-  if (columns.length === 0) return []
-  const columnSql = columns.map(quoteIdentifier).join(', ')
-  const result = database.exec(`SELECT ${columnSql} FROM ${quoteIdentifier(tableName)}`)
-  return result[0]?.values || []
-}
-
-function replaceTableFromDatabase(targetDb: Database, sourceDb: Database, tableName: string): number {
-  if (!tableExists(sourceDb, tableName) || !tableExists(targetDb, tableName)) return 0
-  const targetColumns = getTableColumns(targetDb, tableName)
-  const sourceColumns = getTableColumns(sourceDb, tableName)
-  const commonColumns = targetColumns.filter(column => sourceColumns.includes(column))
-  if (commonColumns.length === 0) return 0
-
-  const rows = readTableRows(sourceDb, tableName, commonColumns)
-  targetDb.run(`DELETE FROM ${quoteIdentifier(tableName)}`)
-  if (rows.length === 0) return 0
-
-  const columnSql = commonColumns.map(quoteIdentifier).join(', ')
-  const placeholders = commonColumns.map(() => '?').join(', ')
-  const insertSql = `INSERT INTO ${quoteIdentifier(tableName)} (${columnSql}) VALUES (${placeholders})`
-  for (const row of rows) {
-    targetDb.run(insertSql, row)
-  }
-  return rows.length
-}
-
-function normalizeBookIdentityPart(value: unknown): string {
-  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
-}
-
-function bookFallbackIdentity(book: any): string {
-  return `${normalizeBookIdentityPart(book.title)}\n${normalizeBookIdentityPart(book.author)}`
-}
-
-function countChaptersForBook(database: Database, bookId: number): number {
-  const result = database.exec('SELECT COUNT(*) AS count FROM chapters WHERE book_id = ?', [bookId])
-  return Number(result[0]?.values[0]?.[0] || 0)
-}
-
-function detachCachedChapters(database: Database, previousBooks: any[]): number {
-  if (!tableExists(database, 'chapters')) return 0
-  let detachedChapters = 0
-  for (const book of previousBooks) {
-    const bookId = Number(book.id)
-    if (!Number.isFinite(bookId) || countChaptersForBook(database, bookId) === 0) continue
-    database.run('UPDATE chapters SET book_id = ? WHERE book_id = ?', [-bookId, bookId])
-    detachedChapters += database.getRowsModified()
-  }
-  return detachedChapters
-}
-
-function countDetachedChaptersForBook(database: Database, bookId: number): number {
-  const result = database.exec('SELECT COUNT(*) AS count FROM chapters WHERE book_id = ?', [-bookId])
-  return Number(result[0]?.values[0]?.[0] || 0)
-}
-
-function restoreUnmatchedDetachedChapters(database: Database): number {
-  if (!tableExists(database, 'chapters')) return 0
-  database.run('UPDATE chapters SET book_id = ABS(book_id) WHERE book_id < 0')
-  return database.getRowsModified()
-}
-
-function remapCachedChaptersToImportedBooks(database: Database, previousBooks: any[]): number {
-  if (!tableExists(database, 'chapters')) return 0
-  const booksByStatsKey = new Map<string, any>()
-  const booksByFallback = new Map<string, any>()
-  for (const book of previousBooks) {
-    if (book.reading_stats_key) booksByStatsKey.set(String(book.reading_stats_key), book)
-    booksByFallback.set(bookFallbackIdentity(book), book)
-  }
-
-  const importedBooks = queryRows(database, 'SELECT id, title, author, reading_stats_key FROM books')
-  const usedPreviousBookIds = new Set<number>()
-  let movedChapters = 0
-  for (const importedBook of importedBooks) {
-    const previousBook = (importedBook.reading_stats_key && booksByStatsKey.get(String(importedBook.reading_stats_key))) ||
-      booksByFallback.get(bookFallbackIdentity(importedBook))
-    if (!previousBook || usedPreviousBookIds.has(previousBook.id)) continue
-    if (countDetachedChaptersForBook(database, Number(previousBook.id)) === 0) continue
-    database.run('UPDATE chapters SET book_id = ? WHERE book_id = ?', [importedBook.id, -Number(previousBook.id)])
-    movedChapters += database.getRowsModified()
-    usedPreviousBookIds.add(previousBook.id)
-  }
-  return movedChapters
-}
-
-function remapBookmarksToImportedBooks(database: Database): number {
-  if (!tableExists(database, 'bookmarks') || !tableExists(database, 'books')) return 0
-  database.run(`UPDATE bookmarks
-    SET book_id = (
-      SELECT books.id
-      FROM books
-      WHERE books.reading_stats_key = bookmarks.book_identity
-      LIMIT 1
-    )
-    WHERE book_identity <> ''
-      AND EXISTS (
-        SELECT 1
-        FROM books
-        WHERE books.reading_stats_key = bookmarks.book_identity
-      )`)
-  return database.getRowsModified()
-}
-
-function assertFullDatabaseHasReadableContent(database: Database): void {
-  const bookCount = countRows(database, 'books')
-  const chapterCount = countRows(database, 'chapters')
-  if (bookCount > 0 && chapterCount === 0) {
-    throw new Error('导入文件包含书籍列表但没有章节正文。已阻止覆盖本地数据库；请使用增量恢复或选择完整备份。')
-  }
-}
-
-ipcMain.handle('db:importFromFile', async (_, filePath: string) => {
-  if (!SQL) throw new Error('SQL.js not initialized')
-  const data = readFileSync(filePath)
-  const nextDb = new SQL.Database(data)
-  runDatabaseMigrations(nextDb)
-  assertFullDatabaseHasReadableContent(nextDb)
-  const oldDb = db
-  db = nextDb
-  try { oldDb?.close() } catch {}
-  saveDatabase()
-})
-
-ipcMain.handle('db:importLiteFromFile', async (_, filePath: string) => {
-  if (!db || !SQL) throw new Error('Database not initialized')
-  const data = readFileSync(filePath)
-  const liteDb = new SQL.Database(data)
-  try {
-    runDatabaseMigrations(liteDb)
-    runDatabaseMigrations(db)
-
-    const preservedChapters = countRows(db, 'chapters')
-    const importedBookCount = countRows(liteDb, 'books')
-    const previousBooks = queryRows(db, 'SELECT id, title, author, reading_stats_key FROM books')
-
-    db.run('PRAGMA foreign_keys = OFF')
-    db.run('BEGIN TRANSACTION')
-    try {
-      const detachedChapters = detachCachedChapters(db, previousBooks)
-      const imported = {
-        books: replaceTableFromDatabase(db, liteDb, 'books'),
-        settings: 0,
-        replacementRules: replaceTableFromDatabase(db, liteDb, 'replacement_rules'),
-        readingStats: replaceTableFromDatabase(db, liteDb, 'reading_stats'),
-        bookmarks: replaceTableFromDatabase(db, liteDb, 'bookmarks')
-      }
-      const remappedChapters = remapCachedChaptersToImportedBooks(db, previousBooks)
-      const remappedBookmarks = remapBookmarksToImportedBooks(db)
-      const unmatchedChapters = restoreUnmatchedDetachedChapters(db)
-      db.run('COMMIT')
-      saveDatabase()
-      return { ...imported, importedBookCount, preservedChapters, currentChapters: countRows(db, 'chapters'), detachedChapters, remappedChapters, remappedBookmarks, unmatchedChapters }
-    } catch (error) {
-      try { db.run('ROLLBACK') } catch {}
-      throw error
-    }
-  } finally {
-    liteDb.close()
-  }
-})
+ipcMain.handle('library:importBook', async (_, filePath: string) => importBookJson(filePath))
+ipcMain.handle('library:deleteBook', async (_, bookId: number) => deleteBookJson(bookId))
+ipcMain.handle('library:getBookChapters', async (_, bookId: number) => getBookChaptersJson(bookId))
+ipcMain.handle('library:getSize', async () => getStorageSizeInfo())
+ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsWithFileGzipChapters())
+ipcMain.handle('library:createBookChapterTextZip', async (_, bookId: number) => createBookChapterTextZip(bookId))
+ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string) => extractBookChapterTextZip(zipPath))
 
 ipcMain.handle('webdav:uploadFile', async (_, localPath: string, remoteUrl: string, auth: string) => {
   try {

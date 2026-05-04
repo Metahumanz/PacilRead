@@ -264,6 +264,128 @@ function findChangedFiles(local: Manifest, remote: Manifest): string[] {
 
 type MatchKeyFn<T> = (entity: T) => string
 
+function toNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+function normalizeRuleScope(value: unknown): 'global' | 'book' {
+  return value === 'book' ? 'book' : 'global'
+}
+
+function getRuleBookId(rule: any): number | null {
+  return toNumberOrNull(rule?.bookId ?? rule?.book_id)
+}
+
+function getRuleUpdatedAt(rule: any): number {
+  return Number(rule?.updatedAt ?? rule?.updated_at ?? 0) || 0
+}
+
+function getRuleRegex(rule: any): boolean {
+  if (typeof rule?.regex === 'boolean') return rule.regex
+  return Number(rule?.is_regex ?? 0) === 1
+}
+
+function getRuleActive(rule: any): boolean {
+  if (typeof rule?.active === 'boolean') return rule.active
+  return Number(rule?.active ?? 1) === 1
+}
+
+function normalizeRuleForSync(rule: any, bookId: number | null = getRuleBookId(rule)): any {
+  const scope = normalizeRuleScope(rule?.scope)
+  return {
+    id: toNumberOrNull(rule?.id) ?? 0,
+    pattern: String(rule?.pattern || ''),
+    replacement: String(rule?.replacement || ''),
+    scope,
+    bookId: scope === 'book' ? bookId : null,
+    regex: getRuleRegex(rule),
+    active: getRuleActive(rule),
+    updatedAt: getRuleUpdatedAt(rule),
+  }
+}
+
+function isSameNormalizedRule(source: any, normalized: any): boolean {
+  return toNumberOrNull(source?.id) === normalized.id &&
+    String(source?.pattern || '') === normalized.pattern &&
+    String(source?.replacement || '') === normalized.replacement &&
+    normalizeRuleScope(source?.scope) === normalized.scope &&
+    getRuleBookId(source) === normalized.bookId &&
+    getRuleRegex(source) === normalized.regex &&
+    getRuleActive(source) === normalized.active &&
+    getRuleUpdatedAt(source) === normalized.updatedAt
+}
+
+function buildRuleSyncKey(rule: any): string {
+  const normalized = normalizeRuleForSync(rule)
+  return [
+    normalized.pattern,
+    normalized.scope,
+    normalized.scope === 'book' ? String(normalized.bookId ?? 0) : '0',
+  ].join('|')
+}
+
+function nextEntityId(items: Array<{ id?: number }>): number {
+  const maxId = items.reduce((max, item) => Math.max(max, Number(item.id || 0)), 0)
+  return maxId + 1
+}
+
+function getBookSyncIdentity(book: any): string {
+  return String(book?.readingStatsKey || '').trim()
+}
+
+function mapRemoteRuleBookIdToLocal(remoteRule: any, remoteBooks: any[], localBooks: any[]): number | null {
+  const remoteBookId = getRuleBookId(remoteRule)
+  if (remoteBookId === null) return null
+  const remoteBook = remoteBooks.find(book => Number(book?.id) === remoteBookId)
+  const remoteIdentity = getBookSyncIdentity(remoteBook)
+  if (!remoteIdentity) return remoteBookId
+  const localBook = localBooks.find(book => getBookSyncIdentity(book) === remoteIdentity)
+  return toNumberOrNull(localBook?.id) ?? remoteBookId
+}
+
+function mergeRules(
+  localRules: any[],
+  remoteRules: any[],
+  remoteBooks: any[],
+  localBooks: any[],
+): { merged: any[]; changes: number } {
+  const byKey = new Map<string, any>()
+  let changes = 0
+
+  for (const rule of localRules) {
+    const normalized = normalizeRuleForSync(rule)
+    const key = buildRuleSyncKey(normalized)
+    const existing = byKey.get(key)
+    if (!existing || normalized.updatedAt >= existing.updatedAt) {
+      byKey.set(key, normalized)
+    }
+    if (existing || !isSameNormalizedRule(rule, normalized)) changes++
+  }
+
+  for (const remoteRule of remoteRules) {
+    const mappedBookId = mapRemoteRuleBookIdToLocal(remoteRule, remoteBooks, localBooks)
+    const normalized = normalizeRuleForSync(remoteRule, mappedBookId)
+    const key = buildRuleSyncKey(normalized)
+    const localMatch = byKey.get(key)
+
+    if (!localMatch) {
+      normalized.id = nextEntityId(Array.from(byKey.values()))
+      byKey.set(key, normalized)
+      changes++
+    } else if (normalized.updatedAt > localMatch.updatedAt) {
+      byKey.set(key, { ...localMatch, ...normalized, id: localMatch.id })
+      changes++
+    }
+  }
+
+  return {
+    merged: Array.from(byKey.values()).sort((a, b) => Number(a.id || 0) - Number(b.id || 0)),
+    changes,
+  }
+}
+
 function mergeEntities<T extends { updatedAt: number }>(
   local: T[],
   remote: T[],
@@ -310,7 +432,7 @@ export async function fullBackupV8(
 
     const entities = dataStore.getAllEntities()
 
-    // Upload each entity JSON file to database/ directory
+    // Upload each entity JSON file to database/ directory for mobile compatibility.
     for (const entity of ENTITY_TYPES) {
       onProgress?.(`正在上传 ${entity}.json...`)
       const jsonStr = JSON.stringify(entities[entity], null, 2)
@@ -477,6 +599,14 @@ export async function incrementalRestoreV8(
   try {
     const dataStore = useDataStore()
     const mergedFiles: string[] = []
+    let remoteBooksForRuleMerge: any[] | null = null
+
+    const getRemoteBooksForRuleMerge = async () => {
+      if (remoteBooksForRuleMerge !== null) return remoteBooksForRuleMerge
+      const remoteBooks = await webdavGetJson<any[]>('sync/books.json')
+      remoteBooksForRuleMerge = Array.isArray(remoteBooks) ? remoteBooks : []
+      return remoteBooksForRuleMerge
+    }
 
     onProgress?.('正在下载远程清单...')
     const remoteManifest = await downloadManifest('sync')
@@ -502,12 +632,24 @@ export async function incrementalRestoreV8(
         const remoteSettings = remoteData as Record<string, string>
         await dataStore.setSettings({ ...localSettings, ...remoteSettings })
         mergedFiles.push(fileName)
+      } else if (entity === 'rules' && Array.isArray(localEntities) && Array.isArray(remoteData)) {
+        const remoteBooks = await getRemoteBooksForRuleMerge()
+        const { merged, changes } = mergeRules(
+          localEntities,
+          remoteData,
+          remoteBooks,
+          dataStore.books.value,
+        )
+        dataStore.rules.value = merged as any
+        if (changes > 0) {
+          await window.electronAPI.data.writeEntity(entity, toRaw(merged))
+          mergedFiles.push(fileName)
+        }
       } else if (Array.isArray(localEntities) && Array.isArray(remoteData)) {
         // Array entities: merge by updatedAt
         const matchKeys: Record<string, MatchKeyFn<any>> = {
           books: (b: any) => b.readingStatsKey || `${b.title}\n${b.author || ''}`,
           chapters: (c: any) => `${c.bookId}_${c.orderIndex}`,
-          rules: (r: any) => `${r.pattern}_${r.scope}_${r.bookId || 'global'}`,
           themes: (t: any) => t.name,
           bookmarks: (b: any) => b.uuid,
           readingStats: (r: any) => `${r.sourceDeviceId}_${r.date}_${r.bookIdentity}`,
@@ -554,18 +696,16 @@ export async function checkRemoteV8Availability(): Promise<{
   hasV7Full: boolean
   hasV7Incremental: boolean
 }> {
-  const [dbManifest, syncManifest, readerDb, readerLiteDb] = await Promise.all([
+  const [fullManifest, syncManifest] = await Promise.all([
     webdavFileExists('database/manifest.json'),
     webdavFileExists('sync/manifest.json'),
-    webdavFileExists('reader.db'),
-    webdavFileExists('reader_lite.db'),
   ])
 
   return {
-    hasV8Full: dbManifest,
+    hasV8Full: fullManifest,
     hasV8Incremental: syncManifest,
-    hasV7Full: readerDb,
-    hasV7Incremental: readerLiteDb,
+    hasV7Full: false,
+    hasV7Incremental: false,
   }
 }
 
@@ -582,11 +722,7 @@ export async function cleanupRemoteV7Files(
     return { success: false, deletedFiles: [] }
   }
 
-  const v7Files = [
-    'reader.db',
-    'reader_lite.db',
-    'desktop-settings/database/reader_lite.db',
-  ]
+  const v7Files: string[] = []
 
   for (const file of v7Files) {
     onProgress?.(`正在检查 ${file}...`)

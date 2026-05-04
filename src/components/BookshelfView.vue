@@ -68,7 +68,7 @@ const addBook = async () => {
   if (!filePath) return
   try {
     importing.value = true
-    const result = await window.electronAPI.db.importBook(filePath)
+    const result = await window.electronAPI.library.importBook(filePath)
     console.log(`Imported ${result.chapterCount} chapters`)
     // Reload from JSON files after import
     const dataStore = useDataStore()
@@ -86,7 +86,7 @@ const addBook = async () => {
 const deleteBook = async (bookId: number) => {
   if (!confirm('确定要删除这本书吗？')) return
   try {
-    await window.electronAPI.db.deleteBook(bookId)
+    await window.electronAPI.library.deleteBook(bookId)
     const dataStore = useDataStore()
     dataStore.dataLoaded.value = false
     await dataStore.loadAllData()

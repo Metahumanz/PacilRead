@@ -6,7 +6,7 @@ import type { FlipMode } from '../types/pagination'
 /*
  * 设置系统架构说明（与 Android 端兼容性）
  *
- * PacilRead 桌面端使用 SQLite `settings` 表存储所有设置（键值对），与 Android 端
+ * PacilRead 桌面端使用 v8 JSON `settings.json` 存储所有设置（键值对），与 Android 端
  * SharedPreferences 的 `ANDROID_PRIVATE_SYNC_KEYS`（55 个键）不同。桌面端使用
  * 独立的 JSON 同步格式（`platform: 'desktop'`, `schemaVersion: 1`），存储在 WebDAV
  * 的 `<desktop-settings>/desktop-settings.json`。
@@ -23,7 +23,7 @@ import type { FlipMode } from '../types/pagination'
  *
  * Float 精度说明：Android 端 `FLOAT_SYNC_KEYS` 包含 4 个键需要强制以 Float 类型写入：
  *   font_size_sp, line_spacing_extra, tts_rate, letter_spacing
- * 桌面端 SQLite settings 表使用 TEXT 类型存储所有值，反序列化时由各组件自行转换类型，
+ * 桌面端 JSON settings map 使用字符串存储所有值，反序列化时由各组件自行转换类型，
  * 因此不受此限制。
  */
 

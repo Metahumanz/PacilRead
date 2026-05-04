@@ -9,36 +9,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isMigrated: () => ipcRenderer.invoke('data:isMigrated'),
     writeAll: (entities: Record<string, unknown>) => ipcRenderer.invoke('data:writeAll', entities),
   },
-  db: {
-    query: (sql: string, params?: any[]) => ipcRenderer.invoke('db:query', sql, params),
-    importBook: (filePath: string) => ipcRenderer.invoke('db:importBook', filePath),
-    export: () => ipcRenderer.invoke('db:export'),
-    exportLite: () => ipcRenderer.invoke('db:exportLite'),
-    importFromFile: (filePath: string) => ipcRenderer.invoke('db:importFromFile', filePath),
-    importLiteFromFile: (filePath: string) => ipcRenderer.invoke('db:importLiteFromFile', filePath),
-    getSize: () => ipcRenderer.invoke('db:getSize'),
-    getBookChapters: (bookId: number) => ipcRenderer.invoke('db:getBookChapters', bookId),
-    optimizeStorage: () => ipcRenderer.invoke('db:optimizeStorage'),
-    deleteBook: (bookId: number) => ipcRenderer.invoke('db:deleteBook', bookId),
-    listChapterTextFiles: () => ipcRenderer.invoke('db:listChapterTextFiles'),
-    getRequiredChapterTextFiles: () => ipcRenderer.invoke('db:getRequiredChapterTextFiles'),
-    getMissingChapterTextFiles: () => ipcRenderer.invoke('db:getMissingChapterTextFiles'),
-    getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('db:getBookIdsWithFileGzipChapters'),
-    createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('db:createBookChapterTextZip', bookId),
-    extractBookChapterTextZip: (zipPath: string) => ipcRenderer.invoke('db:extractBookChapterTextZip', zipPath),
-    checkHealth: () => ipcRenderer.invoke('db:checkHealth'),
-    hasPendingMaintenance: () => ipcRenderer.invoke('db:hasPendingMaintenance'),
-    getMaintenanceStatus: () => ipcRenderer.invoke('db:getMaintenanceStatus'),
-    onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => {
-      const listener = (_: any, data: any) => cb(data)
-      ipcRenderer.on('db:optimize-progress', listener)
-      return () => ipcRenderer.removeListener('db:optimize-progress', listener)
-    },
-    onHealthWarning: (cb: (message: string) => void) => {
-      const listener = (_: any, message: string) => cb(message)
-      ipcRenderer.on('db:health-warning', listener)
-      return () => ipcRenderer.removeListener('db:health-warning', listener)
-    }
+  library: {
+    importBook: (filePath: string) => ipcRenderer.invoke('library:importBook', filePath),
+    deleteBook: (bookId: number) => ipcRenderer.invoke('library:deleteBook', bookId),
+    getSize: () => ipcRenderer.invoke('library:getSize'),
+    getBookChapters: (bookId: number) => ipcRenderer.invoke('library:getBookChapters', bookId),
+    getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('library:getBookIdsWithFileGzipChapters'),
+    createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('library:createBookChapterTextZip', bookId),
+    extractBookChapterTextZip: (zipPath: string) => ipcRenderer.invoke('library:extractBookChapterTextZip', zipPath),
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),

@@ -26,7 +26,7 @@ export interface Chapter {
   title: string
   orderIndex: number
   bodyTextPath: string | null
-  bodyTextStorage: 'file_gzip' | 'db'
+  bodyTextStorage: 'file_gzip' | 'inline'
   bodyTextSize: number
 }
 

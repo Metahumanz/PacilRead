@@ -15,27 +15,10 @@ export interface ElectronAPI {
     isMigrated: () => Promise<boolean>
     writeAll: (entities: Record<string, unknown>) => Promise<void>
   }
-  db: {
-    query: (sql: string, params?: any[]) => Promise<any>
+  library: {
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
-    export: () => Promise<string>
-    exportLite: () => Promise<string>
-    importFromFile: (filePath: string) => Promise<void>
-    importLiteFromFile: (filePath: string) => Promise<{
-      books: number
-      settings: number
-      replacementRules: number
-      readingStats: number
-      bookmarks: number
-      importedBookCount: number
-      preservedChapters: number
-      currentChapters: number
-      detachedChapters: number
-      remappedChapters: number
-      remappedBookmarks: number
-      unmatchedChapters: number
-    }>
-    getSize: () => Promise<{ sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }>
+    deleteBook: (bookId: number) => Promise<{ success: boolean }>
+    getSize: () => Promise<{ sizeBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }>
     getBookChapters: (bookId: number) => Promise<Array<{
       id: number
       title: string
@@ -46,32 +29,9 @@ export interface ElectronAPI {
       body_text_missing: number
       body_text_fallback: string | null
     }>>
-    optimizeStorage: () => Promise<{
-      optimizedChapters: number
-      repairedChapters: number
-      clearedBodyHtml: number
-      wasVacuumed: boolean
-      before: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }
-      after: { sizeBytes: number; databaseBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }
-    }>
-    deleteBook: (bookId: number) => Promise<{ success: boolean }>
-    listChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string; sizeBytes: number }>>
-    getRequiredChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
-    getMissingChapterTextFiles: () => Promise<Array<{ relativePath: string; localPath: string }>>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
     extractBookChapterTextZip: (zipPath: string) => Promise<number>
-    checkHealth: () => Promise<{ healthy: boolean; reason: string | null }>
-    hasPendingMaintenance: () => Promise<boolean>
-    getMaintenanceStatus: () => Promise<{
-      hasPendingWork: boolean
-      nonEmptyBodyHtml: number
-      needsExport: number
-      missingChapterFiles: number
-      freelistCount: number
-    }>
-    onOptimizeProgress: (cb: (data: { step: number; total: number; message: string }) => void) => () => void
-    onHealthWarning: (cb: (message: string) => void) => () => void
   }
   dialog: {
     openFile: () => Promise<string | null>

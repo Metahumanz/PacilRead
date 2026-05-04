@@ -41,14 +41,14 @@ export const changelogItems: ChangelogItem[] = [
     version: '0.5.2',
     date: '2026-05-01',
     changes: [
-      '数据层架构升级：SQLite→v8 JSON 格式迁移，reader.db 保留为写入中间层，运行时统一走 DataStore 读 JSON 文件',
+      '数据层架构升级：旧版存储→v8 JSON 格式迁移，运行时统一走 DataStore 读 JSON 文件',
       '新增 useDataStore 全局单例数据层：集中管理 books/chapters/rules/themes/bookmarks/readingStats/settings 七类实体，均以响应式 ref 驱动 UI',
       '新增 useV8Sync 基于 SHA256 manifest 比对的增量同步模块：全量备份/恢复、增量差异上传/智能合并，支持 v7 旧格式回退读取与远端旧文件清理',
-      'Electron 层新增 6 个 data: IPC 通道（readEntity/writeEntity/hashFile/getDataDir/isMigrated/writeAll），迁移后自动清理 SQLite 内联正文并 VACUUM',
-      '全量/增量同步改用 JSON 实体文件替代 reader.db 二进制上传：章节正文以 ZIP 打包，封面/书籍文件按文件名增量检查',
+      'Electron 层新增 6 个 data: IPC 通道（readEntity/writeEntity/hashFile/getDataDir/isMigrated/writeAll），迁移后自动清理旧版内联正文并回收空间',
+      '全量/增量同步改用 JSON 实体文件替代旧版二进制上传：章节正文以 ZIP 打包，封面/书籍文件按文件名增量检查',
       '修复 Vue reactive proxy 通过 contextBridge IPC 时 structured clone 序列化失败，导致所有网络功能（WebDAV 探测/备份/恢复）不可用',
-      '修复 SQLite→JSON 迁移后 body_text/body_html 未清理，导致 reader.db 与 JSON 数据双重占用存储空间',
-      '存储统计新增 JSON 数据目录大小，设置页显示 reader.db / 正文 / JSON / 合计四项分解',
+      '修复旧版存储→JSON 迁移后 body_text/body_html 未清理，导致旧数据与 JSON 数据双重占用存储空间',
+      '存储统计新增 JSON 数据目录大小，设置页显示 正文 / JSON / 合计 三项分解',
       '5 个 composable（useBookmarks/useReadingStats/useRules/useSettings/useTheme）全面迁移至 DataStore，移除直连 SQL 查询',
       '4 个 Vue 组件（BookshelfView/SettingsView/OptionsPanel/RulesPanel）全面迁移至 DataStore 与 v8 同步流程'
     ]
@@ -57,28 +57,28 @@ export const changelogItems: ChangelogItem[] = [
     version: '0.5.1',
     date: '2026-05-01',
     changes: [
-      '数据库升级至 v7：全新 chapters 结构支持 body_text 回退链（外置 .txt.gz→库内 body_text→旧版 body→body_html 提取），实现与 Android 移动端数据库双向兼容',
-      '章节正文外置存储：body_text 可选导出为 GZIP 压缩文件，reader.db 保持轻量，支持一键优化存储与缺失文件修复',
+      '旧版存储升级至 v7：全新 chapters 结构支持 body_text 回退链（外置 .txt.gz→内联 body_text→旧版 body→body_html 提取），实现与 Android 移动端旧数据双向兼容',
+      '章节正文外置存储：body_text 可选导出为 GZIP 压缩文件，支持一键优化存储与缺失文件修复',
       '同步格式升级：全量/增量同步支持 ZIP 打包章节正文批量上传，替代逐个文件传输，大幅提升大批量章节同步速度',
       '远端孤立文件清理：同步完成后自动检测并删除远端无对应本地记录的 chapter_text ZIP 与正文文件',
-      '新增数据库健康检查与维护状态 IPC：启动时检测核心表完整性，设置页展示待处理维护项数量与 freelist 状态',
+      '新增旧版存储健康检查与维护状态 IPC：启动时检测核心数据完整性，设置页展示待处理维护项数量与空间回收状态',
       '桌面端设置架构兼容性说明文档更新，导出 extractHrefValues 辅助函数',
-      'WebDAV 同步格式 v8 迁移指南：桌面客户端从 reader.db 二进制同步过渡到 JSON 实体文件 + ZIP 章节正文',
+      'WebDAV 同步格式 v8 迁移指南：桌面客户端从旧版二进制同步过渡到 JSON 实体文件 + ZIP 章节正文',
       '修复 reader 返回书架失败：切换至 DataStore 统一数据层后视图跳转状态丢失',
       '全局 Escape 键增加 reader 视图兜底返回，自动续读迁移至 DataStore.getBooksSorted',
-      '数据库 VACUUM 阈值设为 256 空闲页，优化存储后自动回收磁盘空间'
+      '旧版存储回收阈值设为 256 空闲页，优化存储后自动回收磁盘空间'
     ]
   },
   {
     version: '0.5.0',
     date: '2026-04-30',
     changes: [
-      '数据库升级至 reader.db v6：新增 body_text 作为章节正文真源，body 保留为桌面渲染影子列，body_html 清空后仅作兼容占位，实现与 Android 移动端数据库双向兼容',
-      '旧数据库自动迁移：桌面旧库从 body 回填 body_text，移动端 v6 库补齐 body 列，旧移动库从 body_html 提取文本后清空，迁移后执行 VACUUM 回收空间',
+      '旧版存储升级至 v6：新增 body_text 作为章节正文真源，body 保留为桌面渲染影子列，body_html 清空后仅作兼容占位，实现与 Android 移动端旧数据双向兼容',
+      '旧版数据自动迁移：桌面旧数据从 body 回填 body_text，移动端 v6 数据补齐 body 列，旧移动数据从 body_html 提取文本后清空，迁移后回收空间',
       'EPUB 导入自动提取封面：支持从元数据声明、guide、manifest 多级降级查找封面图片，自动保存至本地 covers 目录',
       '封面路径跨平台兼容：渲染层支持 file:///、裸文件名、Android 私有路径三种格式，自动解析到本地 covers/ 目录',
       '阅读进度、全文搜索、书签摘要统一使用 body_text 作为字符偏移依据，确保跨端同步数据一致',
-      '偏好设置新增数据库文件大小显示，方便评估备份与存储占用'
+      '偏好设置新增本地数据大小显示，方便评估备份与存储占用'
     ]
   },
   {
@@ -87,7 +87,7 @@ export const changelogItems: ChangelogItem[] = [
     changes: [
       '同步 Android 近期核心能力到 Win11：新增书签数据层、阅读器书签入口、首页书签管理与书签跳转',
       '首页导航升级为书架、统计、书签、设置四入口，支持窄窗口底栏、宽窗口侧栏、自动切换与手动固定模式',
-      'WebDAV 同步边界重构：桌面 UI 偏好与数据库镜像进入 Win11 私有子目录，公有同步只保留跨端内容和阅读数据',
+      'WebDAV 同步边界重构：桌面 UI 偏好与本地数据镜像进入 Win11 私有子目录，公有同步只保留跨端内容和阅读数据',
       '明确公有/私有同步边界：Android 与 Win11 共享阅读数据，平台 UI 设置按私有目录隔离',
       '书架显示当前章节信息，添加书籍入口支持设置开关，封面显示收敛到统一组件',
       '阅读器补齐自动夜间、双页兼容 key 与分页尺寸等待逻辑，窗口切换和书签跳转时分页更稳定',
@@ -101,8 +101,8 @@ export const changelogItems: ChangelogItem[] = [
       'Windows 非阅读界面完成四套应用外观改造：曜白、云白、夜幕、极夜，并支持跟随系统浅深色自动切换',
       '新增毛玻璃不透明度调节，侧栏、卡片、输入区与弹窗在保留 Mica 透视感的同时更易读',
       '书架、设置、阅读统计、排版与预览页统一迁移到新的应用主题系统，阅读正文界面保持原有渲染逻辑',
-      '修复 WebDAV 增量恢复误用轻量数据库覆盖本地正文的问题，恢复时会保留并重挂本地缓存章节',
-      '阅读页新增空章节提示与阅读进度越界保护，数据库异常时不再只显示空白页',
+      '修复 WebDAV 增量恢复误用轻量数据覆盖本地正文的问题，恢复时会保留并重挂本地缓存章节',
+      '阅读页新增空章节提示与阅读进度越界保护，旧数据异常时不再只显示空白页',
       'MiMo 听书升级至 v2.5，支持冰糖、茉莉、苏打、白桦 4 种中文内置音色',
       '语音朗读设置新增测试朗读，可按当前引擎、语速与 MiMo 音色快速确认效果'
     ]
@@ -144,7 +144,7 @@ export const changelogItems: ChangelogItem[] = [
       'WebDAV 全量同步：支持书架、书籍、设置、主题及背景的一键备份与恢复',
       '同步颗粒化控制：新增胶囊开关，支持自定义同步内容，保护多端偏好一致性',
       '导入增强：开启 PDF 拖放导入支持，实现基于路径的自动去重逻辑',
-      '底层架构升级：支持数据库二进制导出/导入，提升同步效率'
+      '底层架构升级：支持本地数据导出/导入，提升同步效率'
     ]
   },
   {
@@ -203,7 +203,7 @@ export const changelogItems: ChangelogItem[] = [
     date: '2026-03-29',
     changes: [
       '重构阅读器核心架构，将 TTS、分页、主题、设置拆分为独立 Composable 模块',
-      '补齐主进程 SQLite、窗口持久化与自动更新能力，为后续功能模块化打基础'
+      '补齐主进程本地存储、窗口持久化与自动更新能力，为后续功能模块化打基础'
     ]
   },
   {
@@ -593,7 +593,7 @@ export const changelogItems: ChangelogItem[] = [
     changes: [
       '从 Tauri + React 迁移至 Electron + Vue 3',
       '实现 TXT/EPUB 文件解析功能',
-      '改用 sql.js 并修复 WASM 资源路径、打包配置与相关依赖问题',
+      '修复旧版存储引擎资源路径、打包配置与相关依赖问题',
       '搭建 Electron 构建与 GitHub Actions 发布基础流程'
     ]
   }

@@ -63,7 +63,6 @@ const DESKTOP_SETTINGS_FILE_NAME = 'desktop-settings.json'
 const READING_STATS_REMOTE_DIR = 'readingStats'
 const PACILREAD_ROOT_DIR = 'PacilRead'
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
-export const DESKTOP_DATABASE_DIR = 'database'
 const REMOTE_BG_PLACEHOLDER_PREFIX = '__PACILREAD_REMOTE_BG__:'
 const READING_STATS_IDLE_MS = 60_000
 
@@ -333,7 +332,6 @@ async function ensurePacilReadStructure(options: {
   includeReadingStats?: boolean
   includeDesktopSettings?: boolean
   includeDesktopSettingsBackgrounds?: boolean
-  includeDesktopDatabase?: boolean
   includeBooks?: boolean
   includeCovers?: boolean
   includeLegacyBackgrounds?: boolean
@@ -357,11 +355,6 @@ async function ensurePacilReadStructure(options: {
   if (options.includeDesktopSettingsBackgrounds) {
     await ensureWebDavCollection(`${desktopSettingsBaseUrl}backgrounds/`, auth)
   }
-  if (options.includeDesktopDatabase) {
-    await ensureWebDavCollection(desktopSettingsBaseUrl, auth)
-    await ensureWebDavCollection(`${desktopSettingsBaseUrl}${DESKTOP_DATABASE_DIR}/`, auth)
-  }
-
   return {
     auth,
     pacilReadBaseUrl: baseUrl,
@@ -430,20 +423,26 @@ async function overwriteReadingStatsRow(row: ReadingStatsRowPayload): Promise<vo
 }
 
 export async function getAllLocalReadingStatsRows(): Promise<ReadingStatsRowPayload[]> {
-  const rows = await window.electronAPI.db.query(
-    `SELECT
-      date as date,
-      source_device_id as sourceDeviceId,
-      book_identity as bookIdentity,
-      book_title as bookTitle,
-      COALESCE(book_author, '') as bookAuthor,
-      duration_seconds as durationSeconds,
-      char_count as charCount,
-      updated_at as updatedAt
-    FROM reading_stats
-    ORDER BY updated_at ASC, source_device_id ASC, date ASC, book_identity ASC`
-  )
-  return (rows as ReadingStatsRowPayload[]) || []
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  return store.getReadingStatsRows()
+    .map(row => ({
+      date: row.date,
+      sourceDeviceId: row.sourceDeviceId,
+      bookIdentity: row.bookIdentity,
+      bookTitle: row.bookTitle,
+      bookAuthor: row.bookAuthor || '',
+      durationSeconds: row.durationSeconds,
+      charCount: row.charCount,
+      updatedAt: row.updatedAt,
+    }))
+    .sort((a, b) => (
+      a.updatedAt - b.updatedAt ||
+      a.sourceDeviceId.localeCompare(b.sourceDeviceId) ||
+      a.date.localeCompare(b.date) ||
+      a.bookIdentity.localeCompare(b.bookIdentity)
+    ))
 }
 
 export async function restoreReadingStatsRows(rows: ReadingStatsRowPayload[]): Promise<void> {
