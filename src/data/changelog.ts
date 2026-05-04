@@ -7,6 +7,26 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.6.4',
+    date: '2026-05-04',
+    changes: [
+      '完全移除 SQLite 依赖：删除 sql.js 包、20+ 个 SQL 辅助函数、18 个 db:* IPC 通道、数据库优化迁移 UI 及 v7 格式探测/回退逻辑',
+      '新增 library:* IPC 通道（importBook/deleteBook/getBookChapters/getSize 等 7 个），主进程直接读写 JSON 实体文件替代 SQL 查询',
+      '书籍导入从 SQLite 事务写入改为 initializeJsonStore + importBookJson 直接落盘 JSON，导入失败自动清理已写入的章节正文',
+      '章节正文 ZIP 命名从 chapters_${bookId} 统一为 book_${bookId}，远端孤儿检测正则兼容新旧两种命名',
+      'bodyTextStorage 枚举从 file_gzip|db 改为 file_gzip|inline，消除数据库概念残留',
+      '同步模块新增规则智能合并系统（normalizeRuleForSync / buildRuleSyncKey / mergeRules / mapRemoteRuleBookIdToLocal），增量恢复时支持跨端 bookId 映射与去重',
+      '全量/增量恢复移除 v7 SQLite（reader.db/reader_lite.db）格式回退，仅保留 v8 JSON 路径',
+      '阅读统计 getAllLocalReadingStatsRows 从 SQL 直连改为 DataStore.getReadingStatsRows()，ensurePacilReadStructure 移除 includeDesktopDatabase 选项',
+      '设置页移除数据库优化迁移弹窗（进度条/重试/VACUUM），refreshDbSize 改为 refreshStorageSize，存储展示简化为 JSON/正文/合计',
+      '远端目录探测新增 database/ 和 sync/ 目录创建，规则 CRUD 切换至 DataStore 方法，封面/书籍远端孤儿检测改用 books 实体字段',
+      'SettingsAbout 移除"优化数据库存储"按钮，存储信息标签从 reader.db/正文/JSON/合计 改为 JSON/正文/合计',
+      '仿真翻页模式几何优化：折叠宽度改为随翻页进度动态收缩，折叠边缘参与 incoming clip 计算，折叠层使用阅读器背景色和背景图 CSS 变量渲染',
+      'ReaderView 新增 readerPaperColor/readerPaperImage 响应式计算，翻页舞台折叠表面与纸质阅读背景视觉一致',
+      '更新日志历史条目措辞去 SQLite 化（SQLite→旧版存储，reader.db→本地数据，VACUUM→空间回收）',
+    ]
+  },
+  {
     version: '0.6.3',
     date: '2026-05-03',
     changes: [
