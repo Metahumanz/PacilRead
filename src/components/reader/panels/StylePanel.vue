@@ -15,15 +15,15 @@ const {
 } = settings
 
 const theme = useTheme({
-  onStyleChanged: () => {
-    saveAllStyling()
+  onStyleChanged: async () => {
+    await saveAllStyling()
     recalc()
   }
 })
 const { newThemeName, applyThemeConfig, applyTheme, saveTheme, deleteTheme } = theme
 
-const updateStyling = () => {
-  saveAllStyling()
+const updateStyling = async () => {
+  await saveAllStyling()
   recalc()
 }
 </script>

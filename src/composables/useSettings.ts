@@ -382,9 +382,9 @@ export function useSettings() {
     } catch (e) { console.error(e) }
   }
 
-  const saveAllStyling = () => {
+  const saveAllStyling = async () => {
     const { setSettings } = useDataStore()
-    setSettings({
+    await setSettings({
       reader_fontSize: String(fontSize.value),
       reader_lineHeight: String(lineHeight.value),
       reader_letterSpacing: String(letterSpacing.value),
@@ -416,9 +416,9 @@ export function useSettings() {
     })
   }
 
-  const saveTtsSettings = () => {
+  const saveTtsSettings = async () => {
     const { setSettings } = useDataStore()
-    setSettings({
+    await setSettings({
       reader_autoPageSpeed: String(autoPageSpeed.value),
       reader_ttsEngine: ttsEngine.value,
       reader_ttsVoice: ttsVoice.value,

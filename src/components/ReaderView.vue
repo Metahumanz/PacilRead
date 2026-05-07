@@ -324,7 +324,7 @@ const goToBookmarkTarget = (target: BookmarkTarget) => {
 
 // ---- Theme (composable) ----
 const theme = useTheme({
-  onStyleChanged: () => { saveAllStyling(); recalc() },
+  onStyleChanged: async () => { await saveAllStyling(); recalc() },
 })
 const { readerBgStyle } = theme
 
