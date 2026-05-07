@@ -65,6 +65,7 @@ export function usePagination(opts: {
   const currentPage = ref(0)
   const totalPages = ref(1)
   const containerWidth = ref(0)
+  const containerHeight = ref(0)
   const pendingWebdavPos = ref(-1)
   const prevPageCount = ref(1)
   const suppressAnim = ref(false)
@@ -84,7 +85,7 @@ export function usePagination(opts: {
   }
 
   const stageHeight = () => {
-    const height = opts.containerRef.value?.clientHeight || window.innerHeight
+    const height = opts.containerRef.value?.clientHeight || containerHeight.value || window.innerHeight
     return Math.max(height, 1)
   }
 
@@ -114,16 +115,17 @@ export function usePagination(opts: {
     ms: flipDurationMs(opts.flipMode.value),
   }))
 
-  const waitForStableLayout = (attempt = 0, lastWidth = -1) => {
+  const waitForStableLayout = (attempt = 0, lastWidth = -1, lastHeight = -1) => {
     nextTick(() => {
       requestAnimationFrame(() => {
         const width = opts.containerRef.value?.clientWidth || 0
-        if (width <= 0 && attempt < 10) {
-          waitForStableLayout(attempt + 1, width)
+        const height = opts.containerRef.value?.clientHeight || 0
+        if ((width <= 0 || height <= 0) && attempt < 10) {
+          waitForStableLayout(attempt + 1, width, height)
           return
         }
-        if (attempt < 6 && width !== lastWidth) {
-          waitForStableLayout(attempt + 1, width)
+        if (attempt < 6 && (width !== lastWidth || height !== lastHeight)) {
+          waitForStableLayout(attempt + 1, width, height)
           return
         }
         calculatePages()
@@ -141,7 +143,9 @@ export function usePagination(opts: {
 
     if (opts.precomputedPages?.value && opts.precomputedPages.value.length > 0) {
       const cw = opts.containerRef.value.clientWidth
+      const ch = opts.containerRef.value.clientHeight
       if (cw > 0) containerWidth.value = cw
+      if (ch > 0) containerHeight.value = ch
       totalPages.value = opts.precomputedPages.value.length
       applyPendingWebdavPosition()
       if (currentPage.value >= totalPages.value) currentPage.value = totalPages.value - 1
@@ -151,8 +155,10 @@ export function usePagination(opts: {
 
     if (!opts.contentRef.value) return
     const cw = opts.containerRef.value.clientWidth
+    const ch = opts.containerRef.value.clientHeight
     if (cw <= 0) return
     containerWidth.value = cw
+    if (ch > 0) containerHeight.value = ch
     const widthPerPage = opts.pageMode.value === 'double' ? cw / 2 : cw
     totalPages.value = Math.max(1, Math.ceil(opts.contentRef.value.scrollWidth / widthPerPage))
     applyPendingWebdavPosition()
@@ -660,6 +666,7 @@ export function usePagination(opts: {
     currentPage,
     totalPages,
     containerWidth,
+    containerHeight,
     pendingWebdavPos,
     prevPageCount,
     suppressAnim,

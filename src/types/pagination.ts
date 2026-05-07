@@ -29,12 +29,18 @@ export interface PaginationSnapshot {
   containerWidth: number
   containerHeight: number
   pageWidth: number
+  effectiveMarginX: number
+  contentColumnWidth: number
+  lineHeightPx: number
+  pageGridHeight: number
+  gridPaddingY: number
   fontSize: number
   lineHeight: number
   letterSpacing: number
   fontWeight: number
   fontFamily: string
   textAlign: string
+  chapterTitleDisplay: string
   marginX: number
   marginY: number
   pageMode: string

@@ -12,6 +12,7 @@ import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 import { useDataStore } from '../composables/useDataStore'
+import { computeReaderPageMetrics } from '../utils/readerLayout'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -182,7 +183,7 @@ const saveProgress = async () => {
 // ---- Reader Paginator (async prewarm + cache) ----
 const paginator = useReaderPaginator({
   containerRef, fontSize, lineHeight, letterSpacing, fontWeight, fontFamily,
-  textAlign, marginX, marginY, pageMode, pIndent, pSpacing,
+  textAlign, chapterTitleDisplay, marginX, marginY, pageMode, pIndent, pSpacing,
 })
 
 const pagesResult = computed(() => {
@@ -216,7 +217,7 @@ const pagination = usePagination({
   },
 })
 const {
-  currentPage, totalPages, containerWidth, pendingWebdavPos,
+  currentPage, totalPages, containerWidth, containerHeight, pendingWebdavPos,
   suppressAnim, incomingTarget, animationState, pagingVisuals,
   flipDurationMap, pageOffset, prevPageOffset, incomingPageOffset, progressPercent,
   recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
@@ -328,22 +329,6 @@ const theme = useTheme({
 })
 const { readerBgStyle } = theme
 
-const textStyle = computed(() => ({
-  fontFamily: fontFamily.value, fontSize: fontSize.value + 'px',
-  lineHeight: String(lineHeight.value), letterSpacing: letterSpacing.value + 'em',
-  fontWeight: String(fontWeight.value), color: effectiveFontColor.value,
-  textAlign: textAlign.value as any,
-}))
-
-const pageContentStyle = (offset: string): CSSProperties => ({
-  ...textStyle.value,
-  transform: `translateX(${offset})`,
-  columnWidth: pageMode.value === 'double' ? `calc(50vw - ${marginX.value * 2}px)` : `calc(100vw - ${marginX.value * 2}px)`,
-  columnGap: `${marginX.value * 2}px`,
-  columnFill: 'auto',
-  alignContent: 'start',
-})
-
 const isAutoNightActive = computed(() => readerAutoNightEnabled.value && resolvedBucket.value === 'dark')
 const shouldOverrideAutoNight = computed(() => (
   isAutoNightActive.value && readerAutoNightCustomPolicy.value === 'override'
@@ -354,6 +339,48 @@ const effectiveReaderBgStyle = computed(() => (
     ? { backgroundColor: '#0f172a' }
     : readerBgStyle.value
 ))
+
+const readerPageMetrics = computed(() => computeReaderPageMetrics({
+  containerWidth: containerWidth.value || containerRef.value?.clientWidth || window.innerWidth,
+  containerHeight: containerHeight.value || containerRef.value?.clientHeight || window.innerHeight,
+  pageMode: pageMode.value,
+  marginX: marginX.value,
+  marginY: marginY.value,
+  fontSize: fontSize.value,
+  lineHeight: lineHeight.value,
+}))
+
+const pageContainerStyle = computed<CSSProperties>(() => ({
+  padding: `${readerPageMetrics.value.gridPaddingY}px ${readerPageMetrics.value.effectiveMarginX}px`,
+  '--reader-line-px': `${readerPageMetrics.value.lineHeightPx}px`,
+  '--reader-page-grid-height': `${readerPageMetrics.value.pageGridHeight}px`,
+  '--p-indent': `${pIndent.value}em`,
+  '--p-spacing': `${pSpacing.value}em`,
+} as CSSProperties))
+
+const textStyle = computed(() => ({
+  fontFamily: fontFamily.value, fontSize: fontSize.value + 'px',
+  lineHeight: `${readerPageMetrics.value.lineHeightPx}px`, letterSpacing: letterSpacing.value + 'em',
+  fontWeight: String(fontWeight.value), color: effectiveFontColor.value,
+  textAlign: textAlign.value as any,
+}))
+
+const chapterTitleStyle = computed<CSSProperties>(() => ({
+  fontSize: `${fontSize.value * 1.4}px`,
+  lineHeight: '1.35',
+  color: effectiveFontColor.value,
+  textAlign: chapterTitleDisplay.value as any,
+}))
+
+const pageContentStyle = (offset: string): CSSProperties => ({
+  ...textStyle.value,
+  transform: `translateX(${offset})`,
+  height: `${readerPageMetrics.value.pageGridHeight}px`,
+  columnWidth: `${readerPageMetrics.value.contentColumnWidth}px`,
+  columnGap: `${readerPageMetrics.value.effectiveMarginX * 2}px`,
+  columnFill: 'auto',
+  alignContent: 'start',
+})
 
 // HUD logic handled by useHUD
 
@@ -537,7 +564,10 @@ const handleVisibilityChange = () => {
 }
 
 watch(currentChapterIndex, () => recalc())
-watch([fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight], () => recalc())
+watch([
+  fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight,
+  textAlign, pageMode, doublePageStep, pIndent, pSpacing, chapterTitleDisplay,
+], () => recalc())
 watch(currentPage, () => saveProgress())
 
 // ---- Lifecycle ----
@@ -644,18 +674,18 @@ onUnmounted(async () => {
         }"
       >
         <div class="page-layer page-current" :style="pagingVisuals.current">
-          <div ref="containerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
+          <div ref="containerRef" class="pg-ctr" :style="pageContainerStyle">
             <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="pageContentStyle(pageOffset)">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ currentChapterData?.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
             </div>
           </div>
         </div>
 
         <div v-if="incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
-          <div class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
+          <div class="pg-ctr" :style="pageContainerStyle">
             <div class="pg-ct" :style="pageContentStyle(incomingPageOffset)">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ incomingChapterData?.title }}</h2>
+              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ incomingChapterData?.title }}</h2>
               <div v-html="incomingBody" class="ch-body"></div>
             </div>
           </div>
@@ -672,9 +702,9 @@ onUnmounted(async () => {
       </div>
 
       <div class="measure-layer" aria-hidden="true">
-        <div ref="prevContainerRef" class="pg-ctr" :style="{ padding: `${marginY}px ${marginX}px` }">
+        <div ref="prevContainerRef" class="pg-ctr" :style="pageContainerStyle">
           <div ref="prevContentRef" class="pg-ct" :style="pageContentStyle(prevPageOffset)" v-if="prevChapterData">
-            <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="{ fontSize: (fontSize*1.4)+'px', color: effectiveFontColor, textAlign: (chapterTitleDisplay as any) }">{{ prevChapterData.title }}</h2>
+            <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ prevChapterData.title }}</h2>
             <div v-html="prevBody" class="ch-body"></div>
           </div>
         </div>
@@ -800,14 +830,15 @@ onUnmounted(async () => {
 .page-fold-shadow { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(0,0,0,0.14), transparent); }
 .page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.18), transparent); mix-blend-mode:screen; }
 .measure-layer { position:fixed; left:-9999px; top:0; width:100vw; height:100vh; overflow:hidden; pointer-events:none; opacity:0; }
-.pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; }
-.pg-ct { height:100%; column-fill:auto; align-content:start; }
+.pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; --reader-line-px:1.8em; --reader-page-grid-height:100%; }
+.pg-ct { height:var(--reader-page-grid-height); column-fill:auto; align-content:start; line-height:var(--reader-line-px); }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .pg-cache-fade { animation: paginator-fade-in 0.1s ease-out; }
 @keyframes paginator-fade-in { from { opacity: 0.85; } to { opacity: 1; } }
-.ch-title { font-weight:700; margin-bottom:1.5em; opacity:0.85; }
-.ch-body { height:100%; }
-.ch-body :deep(p) { text-indent: var(--p-indent); margin-bottom: var(--p-spacing); }
+.ch-title { font-weight:700; margin:0 0 1.5em; opacity:0.85; }
+.ch-body { min-height:0; }
+.ch-body :deep(p) { text-indent: var(--p-indent); margin:0 0 var(--p-spacing); }
+.ch-body :deep(p:last-child) { margin-bottom:0; }
 /* kbd style */
 .kbd { padding: 0.25rem 0.5rem; background-color: rgba(255, 255, 255, 0.1); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
