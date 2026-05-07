@@ -587,6 +587,11 @@ const fullBackup = async () => {
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
 
+    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
+      webdavSyncStatus.value = '上传桌面设置...'
+      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
+    }
+
     if (webdavSyncBookshelf.value) {
       // v8: Upload JSON data files.
       webdavSyncStatus.value = '上传 v8 JSON 数据...'
@@ -612,11 +617,6 @@ const fullBackup = async () => {
           '上传书籍'
         )
       }
-    }
-
-    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
-      webdavSyncStatus.value = '上传桌面设置...'
-      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
     }
 
     if (webdavSyncReadingStats.value) {
@@ -748,6 +748,11 @@ const incrementalBackup = async () => {
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
 
+    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
+      webdavSyncStatus.value = '上传桌面设置...'
+      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
+    }
+
     if (webdavSyncBookshelf.value) {
       // v8: Use JSON-based incremental sync with manifest comparison
       webdavSyncStatus.value = 'v8 增量备份（JSON 格式）...'
@@ -780,11 +785,6 @@ const incrementalBackup = async () => {
           )
         }
       }
-    }
-
-    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
-      webdavSyncStatus.value = '上传桌面设置...'
-      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
     }
 
     if (webdavSyncReadingStats.value) {

@@ -2,7 +2,6 @@ import { toRaw } from 'vue'
 import { useDataStore } from './useDataStore'
 import {
   extractDesktopSettingsValues,
-  filterV8SyncSettings,
 } from './useReadingStats'
 
 // ---- v8 manifest types ----
@@ -23,15 +22,19 @@ interface Manifest {
 }
 
 const MANIFEST_SCHEMA_VERSION = 1
-const ENTITY_TYPES = ['books', 'chapters', 'rules', 'themes', 'bookmarks', 'readingStats', 'settings'] as const
+const ENTITY_TYPES = ['books', 'chapters', 'rules', 'themes', 'bookmarks', 'readingStats'] as const
 type EntityType = typeof ENTITY_TYPES[number]
 type SyncEntityPayloads = Record<EntityType, any>
 
 function buildSyncEntities(dataStore = useDataStore()): SyncEntityPayloads {
   const entities = dataStore.getAllEntities()
   return {
-    ...entities,
-    settings: filterV8SyncSettings(entities.settings),
+    books: entities.books,
+    chapters: entities.chapters,
+    rules: entities.rules,
+    themes: entities.themes,
+    bookmarks: entities.bookmarks,
+    readingStats: entities.readingStats,
   }
 }
 
@@ -44,15 +47,9 @@ function normalizeSettingsMap(value: unknown): Record<string, string> {
   return settings
 }
 
-function splitRemoteSettings(value: unknown): {
-  sharedSettings: Record<string, string>
-  desktopSettings: Record<string, string>
-} {
+function extractLegacyDesktopSettings(value: unknown): Record<string, string> {
   const settings = normalizeSettingsMap(value)
-  return {
-    sharedSettings: filterV8SyncSettings(settings),
-    desktopSettings: extractDesktopSettingsValues(settings),
-  }
+  return extractDesktopSettingsValues(settings)
 }
 
 function entityJson(entities: SyncEntityPayloads, entity: EntityType): string {
@@ -142,6 +139,11 @@ async function webdavDelete(path: string): Promise<boolean> {
     })
     return !response.error
   } catch { return false }
+}
+
+async function cleanupLegacySettingsFiles(): Promise<void> {
+  await webdavDelete('database/settings.json')
+  await webdavDelete('sync/settings.json')
 }
 
 async function webdavFileExists(path: string): Promise<boolean> {
@@ -305,6 +307,9 @@ function findChangedFiles(local: Manifest, remote: Manifest): string[] {
     if (!remoteEntry || remoteEntry.sha256 !== localEntry.sha256) {
       changed.push(fileName)
     }
+  }
+  for (const fileName of Object.keys(remote.files)) {
+    if (!(fileName in local.files)) changed.push(fileName)
   }
   return changed
 }
@@ -503,6 +508,7 @@ export async function fullBackupV8(
       const jsonStr = entityJson(entities, entity)
       await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
     }
+    await cleanupLegacySettingsFiles()
 
     // Upload cover image files
     onProgress?.('正在上传封面文件...')
@@ -552,14 +558,7 @@ export async function fullRestoreV8(
       const raw = await getJsonAt(base, `database/${entity}.json`)
       if (raw !== null) {
         try {
-          const parsed = JSON.parse(raw)
-          if (entity === 'settings') {
-            const { sharedSettings, desktopSettings } = splitRemoteSettings(parsed)
-            entities[entity] = sharedSettings
-            Object.assign(desktopSettingsFallback, desktopSettings)
-          } else {
-            entities[entity] = parsed
-          }
+          entities[entity] = JSON.parse(raw)
         } catch {}
       }
     }
@@ -570,18 +569,21 @@ export async function fullRestoreV8(
         const raw = await getJsonAt(base, `sync/${entity}.json`)
         if (raw !== null) {
           try {
-            const parsed = JSON.parse(raw)
-            if (entity === 'settings') {
-              const { sharedSettings, desktopSettings } = splitRemoteSettings(parsed)
-              entities[entity] = sharedSettings
-              Object.assign(desktopSettingsFallback, desktopSettings)
-            } else {
-              entities[entity] = parsed
-            }
+            entities[entity] = JSON.parse(raw)
           } catch {}
         }
       }
     }
+
+    const collectLegacySettings = async (path: string) => {
+      const raw = await getJsonAt(base, path)
+      if (raw === null) return
+      try {
+        Object.assign(desktopSettingsFallback, extractLegacyDesktopSettings(JSON.parse(raw)))
+      } catch {}
+    }
+    await collectLegacySettings('database/settings.json')
+    await collectLegacySettings('sync/settings.json')
 
     onProgress?.('正在应用数据...')
     await dataStore.replaceAllEntities(entities as any)
@@ -628,6 +630,7 @@ export async function incrementalBackupV8(
       }
       await uploadManifest(localManifest, 'sync')
       uploadedFiles.push('manifest.json')
+      await cleanupLegacySettingsFiles()
     } else {
       // Find changed files
       const changed = findChangedFiles(localManifest, remoteManifest)
@@ -646,6 +649,7 @@ export async function incrementalBackupV8(
         await uploadManifest(localManifest, 'sync')
         uploadedFiles.push('manifest.json')
       }
+      await cleanupLegacySettingsFiles()
     }
 
     // Upload cover image files
@@ -691,25 +695,22 @@ export async function incrementalRestoreV8(
     // Download and merge each entity file
     for (const [fileName] of Object.entries(remoteManifest.files)) {
       const entity = fileName.replace('.json', '')
-      if (!ENTITY_TYPES.includes(entity as any)) continue
 
       onProgress?.(`正在下载 ${fileName}...`)
       const remoteData = await webdavGetJson<any[] | Record<string, string>>(`sync/${fileName}`)
       if (remoteData === null) continue
 
+      if (entity === 'settings') {
+        Object.assign(desktopSettingsFallback, extractLegacyDesktopSettings(remoteData))
+        continue
+      }
+
+      if (!ENTITY_TYPES.includes(entity as any)) continue
+
       // Get local data
       const localEntities = (dataStore as any)[entity].value as any[]
 
-      if (entity === 'settings') {
-        // Only platform-neutral settings belong to v8 sync. Desktop UI/reading settings
-        // are restored from desktop-settings.json, with old sync/settings.json as fallback.
-        const { sharedSettings, desktopSettings } = splitRemoteSettings(remoteData)
-        Object.assign(desktopSettingsFallback, desktopSettings)
-        if (Object.keys(sharedSettings).length > 0) {
-          await dataStore.setSettings(sharedSettings)
-          mergedFiles.push(fileName)
-        }
-      } else if (entity === 'rules' && Array.isArray(localEntities) && Array.isArray(remoteData)) {
+      if (entity === 'rules' && Array.isArray(localEntities) && Array.isArray(remoteData)) {
         const remoteBooks = await getRemoteBooksForRuleMerge()
         const { merged, changes } = mergeRules(
           localEntities,
