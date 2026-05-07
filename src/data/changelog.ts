@@ -7,6 +7,14 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.0.0',
+    date: '2026-05-07',
+    changes: [
+      '发布 PacilRead 1.0.0 正式版，版本号与构建锁文件同步升级',
+      '将应用内更新日志补齐至 1.0.0，作为当前稳定版发布记录',
+    ]
+  },
+  {
     version: '0.6.6',
     date: '2026-05-07',
     changes: [
