@@ -10,13 +10,13 @@ import {
   clearLocalReadingStats,
   extractHrefValues,
   fetchReadingStatsOverview,
-  getCurrentDesktopSettingsSnapshot,
+  getLocalOnlySettingsSnapshot,
   getAllLocalReadingStatsRows,
   deleteRemoteReadingStatsFiles,
   hasReadingStatsHistory,
   mergeRemoteReadingStats,
   restoreDesktopSettingsSnapshot,
-  restoreDesktopSettingsValues,
+  restoreLocalOnlySettings,
   restoreReadingStatsRows,
   sanitizeWebdavDirectorySegment,
   uploadDesktopSettingsSnapshot,
@@ -293,6 +293,19 @@ const assertUploadSucceeded = (result: { success: boolean; status?: number; erro
   }
 }
 
+const remoteFileExists = async (url: string, auth: string) => {
+  try {
+    const response = await window.electronAPI.webdav.request({
+      url,
+      method: 'HEAD',
+      headers: { Authorization: `Basic ${auth}` },
+    })
+    return response.status === 200
+  } catch (_) {
+    return false
+  }
+}
+
 const getFileNameFromPath = (value: string) => {
   const clean = String(value || '').split(/[?#]/)[0]
   return clean.split(/[\\/]/).pop() || ''
@@ -304,25 +317,35 @@ const legacyChapterTextZipFileName = (bookId: number) => `chapters_${bookId}.zip
 const uploadBookChapterTextZips = async (auth: string) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
   const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
-  if (bookIds.length === 0) return { uploaded: 0, total: 0 }
+  if (bookIds.length === 0) return { uploaded: 0, skipped: 0, total: 0 }
 
   const chapterBaseUrl = baseUrl + 'chapter_text/'
   await ensureWebdavCollection(chapterBaseUrl, auth)
 
   let uploaded = 0
+  let skipped = 0
   for (let i = 0; i < bookIds.length; i++) {
     const bookId = bookIds[i]
-    webdavSyncStatus.value = `上传章节正文 ZIP (${i + 1}/${bookIds.length})...`
+    const remotePath = chapterBaseUrl + chapterTextZipFileName(bookId)
+    const legacyRemotePath = chapterBaseUrl + legacyChapterTextZipFileName(bookId)
+
+    webdavSyncStatus.value = `检查章节正文 ZIP (${i + 1}/${bookIds.length})...`
+    const exists = await remoteFileExists(remotePath, auth) || await remoteFileExists(legacyRemotePath, auth)
+    if (exists) {
+      skipped += 1
+      continue
+    }
+
+    webdavSyncStatus.value = `上传缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
     const zipPath = await window.electronAPI.library.createBookChapterTextZip(bookId)
     if (!zipPath) continue
-    const remotePath = chapterBaseUrl + chapterTextZipFileName(bookId)
     assertUploadSucceeded(
       await window.electronAPI.webdav.uploadFile(zipPath, remotePath, auth),
       '上传章节正文 ZIP'
     )
     uploaded += 1
   }
-  return { uploaded, total: bookIds.length }
+  return { uploaded, skipped, total: bookIds.length }
 }
 
 const downloadChapterTextZips = async (auth: string) => {
@@ -333,6 +356,7 @@ const downloadChapterTextZips = async (auth: string) => {
   const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
   let downloaded = 0
   let missing = 0
+  let skipped = 0
 
   const tryDownloadZip = async (remotePath: string, tempZipPath: string): Promise<boolean> => {
     try {
@@ -347,7 +371,14 @@ const downloadChapterTextZips = async (auth: string) => {
 
   for (let i = 0; i < bookIds.length; i++) {
     const bookId = bookIds[i]
-    webdavSyncStatus.value = `下载章节正文 ZIP (${i + 1}/${bookIds.length})...`
+    webdavSyncStatus.value = `检查本地章节正文 (${i + 1}/${bookIds.length})...`
+    const hasLocalText = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
+    if (hasLocalText) {
+      skipped += 1
+      continue
+    }
+
+    webdavSyncStatus.value = `下载缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
 
     const tempZipPath = appDataPath + '/book_' + bookId + '.tmp.zip'
     const ok = await tryDownloadZip(
@@ -363,7 +394,7 @@ const downloadChapterTextZips = async (auth: string) => {
     missing += 1
   }
 
-  return { downloaded, missing, total: bookIds.length }
+  return { downloaded, missing, skipped, total: bookIds.length }
 }
 
 const cleanRemoteOrphans = async (auth: string) => {
@@ -603,43 +634,66 @@ const fullBackup = async () => {
   } finally { webdavSyncing.value = false }
 }
 
+const formatDesktopSettingsRestoreStatus = (
+  result: Awaited<ReturnType<typeof restoreDesktopSettingsSnapshot>>
+) => {
+  if (!result.applied) return result.message || '云端没有桌面设置文件，已保留当前设置'
+
+  const details = [`${result.settingsCount} 项桌面设置`]
+  if (result.backgroundsDownloaded > 0) details.push(`${result.backgroundsDownloaded} 张背景图`)
+  if (result.backgroundsMissing > 0) details.push(`${result.backgroundsMissing} 张背景图未下载`)
+  return `已应用 ${details.join('，')}`
+}
+
+const reloadRestoredState = async () => {
+  const dataStore = useDataStore()
+  dataStore.dataLoaded.value = false
+  await dataStore.loadAllData()
+  await loadAllSettings()
+  await fetchAllRules()
+  await fetchBooks()
+  await refreshReadingStatsSummary()
+  emit('refresh-settings')
+}
+
 const fullRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动。')) return
   try {
     await saveWebdav()
     webdavSyncing.value = true
-    const preservedDesktopSettings = await getCurrentDesktopSettingsSnapshot()
+    const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
 
     webdavSyncStatus.value = '恢复 v8 JSON 数据...'
     const v8Result = await fullRestoreV8((msg) => { webdavSyncStatus.value = msg })
-    if (!v8Result.success) {
-      throw new Error(v8Result.error || '云端没有可用的 JSON 备份')
+    await restoreLocalOnlySettings(preservedLocalOnlySettings)
+    if (v8Result.success) {
+      webdavSyncStatus.value = '补齐缺失章节正文...'
+      chapterTextRestore = await downloadChapterTextZips(auth)
+    } else {
+      webdavSyncStatus.value = 'v8 书架数据不可用，尝试恢复桌面设置...'
     }
-
-    webdavSyncStatus.value = '恢复章节正文...'
-    const chapterTextRestore = await downloadChapterTextZips(auth)
 
     webdavSyncStatus.value = '应用桌面设置...'
     const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
-    if (!desktopSettingsRestore.applied && desktopSettingsRestore.message) {
-      await restoreDesktopSettingsValues(preservedDesktopSettings)
-      await loadAllSettings()
-      webdavSyncStatus.value = desktopSettingsRestore.message
+    await restoreLocalOnlySettings(preservedLocalOnlySettings)
+    const desktopSettingsStatus = formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
+    if (!v8Result.success && !desktopSettingsRestore.applied) {
+      throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的恢复数据')
     }
 
     if (webdavSyncReadingStats.value) {
       webdavSyncStatus.value = '合并阅读统计...'
       await mergeRemoteReadingStats()
     }
-    await loadAllSettings()
-    await fetchAllRules()
-    await fetchBooks()
-    await refreshReadingStatsSummary()
+    await reloadRestoredState()
 
-    const msg = chapterTextRestore.missing > 0
-        ? `数据已恢复，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个章节正文 ZIP 未下载或解压失败。`
-        : '数据已从云端成功恢复！'
+    const msg = v8Result.success
+      ? (chapterTextRestore.missing > 0
+          ? `数据已恢复，${desktopSettingsStatus}，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个章节正文 ZIP 未下载或解压失败。`
+          : `数据已从云端成功恢复，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`)
+      : `未找到完整书架备份，但${desktopSettingsStatus}。`
     alert(msg)
     webdavSyncStatus.value = '从云端恢复成功'
   } catch (e: any) {
@@ -720,33 +774,41 @@ const incrementalRestore = async () => {
   try {
     await saveWebdav()
     webdavSyncing.value = true
-    const preservedDesktopSettings = await getCurrentDesktopSettingsSnapshot()
+    const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
+    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
+    let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
 
     webdavSyncStatus.value = '恢复 v8 JSON 增量数据...'
     const v8Result = await incrementalRestoreV8((msg) => { webdavSyncStatus.value = msg })
     if (!v8Result.success) {
-      throw new Error(v8Result.error || '云端没有可用的 JSON 增量备份')
+      webdavSyncStatus.value = 'v8 增量数据不可用，尝试恢复桌面设置...'
+    }
+
+    await restoreLocalOnlySettings(preservedLocalOnlySettings)
+    if (v8Result.success) {
+      webdavSyncStatus.value = '补齐缺失章节正文...'
+      chapterTextRestore = await downloadChapterTextZips(auth)
     }
 
     webdavSyncStatus.value = '应用桌面设置...'
     const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
-    if (!desktopSettingsRestore.applied) {
-      await restoreDesktopSettingsValues(preservedDesktopSettings)
-      await loadAllSettings()
+    await restoreLocalOnlySettings(preservedLocalOnlySettings)
+    const desktopSettingsStatus = formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
+    if (!v8Result.success && !desktopSettingsRestore.applied) {
+      throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的 JSON 增量备份')
     }
 
     if (webdavSyncReadingStats.value) {
       webdavSyncStatus.value = '合并阅读统计...'
       await mergeRemoteReadingStats()
     }
-    await loadAllSettings()
-    await fetchAllRules()
-    await fetchBooks()
-    await refreshReadingStatsSummary()
+    await reloadRestoredState()
 
-    const msg = v8Result.mergedFiles.length > 0
-      ? `v8增量恢复成功！合并了 ${v8Result.mergedFiles.length} 个文件。`
-      : 'v8增量恢复完成，数据已是最新。'
+    const msg = v8Result.success
+      ? (v8Result.mergedFiles.length > 0
+          ? `v8 增量恢复成功，合并了 ${v8Result.mergedFiles.length} 个文件，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`
+          : `v8 增量恢复完成，数据已是最新，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`)
+      : `未找到 v8 增量数据，但${desktopSettingsStatus}。`
     alert(msg)
     webdavSyncStatus.value = '增量恢复成功'
   } catch (e: any) {

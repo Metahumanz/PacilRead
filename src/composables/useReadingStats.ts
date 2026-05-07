@@ -252,11 +252,21 @@ async function saveSettingsMap(settings: Record<string, string>): Promise<void> 
   await store.setSettings(settings)
 }
 
+async function replaceSettingsMap(settings: Record<string, string>): Promise<void> {
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  await store.saveSettingsMap(settings)
+}
+
+function isLocalOnlySettingKey(key: string): boolean {
+  return key.startsWith('webdav') || LOCAL_ONLY_SETTING_KEYS.has(key)
+}
+
 export async function getCurrentDesktopSettingsSnapshot(): Promise<Record<string, string>> {
   const settings = await readSettingsMap()
   const snapshot: Record<string, string> = {}
   for (const [key, value] of Object.entries(settings)) {
-    if (UI_SETTINGS_KEYS.includes(key) || THEME_SETTINGS_KEYS.includes(key)) {
+    if (shouldIncludeSettingKey(key, { includeUi: true, includeThemes: true })) {
       snapshot[key] = value
     }
   }
@@ -271,7 +281,7 @@ export async function getLocalOnlySettingsSnapshot(): Promise<Record<string, str
   const settings = await readSettingsMap()
   const snapshot: Record<string, string> = {}
   for (const [key, value] of Object.entries(settings)) {
-    if (key.startsWith('webdav') || LOCAL_ONLY_SETTING_KEYS.has(key)) {
+    if (isLocalOnlySettingKey(key)) {
       snapshot[key] = value
     }
   }
@@ -279,7 +289,13 @@ export async function getLocalOnlySettingsSnapshot(): Promise<Record<string, str
 }
 
 export async function restoreLocalOnlySettings(snapshot: Record<string, string>): Promise<void> {
-  await saveSettingsMap(snapshot)
+  const settings = await readSettingsMap()
+  const nextSettings = { ...settings }
+  for (const key of Object.keys(nextSettings)) {
+    if (isLocalOnlySettingKey(key)) delete nextSettings[key]
+  }
+  Object.assign(nextSettings, snapshot)
+  await replaceSettingsMap(nextSettings)
 }
 
 async function ensureWebDavCollection(url: string, auth: string): Promise<void> {
@@ -665,6 +681,7 @@ function shouldIncludeSettingKey(
   key: string,
   options: { includeUi: boolean; includeThemes: boolean }
 ): boolean {
+  if (isLocalOnlySettingKey(key)) return false
   if (options.includeUi && UI_SETTINGS_KEYS.includes(key)) return true
   if (options.includeThemes && THEME_SETTINGS_KEYS.includes(key)) return true
   return false
@@ -850,10 +867,19 @@ function replaceBackgroundPlaceholders(
 export async function restoreDesktopSettingsSnapshot(): Promise<{
   applied: boolean
   message?: string
+  settingsCount: number
+  backgroundsDownloaded: number
+  backgroundsMissing: number
 }> {
   const settings = useSettings()
   if (!settings.webdavUrl.value) {
-    return { applied: false, message: '未配置 WebDAV 地址' }
+    return {
+      applied: false,
+      message: '未配置 WebDAV 地址',
+      settingsCount: 0,
+      backgroundsDownloaded: 0,
+      backgroundsMissing: 0,
+    }
   }
 
   const { auth, baseUrl, desktopSettingsDir } = await getWebDavContext()
@@ -865,7 +891,13 @@ export async function restoreDesktopSettingsSnapshot(): Promise<{
   })
 
   if (response.status === 404) {
-    return { applied: false, message: '云端没有桌面设置文件，已保留本地设置' }
+    return {
+      applied: false,
+      message: '云端没有桌面设置文件，已保留当前设置',
+      settingsCount: 0,
+      backgroundsDownloaded: 0,
+      backgroundsMissing: 0,
+    }
   }
   if (response.error) throw new Error(response.error)
   if (response.status !== 200 || !response.data) {
@@ -878,6 +910,8 @@ export async function restoreDesktopSettingsSnapshot(): Promise<{
   }
 
   const tokenToLocalFileUrl: Record<string, string> = {}
+  let backgroundsDownloaded = 0
+  let backgroundsMissing = 0
   if (settings.webdavSyncBackgrounds.value && Array.isArray(payload.backgroundFiles)) {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     for (const file of payload.backgroundFiles) {
@@ -887,15 +921,31 @@ export async function restoreDesktopSettingsSnapshot(): Promise<{
         localPath,
         auth
       )
-      if (!download.error) {
+      if (download.success) {
         tokenToLocalFileUrl[file.token] = localPathToFileUrl(localPath)
+        backgroundsDownloaded += 1
+      } else {
+        backgroundsMissing += 1
       }
     }
   }
 
-  const nextSettings = replaceBackgroundPlaceholders(payload.settings || {}, tokenToLocalFileUrl)
+  const payloadSettings = payload.settings || {}
+  const allowedSettings: Record<string, string> = {}
+  for (const [key, value] of Object.entries(payloadSettings)) {
+    if (shouldIncludeSettingKey(key, { includeUi: true, includeThemes: true })) {
+      allowedSettings[key] = String(value)
+    }
+  }
+
+  const nextSettings = replaceBackgroundPlaceholders(allowedSettings, tokenToLocalFileUrl)
   await saveSettingsMap(nextSettings)
   await settings.loadAllSettings()
 
-  return { applied: true }
+  return {
+    applied: true,
+    settingsCount: Object.keys(nextSettings).length,
+    backgroundsDownloaded,
+    backgroundsMissing,
+  }
 }

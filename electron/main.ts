@@ -368,12 +368,16 @@ function resolveChapterTextPath(bodyTextPath: string, dataDir: string): string |
   return null
 }
 
-function createBookChapterTextZip(bookId: number): string | null {
-  const rows = (readJsonEntity('chapters', []) as any[])
+function getFileGzipChapterRowsForBook(bookId: number): any[] {
+  return (readJsonEntity('chapters', []) as any[])
     .filter((chapter) => Number(chapter.bookId) === bookId
       && chapter.bodyTextStorage === 'file_gzip'
       && chapter.bodyTextPath)
     .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+}
+
+function createBookChapterTextZip(bookId: number): string | null {
+  const rows = getFileGzipChapterRowsForBook(bookId)
   if (rows.length === 0) return null
 
   const zip = new AdmZip()
@@ -421,6 +425,17 @@ function getBookIdsWithFileGzipChapters(): number[] {
     }
   }
   return Array.from(ids).filter(Number.isFinite).sort((a, b) => a - b)
+}
+
+function hasBookChapterTextFiles(bookId: number): boolean {
+  const rows = getFileGzipChapterRowsForBook(bookId)
+  if (rows.length === 0) return true
+  const dataDir = app.getPath('userData')
+  return rows.every((chapter) => {
+    const bodyTextPath = String(chapter.bodyTextPath || '')
+    if (!bodyTextPath) return false
+    return resolveChapterTextPath(bodyTextPath, dataDir) !== null
+  })
 }
 
 function writeChapterTextGzip(bookId: number, chapterId: number, bodyText: string): {
@@ -773,6 +788,7 @@ ipcMain.handle('library:deleteBook', async (_, bookId: number) => deleteBookJson
 ipcMain.handle('library:getBookChapters', async (_, bookId: number) => getBookChaptersJson(bookId))
 ipcMain.handle('library:getSize', async () => getStorageSizeInfo())
 ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsWithFileGzipChapters())
+ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))
 ipcMain.handle('library:createBookChapterTextZip', async (_, bookId: number) => createBookChapterTextZip(bookId))
 ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string) => extractBookChapterTextZip(zipPath))
 

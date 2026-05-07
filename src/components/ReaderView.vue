@@ -422,11 +422,14 @@ const closeAll = () => {
   showTts.value = false; showReaderOptions.value = false; showBookmarks.value = false;
 }
 const closeKeyHints = () => { showKeyHints.value = false }
-const disableKeyHints = () => { showKeyHints.value = false; saveSetting('hideKeyHints', 'true') }
+const disableKeyHints = async () => {
+  showKeyHints.value = false
+  await saveSetting('hideKeyHints', 'true')
+}
 
 const isReaderChromeTarget = (target: EventTarget | null) => {
   const t = target as HTMLElement | null
-  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p')
+  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p, .key-hints-overlay')
 }
 
 const handleClick = (e: MouseEvent) => {
@@ -679,7 +682,17 @@ onUnmounted(async () => {
 
       <!-- Key Hints -->
       <Transition name="fade">
-        <div v-if="showKeyHints" class="absolute inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.stop>
+        <div
+          v-if="showKeyHints"
+          class="key-hints-overlay absolute inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          @click.stop
+          @pointerdown.stop
+          @pointermove.stop
+          @pointerup.stop
+          @pointercancel.stop
+          @wheel.stop
+          @contextmenu.prevent.stop
+        >
           <div class="glass-dark p-8 rounded-3xl w-full max-w-md shadow-2xl border border-white/10 animate-scale-up">
             <h3 class="text-2xl font-bold mb-6 flex items-center gap-3">⌨️ 快捷键指南</h3>
             <div class="space-y-4 mb-8">

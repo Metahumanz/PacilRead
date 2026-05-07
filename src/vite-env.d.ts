@@ -30,6 +30,7 @@ export interface ElectronAPI {
       body_text_fallback: string | null
     }>>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
+    hasBookChapterTextFiles: (bookId: number) => Promise<boolean>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
     extractBookChapterTextZip: (zipPath: string) => Promise<number>
   }
