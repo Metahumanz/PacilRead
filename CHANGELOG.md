@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.5] - 2026-05-07
+
+### Fixed
+
+- 修复 WebDAV 增量/全量恢复后桌面界面设置、阅读排版、HUD 与快捷键设置没有真正应用的问题。
+- 修复阅读页快捷键提示浮层按钮点击被翻页交互抢走，导致“不再提示 / 我知道了”无法点击的问题。
+- 修复正文 ZIP 增量同步不够精确的问题：备份只上传云端缺失的 ZIP，恢复只下载本地缺失的 ZIP。
+
+### Changed
+
+- 桌面私有设置只写入 `desktop-settings/desktop-settings.json`，v8 `sync/` / `database/` 不再发布 `settings.json`。
+- 新备份会清理远端旧的 `sync/settings.json` 与 `database/settings.json`，避免移动端误读桌面私有设置。
+- 桌面设置上传提前执行，并在上传后立即读取同一路径确认云端文件存在。
+
 ## [0.6.0] - 2026-05-01
 
 ### Added

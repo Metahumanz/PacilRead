@@ -7,6 +7,19 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '0.6.5',
+    date: '2026-05-07',
+    changes: [
+      '修复 WebDAV 桌面设置恢复：恢复前仅保留本机 WebDAV 连接、设备 ID 等私有设置，不再用恢复前的 UI/排版设置覆盖云端结果',
+      '桌面设置恢复独立于 v8 书架恢复：即使远端没有 sync/manifest.json，只要存在 desktop-settings.json 也会恢复界面设置、阅读排版与背景图',
+      '增量/全量备份调整桌面设置协议边界：桌面排版、HUD、快捷键、WebDAV 等私有项只写入 desktop-settings/desktop-settings.json，不再写入 sync/settings.json',
+      'v8 同步停止发布 settings.json，并在新备份时清理远端旧的 sync/settings.json 与 database/settings.json，避免移动端误读桌面私有设置',
+      '桌面设置上传提前到书架、正文 ZIP、书籍文件之前执行，并在 PUT 后立即 GET 校验云端文件存在，备份完成提示显示实际上传项数',
+      '增量备份/恢复正文 ZIP 更名副其实：备份时只上传云端缺失的 book_*.zip，恢复时只下载本地缺失的正文 ZIP，并兼容旧名 chapters_*.zip',
+      '修复阅读页快捷键提示浮层点击被翻页层抢走的问题，“不再提示”可靠持久保存，“我知道了”仅关闭当前提示',
+    ]
+  },
+  {
     version: '0.6.4',
     date: '2026-05-04',
     changes: [
