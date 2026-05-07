@@ -230,6 +230,10 @@ export function useReaderPaginator(opts: {
     return { slices, isCacheHit: slices !== null }
   }
 
+  const getCachedPageCount = (chapterId: number, snapshotHash: string): number | null => {
+    return cachedPageSlicesMap.get(cacheKey(chapterId, snapshotHash))?.length ?? null
+  }
+
   const clearCache = (): void => {
     cachedPageSlicesMap.clear()
     cacheInsertionOrder.length = 0
@@ -242,6 +246,7 @@ export function useReaderPaginator(opts: {
     capturePaginationSnapshot,
     prewarmChapterText,
     getPagesForChapter,
+    getCachedPageCount,
     isCacheHit,
     clearCache,
     cacheSize,

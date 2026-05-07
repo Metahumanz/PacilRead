@@ -75,6 +75,7 @@ const hudTopRight = ref('none')
 const hudBottomLeft = ref('titleOrChapter')
 const hudBottomCenter = ref('none')
 const hudBottomRight = ref('pageAndProgress')
+const hudFollowPage = ref(false)
 
 // Chapter title settings
 const chapterTitleDisplay = ref<'left' | 'center' | 'none'>('left')
@@ -195,6 +196,7 @@ function resetSettingsState() {
   hudBottomLeft.value = 'titleOrChapter'
   hudBottomCenter.value = 'none'
   hudBottomRight.value = 'pageAndProgress'
+  hudFollowPage.value = false
   chapterTitleDisplay.value = 'left'
 
   autoPageSpeed.value = 10
@@ -326,6 +328,7 @@ export function useSettings() {
       if (v('hud_bl') !== undefined) hudBottomLeft.value = v('hud_bl')!
       if (v('hud_bc') !== undefined) hudBottomCenter.value = v('hud_bc')!
       if (v('hud_br') !== undefined) hudBottomRight.value = v('hud_br')!
+      if (v('hud_follow_page') !== undefined) hudFollowPage.value = v('hud_follow_page')! === 'true'
       if (v('chapterTitleDisplay') !== undefined) chapterTitleDisplay.value = v('chapterTitleDisplay')! as any || 'left'
       if (v('sidebarCollapsed') !== undefined) sidebarCollapsed.value = v('sidebarCollapsed')! === 'true'
       if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! === 'list' ? 'list' : 'grid'
@@ -409,6 +412,7 @@ export function useSettings() {
       hud_bl: hudBottomLeft.value,
       hud_bc: hudBottomCenter.value,
       hud_br: hudBottomRight.value,
+      hud_follow_page: hudFollowPage.value ? 'true' : 'false',
       chapterTitleDisplay: chapterTitleDisplay.value,
       reader_sliderMode: sliderMode.value,
       reader_pIndent: String(pIndent.value),
@@ -456,6 +460,7 @@ export function useSettings() {
     // HUD
     hudTopLeft, hudTopCenter, hudTopRight,
     hudBottomLeft, hudBottomCenter, hudBottomRight,
+    hudFollowPage,
     chapterTitleDisplay,
     sliderMode, sidebarCollapsed, viewMode, bookshelfShowAddEntry,
     homeNavAutoSwitchEnabled, homeNavManualMode,

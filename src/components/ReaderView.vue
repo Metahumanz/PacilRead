@@ -83,6 +83,7 @@ const {
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
+  hudFollowPage,
   chapterTitleDisplay,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   loadAllSettings, saveAllStyling, saveSetting,
@@ -218,6 +219,7 @@ const pagination = usePagination({
 })
 const {
   currentPage, totalPages, containerWidth, containerHeight, pendingWebdavPos,
+  prevPageCount,
   suppressAnim, incomingTarget, animationState, pagingVisuals,
   flipDurationMap, pageOffset, prevPageOffset, incomingPageOffset, progressPercent,
   recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
@@ -383,6 +385,57 @@ const pageContentStyle = (offset: string): CSSProperties => ({
 })
 
 // HUD logic handled by useHUD
+const calculateHudProgress = (chapterIndex: number, pageIndex: number, pageCount: number) => {
+  if (chapters.value.length === 0) return 0
+  const chapterWeight = 100 / chapters.value.length
+  const safePageCount = Math.max(1, pageCount)
+  const safePage = Math.min(Math.max(pageIndex, 0), safePageCount - 1)
+  const inChapter = ((safePage + 1) / safePageCount) * chapterWeight
+  return Math.min(100, Math.round(chapterIndex * chapterWeight + inChapter))
+}
+
+const pageCountForHud = (chapterIndex: number, fallback: number) => {
+  if (chapterIndex === currentChapterIndex.value) return totalPages.value
+  if (chapterIndex === currentChapterIndex.value - 1) return prevPageCount.value
+
+  const chapter = chapters.value[chapterIndex]
+  if (!chapter) return Math.max(1, fallback)
+  const snap = paginator.capturePaginationSnapshot(chapter.id)
+  return paginator.getCachedPageCount(chapter.id, snap.hash) ?? Math.max(1, fallback)
+}
+
+const hudPropsFor = (chapterIndex: number, pageIndex: number, pageCount: number) => {
+  const chapter = chapters.value[chapterIndex] || null
+  const safePageCount = Math.max(1, pageCount)
+  const safePage = Math.min(Math.max(pageIndex, 0), safePageCount - 1)
+  const context = {
+    bookTitle: book.value?.title,
+    chapterTitle: chapter?.title,
+    isFirstPage: chapterIndex === 0 && safePage === 0,
+    currentPage: safePage,
+    totalPages: safePageCount,
+    currentChapterIndex: chapterIndex,
+    totalChapters: chapters.value.length,
+    progressPercent: calculateHudProgress(chapterIndex, safePage, safePageCount),
+  }
+
+  return {
+    topLeft: formatHUD(hudTopLeft.value, context),
+    topCenter: formatHUD(hudTopCenter.value, context),
+    topRight: formatHUD(hudTopRight.value, context),
+    bottomLeft: formatHUD(hudBottomLeft.value, context),
+    bottomCenter: formatHUD(hudBottomCenter.value, context),
+    bottomRight: formatHUD(hudBottomRight.value, context),
+  }
+}
+
+const currentHudProps = computed(() => hudPropsFor(currentChapterIndex.value, currentPage.value, totalPages.value))
+const incomingHudProps = computed(() => {
+  const target = incomingTarget.value
+  if (!target) return currentHudProps.value
+  const fallback = target.chapterIndex === currentChapterIndex.value ? totalPages.value : target.pageIndex + 1
+  return hudPropsFor(target.chapterIndex, target.pageIndex, pageCountForHud(target.chapterIndex, fallback))
+})
 
 // ---- TTS (composable) ----
 const tts = useTTS({
@@ -679,6 +732,7 @@ onUnmounted(async () => {
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ currentChapterData?.title }}</h2>
               <div v-html="currentBody" class="ch-body"></div>
             </div>
+            <ReaderHUD v-if="!showMenu && hudFollowPage" v-bind="currentHudProps" />
           </div>
         </div>
 
@@ -688,6 +742,7 @@ onUnmounted(async () => {
               <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ incomingChapterData?.title }}</h2>
               <div v-html="incomingBody" class="ch-body"></div>
             </div>
+            <ReaderHUD v-if="!showMenu && hudFollowPage" v-bind="incomingHudProps" />
           </div>
         </div>
 
@@ -739,15 +794,7 @@ onUnmounted(async () => {
         </div>
       </Transition>
 
-      <ReaderHUD 
-        v-if="!showMenu"
-        :topLeft="formatHUD(hudTopLeft, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-        :topCenter="formatHUD(hudTopCenter, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-        :topRight="formatHUD(hudTopRight, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-        :bottomLeft="formatHUD(hudBottomLeft, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-        :bottomCenter="formatHUD(hudBottomCenter, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-        :bottomRight="formatHUD(hudBottomRight, { bookTitle: book?.title, chapterTitle: currentChapterData?.title, isFirstPage: currentChapterIndex === 0 && pagination.currentPage.value === 0, currentPage: pagination.currentPage.value, totalPages: pagination.totalPages.value, currentChapterIndex, totalChapters: chapters.length, progressPercent: progressPercent })"
-      />
+      <ReaderHUD v-if="!showMenu && !hudFollowPage" v-bind="currentHudProps" />
 
       <Transition name="fade">
         <div v-if="bookmarkStatus" class="bookmark-toast">

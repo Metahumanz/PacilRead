@@ -20,7 +20,7 @@ const {
   sliderMode, flipMode, saveSetting, saveAllStyling,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   hudTopLeft, hudTopCenter, hudTopRight,
-  hudBottomLeft, hudBottomCenter, hudBottomRight
+  hudBottomLeft, hudBottomCenter, hudBottomRight, hudFollowPage
 } = settings
 
 // Book info editing
@@ -133,6 +133,13 @@ const saveAutoNight = () => {
 
     <!-- HUD Settings (always shown) -->
     <div class="hud-section-title">HUD 显示</div>
+    <div class="sr">
+      <label>HUD 动效</label>
+      <div class="btn-group">
+        <button @click="hudFollowPage=false; saveAllStyling()" :class="{active: !hudFollowPage}">固定悬浮</button>
+        <button @click="hudFollowPage=true; saveAllStyling()" :class="{active: hudFollowPage}">跟随翻页</button>
+      </div>
+    </div>
     <div class="hud-grid">
       <div class="hud-item">
         <label>左上</label>
