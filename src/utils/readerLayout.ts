@@ -37,9 +37,8 @@ export function computeReaderPageMetrics(input: ReaderPageMetricsInput): ReaderP
   const lineHeightPx = Math.max(1, safeFontSize * safeLineHeight)
   const availableHeight = Math.max(0, containerHeight - requestedMarginY * 2)
   const pageGridLineCount = Math.max(1, Math.floor(Math.max(availableHeight, lineHeightPx) / lineHeightPx))
-  const pageGridHeight = pageGridLineCount * lineHeightPx
-  const spareY = Math.max(0, availableHeight - pageGridHeight)
-  const gridPaddingY = requestedMarginY + spareY / 2
+  const pageGridHeight = Math.max(1, availableHeight)
+  const gridPaddingY = requestedMarginY
 
   return {
     pageWidth: roundPx(pageWidth),

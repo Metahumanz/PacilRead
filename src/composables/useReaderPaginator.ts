@@ -56,6 +56,7 @@ function createOffscreenContainer(snapshot: PaginationSnapshot): {
   const content = document.createElement('div')
   content.style.cssText = [
     `height:${snapshot.pageGridHeight}px; column-fill:auto;`,
+    'orphans:1; widows:1;',
     `font-family:${snapshot.fontFamily};`,
     `font-size:${snapshot.fontSize}px;`,
     `line-height:${snapshot.lineHeightPx}px;`,
@@ -176,7 +177,7 @@ export function useReaderPaginator(opts: {
 
       // Inject a style that mirrors .ch-body :deep(p) rules
       const style = document.createElement('style')
-      style.textContent = '.ch-body-offscreen { min-height: 0; } .ch-body-offscreen p { text-indent: var(--p-indent); margin: 0 0 var(--p-spacing); } .ch-body-offscreen p:last-child { margin-bottom: 0; }'
+      style.textContent = '.ch-body-offscreen { min-height: 0; orphans: 1; widows: 1; } .ch-body-offscreen p { text-indent: var(--p-indent); margin: 0 0 var(--p-spacing); break-inside: auto; orphans: 1; widows: 1; } .ch-body-offscreen p:last-child { margin-bottom: 0; }'
       offscreen.content.innerHTML = html
       offscreen.content.querySelector('div')?.classList.add('ch-body-offscreen')
       offscreen.content.insertBefore(style, offscreen.content.firstChild)
