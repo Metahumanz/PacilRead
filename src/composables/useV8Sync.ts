@@ -1,5 +1,9 @@
 import { toRaw } from 'vue'
 import { useDataStore } from './useDataStore'
+import {
+  extractDesktopSettingsValues,
+  filterV8SyncSettings,
+} from './useReadingStats'
 
 // ---- v8 manifest types ----
 interface ManifestFileEntry {
@@ -20,6 +24,51 @@ interface Manifest {
 
 const MANIFEST_SCHEMA_VERSION = 1
 const ENTITY_TYPES = ['books', 'chapters', 'rules', 'themes', 'bookmarks', 'readingStats', 'settings'] as const
+type EntityType = typeof ENTITY_TYPES[number]
+type SyncEntityPayloads = Record<EntityType, any>
+
+function buildSyncEntities(dataStore = useDataStore()): SyncEntityPayloads {
+  const entities = dataStore.getAllEntities()
+  return {
+    ...entities,
+    settings: filterV8SyncSettings(entities.settings),
+  }
+}
+
+function normalizeSettingsMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const settings: Record<string, string> = {}
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    settings[key] = String(entryValue)
+  }
+  return settings
+}
+
+function splitRemoteSettings(value: unknown): {
+  sharedSettings: Record<string, string>
+  desktopSettings: Record<string, string>
+} {
+  const settings = normalizeSettingsMap(value)
+  return {
+    sharedSettings: filterV8SyncSettings(settings),
+    desktopSettings: extractDesktopSettingsValues(settings),
+  }
+}
+
+function entityJson(entities: SyncEntityPayloads, entity: EntityType): string {
+  return JSON.stringify(entities[entity], null, 2)
+}
+
+function utf8Size(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
+
+async function sha256TextHex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
 
 // ---- WebDAV path helpers ----
 function getWebdavContext() {
@@ -218,16 +267,16 @@ async function downloadCovers(
 
 // ---- Manifest operations ----
 
-async function generateManifest(): Promise<Manifest> {
+async function generateManifest(entities: SyncEntityPayloads): Promise<Manifest> {
   const files: Record<string, ManifestFileEntry> = {}
   const assets: Record<string, ManifestAssetEntry> = {}
 
   // Hash JSON data files
   for (const entity of ENTITY_TYPES) {
-    const { sha256, size } = await window.electronAPI.data.hashFile(entity)
+    const jsonStr = entityJson(entities, entity)
     files[`${entity}.json`] = {
-      sha256: sha256 || '0',
-      size,
+      sha256: await sha256TextHex(jsonStr),
+      size: utf8Size(jsonStr),
     }
   }
 
@@ -430,19 +479,19 @@ export async function fullBackupV8(
     const dataStore = useDataStore()
     onProgress?.('正在读取本地数据...')
 
-    const entities = dataStore.getAllEntities()
+    const entities = buildSyncEntities(dataStore)
 
     // Upload each entity JSON file to database/ directory for mobile compatibility.
     for (const entity of ENTITY_TYPES) {
       onProgress?.(`正在上传 ${entity}.json...`)
-      const jsonStr = JSON.stringify(entities[entity], null, 2)
+      const jsonStr = entityJson(entities, entity)
       const ok = await webdavPut(`database/${entity}.json`, jsonStr, 'application/json')
       if (!ok) throw new Error(`上传 ${entity}.json 失败`)
     }
 
     // Generate and upload manifest
     onProgress?.('正在生成清单文件...')
-    const manifest = await generateManifest()
+    const manifest = await generateManifest(entities)
     await uploadManifest(manifest, 'database')
 
     // Also upload manifest to sync/ for incremental sync
@@ -451,7 +500,7 @@ export async function fullBackupV8(
     // Also upload individual entity files to sync/
     onProgress?.('正在上传增量同步文件...')
     for (const entity of ENTITY_TYPES) {
-      const jsonStr = JSON.stringify(entities[entity], null, 2)
+      const jsonStr = entityJson(entities, entity)
       await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
     }
 
@@ -470,9 +519,10 @@ export async function fullBackupV8(
 
 export async function fullRestoreV8(
   onProgress?: (message: string) => void,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; desktopSettingsFallback?: Record<string, string> }> {
   try {
     const dataStore = useDataStore()
+    const desktopSettingsFallback: Record<string, string> = {}
     onProgress?.('正在检查远程数据格式...')
 
     // Check if v8 JSON format exists at configured subdir
@@ -501,7 +551,16 @@ export async function fullRestoreV8(
       onProgress?.(`正在下载 ${entity}.json...`)
       const raw = await getJsonAt(base, `database/${entity}.json`)
       if (raw !== null) {
-        try { entities[entity] = JSON.parse(raw) } catch {}
+        try {
+          const parsed = JSON.parse(raw)
+          if (entity === 'settings') {
+            const { sharedSettings, desktopSettings } = splitRemoteSettings(parsed)
+            entities[entity] = sharedSettings
+            Object.assign(desktopSettingsFallback, desktopSettings)
+          } else {
+            entities[entity] = parsed
+          }
+        } catch {}
       }
     }
 
@@ -510,7 +569,16 @@ export async function fullRestoreV8(
       if (!entities[entity]) {
         const raw = await getJsonAt(base, `sync/${entity}.json`)
         if (raw !== null) {
-          try { entities[entity] = JSON.parse(raw) } catch {}
+          try {
+            const parsed = JSON.parse(raw)
+            if (entity === 'settings') {
+              const { sharedSettings, desktopSettings } = splitRemoteSettings(parsed)
+              entities[entity] = sharedSettings
+              Object.assign(desktopSettingsFallback, desktopSettings)
+            } else {
+              entities[entity] = parsed
+            }
+          } catch {}
         }
       }
     }
@@ -526,7 +594,7 @@ export async function fullRestoreV8(
     }
 
     onProgress?.('全量恢复完成!')
-    return { success: true }
+    return { success: true, desktopSettingsFallback }
   } catch (e) {
     return { success: false, error: String(e) }
   }
@@ -541,20 +609,20 @@ export async function incrementalBackupV8(
     const dataStore = useDataStore()
     const uploadedFiles: string[] = []
 
+    const entities = buildSyncEntities(dataStore)
+
     onProgress?.('正在生成本地清单...')
-    const localManifest = await generateManifest()
+    const localManifest = await generateManifest(entities)
 
     onProgress?.('正在下载远程清单...')
     const remoteManifest = await downloadManifest('sync')
-
-    const entities = dataStore.getAllEntities()
 
     if (!remoteManifest) {
       // First time - do full upload to sync/
       onProgress?.('首次同步，上传全部文件...')
       for (const entity of ENTITY_TYPES) {
         onProgress?.(`正在上传 ${entity}.json...`)
-        const jsonStr = JSON.stringify(entities[entity], null, 2)
+        const jsonStr = entityJson(entities, entity)
         await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
         uploadedFiles.push(`${entity}.json`)
       }
@@ -568,7 +636,7 @@ export async function incrementalBackupV8(
         const entity = fileName.replace('.json', '')
         if (entity in entities) {
           onProgress?.(`正在上传 ${fileName}...`)
-          const jsonStr = JSON.stringify((entities as any)[entity], null, 2)
+          const jsonStr = entityJson(entities, entity as EntityType)
           await webdavPut(`sync/${fileName}`, jsonStr, 'application/json')
           uploadedFiles.push(fileName)
         }
@@ -595,11 +663,17 @@ export async function incrementalBackupV8(
 
 export async function incrementalRestoreV8(
   onProgress?: (message: string) => void,
-): Promise<{ success: boolean; mergedFiles: string[]; error?: string }> {
+): Promise<{
+  success: boolean
+  mergedFiles: string[]
+  error?: string
+  desktopSettingsFallback?: Record<string, string>
+}> {
   try {
     const dataStore = useDataStore()
     const mergedFiles: string[] = []
     let remoteBooksForRuleMerge: any[] | null = null
+    const desktopSettingsFallback: Record<string, string> = {}
 
     const getRemoteBooksForRuleMerge = async () => {
       if (remoteBooksForRuleMerge !== null) return remoteBooksForRuleMerge
@@ -627,11 +701,14 @@ export async function incrementalRestoreV8(
       const localEntities = (dataStore as any)[entity].value as any[]
 
       if (entity === 'settings') {
-        // Settings are merged differently (object merge)
-        const localSettings = dataStore.settingsMap.value
-        const remoteSettings = remoteData as Record<string, string>
-        await dataStore.setSettings({ ...localSettings, ...remoteSettings })
-        mergedFiles.push(fileName)
+        // Only platform-neutral settings belong to v8 sync. Desktop UI/reading settings
+        // are restored from desktop-settings.json, with old sync/settings.json as fallback.
+        const { sharedSettings, desktopSettings } = splitRemoteSettings(remoteData)
+        Object.assign(desktopSettingsFallback, desktopSettings)
+        if (Object.keys(sharedSettings).length > 0) {
+          await dataStore.setSettings(sharedSettings)
+          mergedFiles.push(fileName)
+        }
       } else if (entity === 'rules' && Array.isArray(localEntities) && Array.isArray(remoteData)) {
         const remoteBooks = await getRemoteBooksForRuleMerge()
         const { merged, changes } = mergeRules(
@@ -682,7 +759,7 @@ export async function incrementalRestoreV8(
       coversDownloaded.forEach(f => mergedFiles.push(`covers/${f}`))
     }
 
-    return { success: true, mergedFiles }
+    return { success: true, mergedFiles, desktopSettingsFallback }
   } catch (e) {
     return { success: false, mergedFiles: [], error: String(e) }
   }

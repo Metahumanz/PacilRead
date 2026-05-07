@@ -57,6 +57,16 @@ interface DesktopSettingsSnapshot {
   backgroundUploads: Array<{ localPath: string; remoteFileName: string }>
 }
 
+export interface DesktopSettingsUploadResult {
+  uploaded: boolean
+  skipped: boolean
+  message?: string
+  remoteUrl?: string
+  settingsCount: number
+  backgroundsUploaded: number
+  backgroundsFailed: number
+}
+
 const READING_STATS_SCHEMA_VERSION = 1
 const DESKTOP_SETTINGS_SCHEMA_VERSION = 1
 const DESKTOP_SETTINGS_FILE_NAME = 'desktop-settings.json'
@@ -258,12 +268,11 @@ async function replaceSettingsMap(settings: Record<string, string>): Promise<voi
   await store.saveSettingsMap(settings)
 }
 
-function isLocalOnlySettingKey(key: string): boolean {
+export function isLocalOnlySettingKey(key: string): boolean {
   return key.startsWith('webdav') || LOCAL_ONLY_SETTING_KEYS.has(key)
 }
 
-export async function getCurrentDesktopSettingsSnapshot(): Promise<Record<string, string>> {
-  const settings = await readSettingsMap()
+export function extractDesktopSettingsValues(settings: Record<string, string>): Record<string, string> {
   const snapshot: Record<string, string> = {}
   for (const [key, value] of Object.entries(settings)) {
     if (shouldIncludeSettingKey(key, { includeUi: true, includeThemes: true })) {
@@ -271,6 +280,26 @@ export async function getCurrentDesktopSettingsSnapshot(): Promise<Record<string
     }
   }
   return snapshot
+}
+
+export function shouldIncludeV8SyncSettingKey(key: string): boolean {
+  if (isLocalOnlySettingKey(key)) return false
+  if (UI_SETTINGS_KEYS.includes(key)) return false
+  if (THEME_SETTINGS_KEYS.includes(key)) return false
+  return true
+}
+
+export function filterV8SyncSettings(settings: Record<string, string>): Record<string, string> {
+  const shared: Record<string, string> = {}
+  for (const [key, value] of Object.entries(settings)) {
+    if (shouldIncludeV8SyncSettingKey(key)) shared[key] = value
+  }
+  return shared
+}
+
+export async function getCurrentDesktopSettingsSnapshot(): Promise<Record<string, string>> {
+  const settings = await readSettingsMap()
+  return extractDesktopSettingsValues(settings)
 }
 
 export async function restoreDesktopSettingsValues(snapshot: Record<string, string>): Promise<void> {
@@ -790,15 +819,31 @@ export async function buildDesktopSettingsSnapshot(): Promise<DesktopSettingsSna
   })
 }
 
-export async function uploadDesktopSettingsSnapshot(): Promise<void> {
+export async function uploadDesktopSettingsSnapshot(): Promise<DesktopSettingsUploadResult> {
   const settings = useSettings()
-  if (!settings.webdavUrl.value) return
+  if (!settings.webdavUrl.value) {
+    return {
+      uploaded: false,
+      skipped: true,
+      message: '未配置 WebDAV 地址',
+      settingsCount: 0,
+      backgroundsUploaded: 0,
+      backgroundsFailed: 0,
+    }
+  }
   if (
     !settings.webdavSyncUISettings.value &&
     !settings.webdavSyncThemes.value &&
     !settings.webdavSyncBackgrounds.value
   ) {
-    return
+    return {
+      uploaded: false,
+      skipped: true,
+      message: '未开启桌面设置同步',
+      settingsCount: 0,
+      backgroundsUploaded: 0,
+      backgroundsFailed: 0,
+    }
   }
 
   const snapshot = await buildDesktopSettingsSnapshot()
@@ -807,16 +852,21 @@ export async function uploadDesktopSettingsSnapshot(): Promise<void> {
     includeDesktopSettingsBackgrounds: settings.webdavSyncBackgrounds.value,
   })
 
+  let backgroundsUploaded = 0
+  let backgroundsFailed = 0
   for (const background of snapshot.backgroundUploads) {
-    await window.electronAPI.webdav.uploadFile(
+    const upload = await window.electronAPI.webdav.uploadFile(
       background.localPath,
       `${desktopSettingsBaseUrl}backgrounds/${background.remoteFileName}`,
       auth
     )
+    if (upload?.success) backgroundsUploaded += 1
+    else backgroundsFailed += 1
   }
 
+  const remoteUrl = `${desktopSettingsBaseUrl}${DESKTOP_SETTINGS_FILE_NAME}`
   const response = await window.electronAPI.webdav.request({
-    url: `${desktopSettingsBaseUrl}${DESKTOP_SETTINGS_FILE_NAME}`,
+    url: remoteUrl,
     method: 'PUT',
     headers: {
       Authorization: `Basic ${auth}`,
@@ -828,6 +878,25 @@ export async function uploadDesktopSettingsSnapshot(): Promise<void> {
   if (response.error) throw new Error(response.error)
   if (!response.status || response.status < 200 || response.status >= 300) {
     throw new Error(`上传桌面设置失败 (HTTP ${response.status})`)
+  }
+
+  const verify = await window.electronAPI.webdav.request({
+    url: remoteUrl,
+    method: 'GET',
+    headers: { Authorization: `Basic ${auth}` },
+  })
+  if (verify.error) throw new Error(verify.error)
+  if (verify.status !== 200) {
+    throw new Error(`桌面设置上传后未能在云端确认 (HTTP ${verify.status})`)
+  }
+
+  return {
+    uploaded: true,
+    skipped: false,
+    remoteUrl,
+    settingsCount: Object.keys(snapshot.payload.settings).length,
+    backgroundsUploaded,
+    backgroundsFailed,
   }
 }
 

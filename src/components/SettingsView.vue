@@ -16,6 +16,7 @@ import {
   hasReadingStatsHistory,
   mergeRemoteReadingStats,
   restoreDesktopSettingsSnapshot,
+  restoreDesktopSettingsValues,
   restoreLocalOnlySettings,
   restoreReadingStatsRows,
   sanitizeWebdavDirectorySegment,
@@ -581,6 +582,7 @@ const fullBackup = async () => {
     webdavSyncStatus.value = '准备备份...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
+    let desktopSettingsBackup: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null = null
 
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
@@ -614,7 +616,7 @@ const fullBackup = async () => {
 
     if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
       webdavSyncStatus.value = '上传桌面设置...'
-      await uploadDesktopSettingsSnapshot()
+      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
     }
 
     if (webdavSyncReadingStats.value) {
@@ -628,7 +630,7 @@ const fullBackup = async () => {
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
     webdavSyncStatus.value = '备份成功'
-    alert('所有选定数据已同步至 WebDAV 云端！')
+    alert(`所有选定数据已同步至 WebDAV 云端！${formatDesktopSettingsBackupStatus(desktopSettingsBackup)}`)
   } catch (e: any) {
     webdavSyncStatus.value = '备份失败: ' + (e.message || '网络错误')
   } finally { webdavSyncing.value = false }
@@ -643,6 +645,35 @@ const formatDesktopSettingsRestoreStatus = (
   if (result.backgroundsDownloaded > 0) details.push(`${result.backgroundsDownloaded} 张背景图`)
   if (result.backgroundsMissing > 0) details.push(`${result.backgroundsMissing} 张背景图未下载`)
   return `已应用 ${details.join('，')}`
+}
+
+const applyLegacyDesktopSettingsFallback = async (
+  desktopSettingsRestore: Awaited<ReturnType<typeof restoreDesktopSettingsSnapshot>>,
+  fallback?: Record<string, string>
+) => {
+  if (desktopSettingsRestore.applied) {
+    return formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
+  }
+
+  const fallbackCount = fallback ? Object.keys(fallback).length : 0
+  if (fallbackCount === 0) {
+    return formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
+  }
+
+  await restoreDesktopSettingsValues(fallback!)
+  return `云端没有 desktop-settings.json，已从旧版 sync/settings.json 应用 ${fallbackCount} 项桌面设置`
+}
+
+const formatDesktopSettingsBackupStatus = (
+  result: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null
+) => {
+  if (!result) return '桌面设置同步未开启'
+  if (!result.uploaded) return result.message || '桌面设置未上传'
+
+  const details = [`${result.settingsCount} 项桌面设置`]
+  if (result.backgroundsUploaded > 0) details.push(`${result.backgroundsUploaded} 张背景图`)
+  if (result.backgroundsFailed > 0) details.push(`${result.backgroundsFailed} 张背景图上传失败`)
+  return `桌面设置已上传：${details.join('，')}`
 }
 
 const reloadRestoredState = async () => {
@@ -677,8 +708,11 @@ const fullRestore = async () => {
 
     webdavSyncStatus.value = '应用桌面设置...'
     const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
+    const desktopSettingsStatus = await applyLegacyDesktopSettingsFallback(
+      desktopSettingsRestore,
+      v8Result.desktopSettingsFallback
+    )
     await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    const desktopSettingsStatus = formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
     if (!v8Result.success && !desktopSettingsRestore.applied) {
       throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的恢复数据')
     }
@@ -709,6 +743,7 @@ const incrementalBackup = async () => {
     webdavSyncStatus.value = '准备增量同步...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
+    let desktopSettingsBackup: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null = null
 
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
@@ -749,7 +784,7 @@ const incrementalBackup = async () => {
 
     if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
       webdavSyncStatus.value = '上传桌面设置...'
-      await uploadDesktopSettingsSnapshot()
+      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
     }
 
     if (webdavSyncReadingStats.value) {
@@ -763,7 +798,7 @@ const incrementalBackup = async () => {
     webdavLastLiteSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
     webdavSyncStatus.value = '增量同步成功'
-    alert('增量同步已完成！（书架元数据、桌面设置与阅读统计已更新）')
+    alert(`增量同步已完成！（书架元数据、桌面设置与阅读统计已更新）${formatDesktopSettingsBackupStatus(desktopSettingsBackup)}`)
   } catch (e: any) {
     webdavSyncStatus.value = '同步失败: ' + (e.message || '网络错误')
   } finally { webdavSyncing.value = false }
@@ -792,8 +827,11 @@ const incrementalRestore = async () => {
 
     webdavSyncStatus.value = '应用桌面设置...'
     const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
+    const desktopSettingsStatus = await applyLegacyDesktopSettingsFallback(
+      desktopSettingsRestore,
+      v8Result.desktopSettingsFallback
+    )
     await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    const desktopSettingsStatus = formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
     if (!v8Result.success && !desktopSettingsRestore.applied) {
       throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的 JSON 增量备份')
     }
