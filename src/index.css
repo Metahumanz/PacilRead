@@ -437,6 +437,27 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 16%, transparent);
 }
 
+.app-shell select option,
+.app-shell select optgroup {
+  background: var(--app-surface-raised);
+  color: var(--app-text);
+}
+
+.reader-root select {
+  color-scheme: dark;
+}
+
+.reader-root select option,
+.reader-root select optgroup {
+  background: #111827;
+  color: #f8fafc;
+}
+
+.reader-root select option:checked {
+  background: #2563eb;
+  color: #ffffff;
+}
+
 .app-button {
   border-radius: var(--app-radius-button);
   border: 1px solid var(--app-border);
