@@ -341,6 +341,20 @@ const effectiveReaderBgStyle = computed(() => (
     ? { backgroundColor: '#0f172a' }
     : readerBgStyle.value
 ))
+const readerPageBgFilter = computed(() => (
+  blurAmount.value > 0 && !shouldOverrideAutoNight.value ? `blur(${blurAmount.value}px)` : 'none'
+))
+const readerPageBgTransform = computed(() => (
+  blurAmount.value > 0 && !shouldOverrideAutoNight.value ? 'scale(1.1)' : 'none'
+))
+const readerPageBgScrim = computed(() => {
+  const blurScrim = !!bgImage.value && blurAmount.value > 0 && !shouldOverrideAutoNight.value
+  const nightScrim = isAutoNightActive.value && !shouldOverrideAutoNight.value
+  if (blurScrim && nightScrim) return 'rgba(0,0,0,0.55)'
+  if (blurScrim) return 'rgba(0,0,0,0.4)'
+  if (nightScrim) return 'rgba(0,0,0,0.25)'
+  return 'transparent'
+})
 
 const readerPageMetrics = computed(() => computeReaderPageMetrics({
   containerWidth: containerWidth.value || containerRef.value?.clientWidth || window.innerWidth,
@@ -411,7 +425,7 @@ const hudPropsFor = (chapterIndex: number, pageIndex: number, pageCount: number)
   const context = {
     bookTitle: book.value?.title,
     chapterTitle: chapter?.title,
-    isFirstPage: chapterIndex === 0 && safePage === 0,
+    isFirstPage: safePage === 0,
     currentPage: safePage,
     totalPages: safePageCount,
     currentChapterIndex: chapterIndex,
@@ -723,6 +737,9 @@ onUnmounted(async () => {
         :style="{
           '--reader-paper': readerPaperColor,
           '--reader-paper-image': readerPaperImage,
+          '--reader-bg-filter': readerPageBgFilter,
+          '--reader-bg-transform': readerPageBgTransform,
+          '--reader-bg-scrim': readerPageBgScrim,
           backgroundColor: (bgImage || shouldOverrideAutoNight) ? 'transparent' : readerPaperColor
         }"
       >
@@ -866,6 +883,14 @@ onUnmounted(async () => {
 .page-fold,
 .page-fold-shadow,
 .page-fold-highlight { position:absolute; inset:0; overflow:hidden; pointer-events:none; will-change:transform, clip-path, opacity; backface-visibility:hidden; transform-style:preserve-3d; }
+.page-layer,
+.page-snapshot { background-color:var(--reader-paper, #f7f2e6); }
+.page-layer::before,
+.page-snapshot::before { content:""; position:absolute; inset:0; z-index:0; background-color:var(--reader-paper, #f7f2e6); background-image:var(--reader-paper-image, none); background-size:cover; background-position:center; filter:var(--reader-bg-filter, none); transform:var(--reader-bg-transform, none); transform-origin:center; pointer-events:none; }
+.page-layer::after,
+.page-snapshot::after { content:""; position:absolute; inset:0; z-index:0; background:var(--reader-bg-scrim, transparent); pointer-events:none; }
+.page-layer > .pg-ctr,
+.page-snapshot > div { position:relative; z-index:1; }
 .page-current { z-index:3; pointer-events:auto; }
 .page-incoming { z-index:2; }
 .page-snapshot :deep(.pg-ctr),
@@ -878,13 +903,13 @@ onUnmounted(async () => {
 .page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.18), transparent); mix-blend-mode:screen; }
 .measure-layer { position:fixed; left:-9999px; top:0; width:100vw; height:100vh; overflow:hidden; pointer-events:none; opacity:0; }
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; --reader-line-px:1.8em; --reader-page-grid-height:100%; }
-.pg-ct { height:var(--reader-page-grid-height); column-fill:auto; align-content:start; line-height:var(--reader-line-px); }
+.pg-ct { height:var(--reader-page-grid-height); column-fill:auto; align-content:start; line-height:var(--reader-line-px); orphans:1; widows:1; }
 .pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
 .pg-cache-fade { animation: paginator-fade-in 0.1s ease-out; }
 @keyframes paginator-fade-in { from { opacity: 0.85; } to { opacity: 1; } }
 .ch-title { font-weight:700; margin:0 0 1.5em; opacity:0.85; }
-.ch-body { min-height:0; }
-.ch-body :deep(p) { text-indent: var(--p-indent); margin:0 0 var(--p-spacing); }
+.ch-body { min-height:0; orphans:1; widows:1; }
+.ch-body :deep(p) { text-indent: var(--p-indent); margin:0 0 var(--p-spacing); break-inside:auto; orphans:1; widows:1; }
 .ch-body :deep(p:last-child) { margin-bottom:0; }
 /* kbd style */
 .kbd { padding: 0.25rem 0.5rem; background-color: rgba(255, 255, 255, 0.1); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }

@@ -596,16 +596,31 @@ export function usePagination(opts: {
 
     if (state.mode === 'cover') {
       const reveal = width * progress
+      if (direction < 0) {
+        return {
+          current: { ...baseLayer, zIndex: 2 },
+          incoming: {
+            ...baseLayer,
+            zIndex: 4,
+            transform: `translate3d(${-width + reveal}px, 0, 0)`,
+          },
+          currentSnapshot: hidden,
+          fold: hidden,
+          foldInner: hidden,
+          shadow: hidden,
+          highlight: hidden,
+        }
+      }
       return {
         current: {
           ...baseLayer,
           zIndex: 4,
-          transform: `translate3d(${direction > 0 ? -width * progress : width * progress}px, 0, 0)`,
+          transform: `translate3d(${-width * progress}px, 0, 0)`,
         },
         incoming: {
           ...baseLayer,
           zIndex: 2,
-          clipPath: direction > 0 ? clipInset(0, 0, 0, width - reveal) : clipInset(0, width - reveal, 0, 0),
+          clipPath: clipInset(0, 0, 0, width - reveal),
         },
         currentSnapshot: hidden,
         fold: hidden,
