@@ -9,7 +9,7 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
   const settings = useSettings()
   const {
     bgImage, coverColor, fontColor, fontFamily, fontSize, lineHeight,
-    letterSpacing, fontWeight, marginX, marginY, pageMode, doublePageStep,
+    letterSpacing, fontWeight, marginX, marginTop, marginBottom, marginY, pageMode, doublePageStep,
     customThemes
   } = settings
 
@@ -25,7 +25,9 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
     if (t.letterSpacing !== undefined) letterSpacing.value = t.letterSpacing
     if (t.fontWeight !== undefined) fontWeight.value = t.fontWeight
     if (t.marginX !== undefined) marginX.value = t.marginX
-    if (t.marginY !== undefined) marginY.value = t.marginY
+    if (t.marginTop !== undefined) marginTop.value = t.marginTop
+    if (t.marginBottom !== undefined) marginBottom.value = t.marginBottom
+    if (t.marginTop === undefined && t.marginBottom === undefined && t.marginY !== undefined) marginY.value = t.marginY
     if (t.pageMode !== undefined) pageMode.value = t.pageMode as 'single' | 'double'
     if (t.doublePageStep !== undefined) doublePageStep.value = t.doublePageStep as 1 | 2
 
@@ -45,7 +47,8 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
       bgImage: bgImage.value, coverColor: coverColor.value,
       fontColor: fontColor.value, fontFamily: fontFamily.value, fontSize: fontSize.value,
       lineHeight: lineHeight.value, letterSpacing: letterSpacing.value,
-      fontWeight: fontWeight.value, marginX: marginX.value, marginY: marginY.value,
+      fontWeight: fontWeight.value, marginX: marginX.value,
+      marginTop: marginTop.value, marginBottom: marginBottom.value, marginY: marginY.value,
       pageMode: pageMode.value, doublePageStep: doublePageStep.value
     }
     const theme = await addTheme({

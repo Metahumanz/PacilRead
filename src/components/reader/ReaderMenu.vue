@@ -67,27 +67,29 @@ defineEmits<{
       </div>
     </div>
 
-    <div class="m-bot" @click.stop>
-      <button @click="$emit('go-to-chapter', currentChapterIndex - 1)" :disabled="currentChapterIndex === 0" class="m-ch">⏮ 上一章</button>
-      <div class="m-prog">
-        <input type="range" min="0" :max="sliderMax" :value="sliderValue" @input="(e: any) => $emit('slider-input', parseInt(e.target.value))" class="m-slider">
-      </div>
-      <button @click="$emit('go-to-chapter', currentChapterIndex + 1)" :disabled="currentChapterIndex >= chapters.length - 1" class="m-ch">下一章 ⏭</button>
-    </div>
+    <div class="m-bottom-stack" @click.stop>
+      <div class="m-info">
+        <div class="flex items-center justify-start">
+          <button @click="$emit('open-panel', 'toc')" class="m-btn" :class="{ active: showToc }">☰ 目录</button>
+        </div>
 
-    <div class="m-info" style="pointer-events: auto;" @click.stop>
-      <div class="flex items-center justify-start">
-        <button @click="$emit('open-panel', 'toc')" class="m-btn" :class="{ active: showToc }">☰ 目录</button>
-      </div>
-      
-      <div class="flex flex-1 items-center justify-around text-center">
-        <span>第 {{ currentChapterIndex + 1 }}/{{ chapters.length }} 章</span>
-        <span class="truncate max-w-[180px]">「{{ currentChapterTitle }}」</span>
-        <span>第 {{ currentPage + 1 }}/{{ totalPages }} 页</span>
+        <div class="flex flex-1 items-center justify-around text-center">
+          <span>第 {{ currentChapterIndex + 1 }}/{{ chapters.length }} 章</span>
+          <span class="truncate max-w-[180px]">「{{ currentChapterTitle }}」</span>
+          <span>第 {{ currentPage + 1 }}/{{ totalPages }} 页</span>
+        </div>
+
+        <div class="flex items-center justify-end">
+          <button @click="$emit('open-panel', 'readerOptions')" class="m-btn" :class="{ active: showReaderOptions }">⚙️ 设置</button>
+        </div>
       </div>
 
-      <div class="flex items-center justify-end">
-        <button @click="$emit('open-panel', 'readerOptions')" class="m-btn" :class="{ active: showReaderOptions }">⚙️ 设置</button>
+      <div class="m-bot">
+        <button @click="$emit('go-to-chapter', currentChapterIndex - 1)" :disabled="currentChapterIndex === 0" class="m-ch">⏮ 上一章</button>
+        <div class="m-prog">
+          <input type="range" min="0" :max="sliderMax" :value="sliderValue" @input="(e: any) => $emit('slider-input', parseInt(e.target.value))" class="m-slider">
+        </div>
+        <button @click="$emit('go-to-chapter', currentChapterIndex + 1)" :disabled="currentChapterIndex >= chapters.length - 1" class="m-ch">下一章 ⏭</button>
       </div>
     </div>
     
@@ -115,12 +117,13 @@ defineEmits<{
 .m-btn { padding:8px 14px; border-radius:10px; font-size:13px; font-weight:700; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:white; cursor:pointer; transition:all .2s; white-space:nowrap; }
 .m-btn:hover { background:rgba(59,130,246,0.2); }
 .m-btn.active { background:#3b82f6; border-color:#3b82f6; box-shadow:0 4px 12px rgba(59,130,246,0.3); }
-.m-bot { margin-top:auto; display:flex; align-items:center; gap:16px; padding:16px 24px; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); border-top:1px solid rgba(255,255,255,0.06); flex-wrap:wrap; }
+.m-bottom-stack { margin-top:auto; display:flex; flex-direction:column; gap:10px; padding:0 20px calc(16px + env(safe-area-inset-bottom)); }
+.m-bot { display:flex; align-items:center; gap:16px; padding:14px 18px; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.08); border-radius:16px; flex-wrap:wrap; box-shadow:0 18px 45px rgba(0,0,0,0.28); }
 .m-ch { padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.1); color:white; cursor:pointer; white-space:nowrap; transition:all .2s; }
 .m-ch:hover:not(:disabled) { background:rgba(59,130,246,0.2); }
 .m-ch:disabled { opacity:0.25; cursor:default; }
 .m-prog { flex:1; display:flex; flex-direction:column; align-items:center; gap:8px; min-width:100px; }
 .m-slider { width:100%; height:8px; -webkit-appearance:none; appearance:none; background:rgba(255,255,255,0.1); border-radius:4px; outline:none; cursor:pointer; }
 .m-slider::-webkit-slider-thumb { -webkit-appearance:none; width:20px; height:20px; background:white; border:3px solid #3b82f6; border-radius:50%; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.3); }
-.m-info { display:flex; align-items:center; padding:10px 24px 20px; font-size:12px; color:rgba(255,255,255,0.4); font-weight:600; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); gap:12px; flex-wrap:wrap; }
+.m-info { display:flex; align-items:center; padding:10px 18px; font-size:12px; color:rgba(255,255,255,0.55); font-weight:600; background:rgba(15,23,42,0.92); backdrop-filter:blur(20px); gap:12px; flex-wrap:wrap; border:1px solid rgba(255,255,255,0.08); border-radius:16px; box-shadow:0 18px 45px rgba(0,0,0,0.24); }
 </style>

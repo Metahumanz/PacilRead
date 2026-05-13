@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 import { useDataStore } from './useDataStore'
 import type { FlipMode } from '../types/pagination'
@@ -36,6 +36,12 @@ export const saveSetting = async (k: string, v: any) => {
 const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
 const DEFAULT_PREV_KEYS = ['ArrowLeft', 'PageUp']
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
+const parseSettingInt = (value: string | undefined, fallback: number) => {
+  if (value === undefined) return fallback
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+const clampHudMargin = (value: number) => Math.max(0, Math.min(32, Number.isFinite(value) ? value : 2))
 
 export type AppThemeMode = 'system' | 'light' | 'dark'
 export type AppLightStyleVariant = 'yaobai' | 'yunbai'
@@ -53,7 +59,16 @@ const lineHeight = ref(1.8)
 const letterSpacing = ref(0)
 const fontWeight = ref(400)
 const marginX = ref(60)
-const marginY = ref(40)
+const marginTop = ref(40)
+const marginBottom = ref(40)
+const marginY = computed({
+  get: () => Math.round((marginTop.value + marginBottom.value) / 2),
+  set: (value: number) => {
+    const next = Number.isFinite(value) ? value : 40
+    marginTop.value = next
+    marginBottom.value = next
+  },
+})
 const fontFamily = ref('system-ui')
 const fontColor = ref('#e2e8f0')
 const coverColor = ref('#0f172a')
@@ -76,6 +91,8 @@ const hudBottomLeft = ref('titleOrChapter')
 const hudBottomCenter = ref('none')
 const hudBottomRight = ref('pageAndProgress')
 const hudFollowPage = ref(false)
+const hudTopMargin = ref(2)
+const hudBottomMargin = ref(2)
 
 // Chapter title settings
 const chapterTitleDisplay = ref<'left' | 'center' | 'none'>('left')
@@ -153,7 +170,7 @@ const readingStatsDeviceId = ref('')
 interface CustomTheme {
   id: number; name: string; bgImage: string; coverColor: string; fontColor: string
   fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number
-  fontWeight: number; marginX: number; marginY: number; pageMode: string; doublePageStep: number
+  fontWeight: number; marginX: number; marginTop?: number; marginBottom?: number; marginY?: number; pageMode: string; doublePageStep: number
 }
 const customThemes = ref<CustomTheme[]>([])
 
@@ -175,7 +192,8 @@ function resetSettingsState() {
   letterSpacing.value = 0
   fontWeight.value = 400
   marginX.value = 60
-  marginY.value = 40
+  marginTop.value = 40
+  marginBottom.value = 40
   fontFamily.value = 'system-ui'
   fontColor.value = '#e2e8f0'
   coverColor.value = '#0f172a'
@@ -197,6 +215,8 @@ function resetSettingsState() {
   hudBottomCenter.value = 'none'
   hudBottomRight.value = 'pageAndProgress'
   hudFollowPage.value = false
+  hudTopMargin.value = 2
+  hudBottomMargin.value = 2
   chapterTitleDisplay.value = 'left'
 
   autoPageSpeed.value = 10
@@ -269,7 +289,9 @@ export function useSettings() {
       if (v('reader_letterSpacing') !== undefined) letterSpacing.value = parseFloat(v('reader_letterSpacing')!) || 0
       if (v('reader_fontWeight') !== undefined) fontWeight.value = parseInt(v('reader_fontWeight')!) || 400
       if (v('reader_marginX') !== undefined) marginX.value = parseInt(v('reader_marginX')!) || 60
-      if (v('reader_marginY') !== undefined) marginY.value = parseInt(v('reader_marginY')!) || 40
+      const legacyMarginY = parseSettingInt(v('reader_marginY'), 40)
+      marginTop.value = parseSettingInt(v('reader_marginTop'), legacyMarginY)
+      marginBottom.value = parseSettingInt(v('reader_marginBottom'), legacyMarginY)
       if (v('reader_fontFamily') !== undefined) fontFamily.value = v('reader_fontFamily')! || 'system-ui'
       if (v('reader_fontColor') !== undefined) fontColor.value = v('reader_fontColor')! || '#e2e8f0'
       if (v('reader_coverColor') !== undefined) coverColor.value = v('reader_coverColor')! || '#0f172a'
@@ -329,6 +351,9 @@ export function useSettings() {
       if (v('hud_bc') !== undefined) hudBottomCenter.value = v('hud_bc')!
       if (v('hud_br') !== undefined) hudBottomRight.value = v('hud_br')!
       if (v('hud_follow_page') !== undefined) hudFollowPage.value = v('hud_follow_page')! === 'true'
+      const legacyHudMargin = clampHudMargin(parseSettingInt(v('hud_vertical_margin'), 2))
+      hudTopMargin.value = clampHudMargin(parseSettingInt(v('hud_top_margin'), legacyHudMargin))
+      hudBottomMargin.value = clampHudMargin(parseSettingInt(v('hud_bottom_margin'), legacyHudMargin))
       if (v('chapterTitleDisplay') !== undefined) chapterTitleDisplay.value = v('chapterTitleDisplay')! as any || 'left'
       if (v('sidebarCollapsed') !== undefined) sidebarCollapsed.value = v('sidebarCollapsed')! === 'true'
       if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! === 'list' ? 'list' : 'grid'
@@ -394,6 +419,8 @@ export function useSettings() {
       reader_fontWeight: String(fontWeight.value),
       reader_marginX: String(marginX.value),
       reader_marginY: String(marginY.value),
+      reader_marginTop: String(marginTop.value),
+      reader_marginBottom: String(marginBottom.value),
       reader_fontFamily: fontFamily.value,
       reader_fontColor: fontColor.value,
       reader_coverColor: coverColor.value,
@@ -413,6 +440,8 @@ export function useSettings() {
       hud_bc: hudBottomCenter.value,
       hud_br: hudBottomRight.value,
       hud_follow_page: hudFollowPage.value ? 'true' : 'false',
+      hud_top_margin: String(clampHudMargin(hudTopMargin.value)),
+      hud_bottom_margin: String(clampHudMargin(hudBottomMargin.value)),
       chapterTitleDisplay: chapterTitleDisplay.value,
       reader_sliderMode: sliderMode.value,
       reader_pIndent: String(pIndent.value),
@@ -435,7 +464,7 @@ export function useSettings() {
 
   return {
     // Styling
-    fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
+    fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginTop, marginBottom, marginY,
     fontFamily, fontColor, coverColor, bgImage, blurAmount,
     textAlign, alignBottom, pageMode, doublePageStep,
     flipMode, flipSpeed,
@@ -460,7 +489,7 @@ export function useSettings() {
     // HUD
     hudTopLeft, hudTopCenter, hudTopRight,
     hudBottomLeft, hudBottomCenter, hudBottomRight,
-    hudFollowPage,
+    hudFollowPage, hudTopMargin, hudBottomMargin,
     chapterTitleDisplay,
     sliderMode, sidebarCollapsed, viewMode, bookshelfShowAddEntry,
     homeNavAutoSwitchEnabled, homeNavManualMode,

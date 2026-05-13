@@ -20,7 +20,8 @@ const {
   sliderMode, flipMode, saveSetting, saveAllStyling,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   hudTopLeft, hudTopCenter, hudTopRight,
-  hudBottomLeft, hudBottomCenter, hudBottomRight, hudFollowPage
+  hudBottomLeft, hudBottomCenter, hudBottomRight, hudFollowPage,
+  hudTopMargin, hudBottomMargin
 } = settings
 
 // Book info editing
@@ -140,6 +141,16 @@ const saveAutoNight = () => {
         <button @click="hudFollowPage=true; saveAllStyling()" :class="{active: hudFollowPage}">跟随翻页</button>
       </div>
     </div>
+    <div class="sr">
+      <label>HUD 上边距</label>
+      <input type="range" min="0" max="32" step="1" v-model.number="hudTopMargin" @input="saveAllStyling()" class="sl">
+      <input type="number" min="0" max="32" v-model.number="hudTopMargin" @change="saveAllStyling()" class="sn"><span class="su">px</span>
+    </div>
+    <div class="sr">
+      <label>HUD 下边距</label>
+      <input type="range" min="0" max="32" step="1" v-model.number="hudBottomMargin" @input="saveAllStyling()" class="sl">
+      <input type="number" min="0" max="32" v-model.number="hudBottomMargin" @change="saveAllStyling()" class="sn"><span class="su">px</span>
+    </div>
     <div class="hud-grid">
       <div class="hud-item">
         <label>左上</label>
@@ -195,6 +206,11 @@ const saveAutoNight = () => {
 .btn-group button { flex:1 1 64px; min-width:0; padding:6px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:white; font-size:12px; cursor:pointer; transition:all .2s; }
 .btn-group button:hover { background:rgba(255,255,255,0.1); }
 .btn-group button.active { background:#3b82f6; border-color:#3b82f6; font-weight:700; }
+.sl { flex:1; height:4px; -webkit-appearance:none; appearance:none; background:rgba(255,255,255,0.1); border-radius:2px; outline:none; min-width:80px; }
+.sl::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; background:white; border:2px solid #3b82f6; border-radius:50%; cursor:pointer; }
+.sn { width:52px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:4px 6px; text-align:center; font-size:12px; font-family:monospace; color:white; outline:none; }
+.sn:focus { border-color:#3b82f6; }
+.su { font-size:10px; opacity:0.3; font-family:monospace; min-width:20px; }
 .sp-divider { height:1px; background:rgba(255,255,255,0.06); margin:12px 0; }
 
 .book-info-section { display: flex; flex-direction: column; gap: 10px; }
