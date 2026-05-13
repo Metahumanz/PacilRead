@@ -25,6 +25,7 @@ import AutoPagePanel from './reader/panels/AutoPagePanel.vue'
 import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
+import PageSliceView from './reader/PageSliceView.vue'
 
 interface Chapter {
   id: number
@@ -73,7 +74,7 @@ const prevContainerRef = ref<HTMLElement | null>(null)
 // ---- Settings (composable) ----
 const settings = useSettings()
 const {
-  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
+  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginTop, marginBottom,
   fontFamily, fontColor, coverColor, bgImage, blurAmount,
   textAlign, pageMode, doublePageStep,
   flipMode, flipSpeed, autoPageSpeed,
@@ -83,7 +84,7 @@ const {
   webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
-  hudFollowPage,
+  hudFollowPage, hudTopMargin, hudBottomMargin,
   chapterTitleDisplay,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   loadAllSettings, saveAllStyling, saveSetting,
@@ -149,12 +150,15 @@ const fetchChapters = async () => {
 
 // ---- Chapter data (computed) ----
 const currentChapterData = computed(() => chapters.value[currentChapterIndex.value] || null)
-const prevChapterData = computed(() => { const i = currentChapterIndex.value - 1; return i >= 0 ? chapters.value[i] : null })
-const nextChapterData = computed(() => { const i = currentChapterIndex.value + 1; return i < chapters.value.length ? chapters.value[i] : null })
 const hasReadableChapters = computed(() => chapters.value.some(ch => !ch.body_text_missing || ch.body_text || ch.body))
-const currentBody = computed(() => currentChapterData.value ? applyReplacements(currentChapterData.value.body) : '')
-const prevBody = computed(() => prevChapterData.value ? applyReplacements(prevChapterData.value.body) : '')
-const nextBody = computed(() => nextChapterData.value ? applyReplacements(nextChapterData.value.body) : '')
+
+const HUD_BAR_HEIGHT = 22
+const hasTopHud = computed(() => [hudTopLeft.value, hudTopCenter.value, hudTopRight.value].some((slot) => slot !== 'none'))
+const hasBottomHud = computed(() => [hudBottomLeft.value, hudBottomCenter.value, hudBottomRight.value].some((slot) => slot !== 'none'))
+const hudReservedTop = computed(() => hasTopHud.value ? HUD_BAR_HEIGHT + hudTopMargin.value : 0)
+const hudReservedBottom = computed(() => hasBottomHud.value ? HUD_BAR_HEIGHT + hudBottomMargin.value : 0)
+const layoutMarginTop = computed(() => marginTop.value + hudReservedTop.value)
+const layoutMarginBottom = computed(() => marginBottom.value + hudReservedBottom.value)
 
 // ---- Progress ----
 const saveProgress = async () => {
@@ -174,6 +178,7 @@ const saveProgress = async () => {
       currentChapterIndex: currentChapterIndex.value,
       currentChapterTitle: currentChapterData.value?.title || '',
       currentChapterBodyLength: currentChapterData.value?.body_text?.length || 0,
+      currentChapterOffset: getChapterOffset(),
       currentPage: pagination.currentPage.value,
       totalPages: pagination.totalPages.value,
       pendingWebdavPos: pagination.pendingWebdavPos.value
@@ -184,14 +189,35 @@ const saveProgress = async () => {
 // ---- Reader Paginator (async prewarm + cache) ----
 const paginator = useReaderPaginator({
   containerRef, fontSize, lineHeight, letterSpacing, fontWeight, fontFamily,
-  textAlign, chapterTitleDisplay, marginX, marginY, pageMode, pIndent, pSpacing,
+  textAlign, chapterTitleDisplay, marginX, marginTop: layoutMarginTop, marginBottom: layoutMarginBottom, pageMode, pIndent, pSpacing,
 })
+
+const prewarmChapterAt = (index: number) => {
+  const ch = chapters.value[index]
+  if (!ch) return Promise.resolve(null)
+  const snap = paginator.capturePaginationSnapshot(ch.id)
+  const body = applyReplacements(ch.body)
+  return paginator.prewarmChapterText(ch.id, body, ch.body_text, ch.title, snap)
+}
+
+const prewarmNearbyChapters = () => {
+  prewarmChapterAt(currentChapterIndex.value)
+  prewarmChapterAt(currentChapterIndex.value - 1)
+  prewarmChapterAt(currentChapterIndex.value + 1)
+}
 
 const pagesResult = computed(() => {
   if (!currentChapterData.value) return null
   const snap = paginator.capturePaginationSnapshot(currentChapterData.value.id)
   return paginator.getPagesForChapter(currentChapterData.value.id, snap.hash)
 })
+
+const currentPages = computed(() => pagesResult.value?.slices ?? [])
+const currentSlice = computed(() => currentPages.value[currentPage.value] ?? null)
+const currentRightSlice = computed(() => pageMode.value === 'double'
+  ? currentPages.value[currentPage.value + 1] ?? null
+  : null
+)
 
 const readerPaperColor = computed(() => (
   readerAutoNightEnabled.value && resolvedBucket.value === 'dark' && readerAutoNightCustomPolicy.value === 'override'
@@ -209,19 +235,22 @@ const pagination = usePagination({
   chapters, currentChapterIndex, saveProgress,
   precomputedPages: computed(() => pagesResult.value?.slices ?? null),
   pageCacheHit: computed(() => pagesResult.value?.isCacheHit ?? false),
-  onBeforeChapterChange: (newIndex: number) => {
-    const ch = chapters.value[newIndex]
-    if (!ch) return
+  findPageForOffset: paginator.findPageForOffset,
+  getPageCountForChapter: (chapterIndex: number) => {
+    const ch = chapters.value[chapterIndex]
+    if (!ch) return null
     const snap = paginator.capturePaginationSnapshot(ch.id)
-    const body = applyReplacements(ch.body)
-    paginator.prewarmChapterText(ch.id, body, ch.body_text, ch.title, snap)
+    return paginator.getCachedPageCount(ch.id, snap.hash)
+  },
+  onBeforeChapterChange: (newIndex: number) => {
+    prewarmChapterAt(newIndex)
   },
 })
 const {
   currentPage, totalPages, containerWidth, containerHeight, pendingWebdavPos,
   prevPageCount,
   suppressAnim, incomingTarget, animationState, pagingVisuals,
-  flipDurationMap, pageOffset, prevPageOffset, incomingPageOffset, progressPercent,
+  flipDurationMap, progressPercent,
   recalc, calculatePages, nextPage, prevPage, slideToNextChapter, goToChapter,
   handlePointerDown: paginationPointerDown,
   handlePointerMove: paginationPointerMove,
@@ -234,7 +263,24 @@ const incomingChapterData = computed(() => {
   const target = incomingTarget.value
   return target ? chapters.value[target.chapterIndex] || null : null
 })
-const incomingBody = computed(() => incomingChapterData.value ? applyReplacements(incomingChapterData.value.body) : '')
+const incomingPages = computed(() => {
+  const target = incomingTarget.value
+  const chapter = incomingChapterData.value
+  if (!target || !chapter) return []
+  if (target.chapterIndex === currentChapterIndex.value) return currentPages.value
+  const snap = paginator.capturePaginationSnapshot(chapter.id)
+  return paginator.getPagesForChapter(chapter.id, snap.hash).slices ?? []
+})
+const incomingSlice = computed(() => {
+  const target = incomingTarget.value
+  if (!target) return null
+  return incomingPages.value[target.pageIndex] ?? null
+})
+const incomingRightSlice = computed(() => {
+  const target = incomingTarget.value
+  if (!target || pageMode.value !== 'double') return null
+  return incomingPages.value[target.pageIndex + 1] ?? null
+})
 
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
@@ -247,17 +293,17 @@ const recordReadingActivity = () => {
 
 const trackedNextPage = () => {
   recordReadingActivity()
-  nextPage()
+  return nextPage()
 }
 
 const trackedPrevPage = () => {
   recordReadingActivity()
-  prevPage()
+  return prevPage()
 }
 
 const trackedSlideToNextChapter = () => {
   recordReadingActivity()
-  slideToNextChapter()
+  return slideToNextChapter()
 }
 
 const trackedGoToChapter = (idx: number, keepMenu = false) => {
@@ -271,9 +317,9 @@ const trackedSetCurrentPage = (page: number) => {
 }
 
 const getChapterOffset = () => {
-  const bodyTextLength = currentChapterData.value?.body_text?.length || 0
-  if (bodyTextLength <= 0 || totalPages.value <= 0) return 0
-  return Math.floor(bodyTextLength * (currentPage.value / totalPages.value))
+  const slice = currentSlice.value
+  if (slice && slice.bodyStartInSlice >= 0) return slice.bodyStartInSlice
+  return 0
 }
 
 const buildBookmarkSummary = (offset: number) => {
@@ -316,6 +362,7 @@ const goToBookmarkTarget = (target: BookmarkTarget) => {
   const nextIndex = targetIndex >= 0 ? targetIndex : target.chapterOrderIndex
   if (nextIndex < 0 || nextIndex >= chapters.value.length) return
   pendingWebdavPos.value = Math.max(0, target.chapterOffset)
+  prewarmChapterAt(nextIndex)
   if (nextIndex !== currentChapterIndex.value) {
     goToChapter(nextIndex, true)
   } else {
@@ -361,13 +408,17 @@ const readerPageMetrics = computed(() => computeReaderPageMetrics({
   containerHeight: containerHeight.value || containerRef.value?.clientHeight || window.innerHeight,
   pageMode: pageMode.value,
   marginX: marginX.value,
-  marginY: marginY.value,
+  marginTop: layoutMarginTop.value,
+  marginBottom: layoutMarginBottom.value,
   fontSize: fontSize.value,
   lineHeight: lineHeight.value,
 }))
 
 const pageContainerStyle = computed<CSSProperties>(() => ({
-  padding: `${readerPageMetrics.value.gridPaddingY}px ${readerPageMetrics.value.effectiveMarginX}px`,
+  padding: `${readerPageMetrics.value.gridPaddingTop}px 0 ${readerPageMetrics.value.gridPaddingBottom}px`,
+  '--reader-page-width': `${readerPageMetrics.value.pageWidth}px`,
+  '--reader-margin-x': `${readerPageMetrics.value.effectiveMarginX}px`,
+  '--reader-content-column-width': `${readerPageMetrics.value.contentColumnWidth}px`,
   '--reader-line-px': `${readerPageMetrics.value.lineHeightPx}px`,
   '--reader-page-grid-height': `${readerPageMetrics.value.pageGridHeight}px`,
   '--p-indent': `${pIndent.value}em`,
@@ -381,22 +432,17 @@ const textStyle = computed(() => ({
   textAlign: textAlign.value as any,
 }))
 
-const chapterTitleStyle = computed<CSSProperties>(() => ({
-  fontSize: `${fontSize.value * 1.4}px`,
-  lineHeight: '1.35',
-  color: effectiveFontColor.value,
-  textAlign: chapterTitleDisplay.value as any,
-}))
-
-const pageContentStyle = (offset: string): CSSProperties => ({
+const pageSpreadStyle = computed<CSSProperties>(() => ({
   ...textStyle.value,
-  transform: `translateX(${offset})`,
+  display: 'grid',
+  gridTemplateColumns: pageMode.value === 'double'
+    ? `${readerPageMetrics.value.pageWidth}px ${readerPageMetrics.value.pageWidth}px`
+    : `${readerPageMetrics.value.pageWidth}px`,
+  width: pageMode.value === 'double'
+    ? `${readerPageMetrics.value.pageWidth * 2}px`
+    : `${readerPageMetrics.value.pageWidth}px`,
   height: `${readerPageMetrics.value.pageGridHeight}px`,
-  columnWidth: `${readerPageMetrics.value.contentColumnWidth}px`,
-  columnGap: `${readerPageMetrics.value.effectiveMarginX * 2}px`,
-  columnFill: 'auto',
-  alignContent: 'start',
-})
+} as CSSProperties))
 
 // HUD logic handled by useHUD
 const calculateHudProgress = (chapterIndex: number, pageIndex: number, pageCount: number) => {
@@ -440,6 +486,8 @@ const hudPropsFor = (chapterIndex: number, pageIndex: number, pageCount: number)
     bottomLeft: formatHUD(hudBottomLeft.value, context),
     bottomCenter: formatHUD(hudBottomCenter.value, context),
     bottomRight: formatHUD(hudBottomRight.value, context),
+    topMargin: hudTopMargin.value,
+    bottomMargin: hudBottomMargin.value,
   }
 }
 
@@ -501,6 +549,7 @@ const downloadProgressFromWebdav = async () => {
       if (remote.durChapterTime && (remote.durChapterTime > localTime + 5000 || isLocalFresh)) {
         if (remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
           pendingWebdavPos.value = remote.durChapterPos || 0
+          prewarmChapterAt(remote.durChapterIndex)
           if (remote.durChapterIndex !== currentChapterIndex.value) goToChapter(remote.durChapterIndex, true)
           else recalc()
         }
@@ -558,7 +607,7 @@ const handlePointerCancel = (e: PointerEvent) => {
 }
 const handleContextMenu = (e: MouseEvent) => {
   if (showMenu.value) return
-  const t = e.target as HTMLElement; const p = t.closest('p, h2, h3, div.ch-body')
+  const t = e.target as HTMLElement; const p = t.closest('.page-slice') || t.closest('.page-line')
   if (p && p.textContent && p.textContent.trim().length > 0) { selectedText.value = p.textContent.trim(); showCopyModal.value = true }
 }
 const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false }
@@ -630,11 +679,23 @@ const handleVisibilityChange = () => {
   })
 }
 
-watch(currentChapterIndex, () => recalc())
+const handleResize = () => {
+  prewarmNearbyChapters()
+  recalc()
+}
+
+watch(currentChapterIndex, () => {
+  prewarmNearbyChapters()
+  recalc()
+})
 watch([
-  fontSize, lineHeight, letterSpacing, marginX, marginY, fontFamily, fontWeight,
+  fontSize, lineHeight, letterSpacing, marginX, marginTop, marginBottom, fontFamily, fontWeight,
   textAlign, pageMode, doublePageStep, pIndent, pSpacing, chapterTitleDisplay,
-], () => recalc())
+  hudTopMargin, hudBottomMargin, hudTopLeft, hudTopCenter, hudTopRight, hudBottomLeft, hudBottomCenter, hudBottomRight,
+], () => {
+  prewarmNearbyChapters()
+  recalc()
+})
 watch(currentPage, () => saveProgress())
 
 // ---- Lifecycle ----
@@ -660,22 +721,11 @@ onMounted(async () => {
   }
   await readingTimeTracker.start()
   loading.value = false
-  setTimeout(calculatePages, 300)
   setTimeout(() => {
-    if (currentChapterData.value) {
-      const snap = paginator.capturePaginationSnapshot(currentChapterData.value.id)
-      paginator.prewarmChapterText(currentChapterData.value.id, currentBody.value, currentChapterData.value.body_text, currentChapterData.value.title, snap)
-    }
-    if (prevChapterData.value) {
-      const snap = paginator.capturePaginationSnapshot(prevChapterData.value.id)
-      paginator.prewarmChapterText(prevChapterData.value.id, prevBody.value, prevChapterData.value.body_text, prevChapterData.value.title, snap)
-    }
-    if (nextChapterData.value) {
-      const snap = paginator.capturePaginationSnapshot(nextChapterData.value.id)
-      paginator.prewarmChapterText(nextChapterData.value.id, nextBody.value, nextChapterData.value.body_text, nextChapterData.value.title, snap)
-    }
-  }, 400)
-  window.addEventListener('resize', recalc)
+    calculatePages()
+    prewarmNearbyChapters()
+  }, 80)
+  window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('blur', handleWindowBlur)
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -689,7 +739,7 @@ onUnmounted(async () => {
   await readingTimeTracker.stop()
   window.electronAPI.win.setControlsVisible(true)
   saveProgress()
-  window.removeEventListener('resize', recalc)
+  window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('blur', handleWindowBlur)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -745,9 +795,18 @@ onUnmounted(async () => {
       >
         <div class="page-layer page-current" :style="pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="pageContainerStyle">
-            <div ref="contentRef" class="pg-ct" :class="{ 'pg-anim': !suppressAnim, 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }" :style="pageContentStyle(pageOffset)">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ currentChapterData?.title }}</h2>
-              <div v-html="currentBody" class="ch-body"></div>
+            <div
+              ref="contentRef"
+              class="pg-spread"
+              :class="{ 'pg-cache-fade': paginator.isCacheHit.value && !suppressAnim }"
+              :style="pageSpreadStyle"
+            >
+              <div class="pg-page-slot">
+                <PageSliceView v-if="currentSlice" :slice="currentSlice" :justify="textAlign === 'justify'" />
+              </div>
+              <div v-if="pageMode === 'double'" class="pg-page-slot">
+                <PageSliceView v-if="currentRightSlice" :slice="currentRightSlice" :justify="textAlign === 'justify'" />
+              </div>
             </div>
             <ReaderHUD v-if="!showMenu && hudFollowPage" v-bind="currentHudProps" />
           </div>
@@ -755,9 +814,13 @@ onUnmounted(async () => {
 
         <div v-if="incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
           <div class="pg-ctr" :style="pageContainerStyle">
-            <div class="pg-ct" :style="pageContentStyle(incomingPageOffset)">
-              <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ incomingChapterData?.title }}</h2>
-              <div v-html="incomingBody" class="ch-body"></div>
+            <div class="pg-spread" :style="pageSpreadStyle">
+              <div class="pg-page-slot">
+                <PageSliceView v-if="incomingSlice" :slice="incomingSlice" :justify="textAlign === 'justify'" />
+              </div>
+              <div v-if="pageMode === 'double'" class="pg-page-slot">
+                <PageSliceView v-if="incomingRightSlice" :slice="incomingRightSlice" :justify="textAlign === 'justify'" />
+              </div>
             </div>
             <ReaderHUD v-if="!showMenu && hudFollowPage" v-bind="incomingHudProps" />
           </div>
@@ -771,15 +834,6 @@ onUnmounted(async () => {
         </div>
         <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
         <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
-      </div>
-
-      <div class="measure-layer" aria-hidden="true">
-        <div ref="prevContainerRef" class="pg-ctr" :style="pageContainerStyle">
-          <div ref="prevContentRef" class="pg-ct" :style="pageContentStyle(prevPageOffset)" v-if="prevChapterData">
-            <h2 v-if="chapterTitleDisplay !== 'none'" class="ch-title" :style="chapterTitleStyle">{{ prevChapterData.title }}</h2>
-            <div v-html="prevBody" class="ch-body"></div>
-          </div>
-        </div>
       </div>
 
       <!-- Key Hints -->
@@ -901,16 +955,11 @@ onUnmounted(async () => {
 .page-fold-inner { position:absolute; inset:0; z-index:1; overflow:hidden; background-color:var(--reader-paper, #f7f2e6); background-image:var(--reader-paper-image, none); background-size:cover; background-position:center; }
 .page-fold-shadow { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(0,0,0,0.14), transparent); }
 .page-fold-highlight { top:0; bottom:0; left:0; right:auto; background:linear-gradient(to right, transparent, rgba(255,255,255,0.18), transparent); mix-blend-mode:screen; }
-.measure-layer { position:fixed; left:-9999px; top:0; width:100vw; height:100vh; overflow:hidden; pointer-events:none; opacity:0; }
 .pg-ctr { width:100%; height:100%; overflow:hidden; box-sizing:border-box; --reader-line-px:1.8em; --reader-page-grid-height:100%; }
-.pg-ct { height:var(--reader-page-grid-height); column-fill:auto; align-content:start; line-height:var(--reader-line-px); orphans:1; widows:1; }
-.pg-ct.pg-anim { transition: transform var(--dur-slide) cubic-bezier(0.25,0.46,0.45,0.94); }
+.pg-spread { height:var(--reader-page-grid-height); line-height:var(--reader-line-px); }
+.pg-page-slot { width:var(--reader-page-width); height:var(--reader-page-grid-height); padding:0 var(--reader-margin-x); box-sizing:border-box; overflow:hidden; }
 .pg-cache-fade { animation: paginator-fade-in 0.1s ease-out; }
 @keyframes paginator-fade-in { from { opacity: 0.85; } to { opacity: 1; } }
-.ch-title { font-weight:700; margin:0 0 1.5em; opacity:0.85; }
-.ch-body { min-height:0; orphans:1; widows:1; }
-.ch-body :deep(p) { text-indent: var(--p-indent); margin:0 0 var(--p-spacing); break-inside:auto; orphans:1; widows:1; }
-.ch-body :deep(p:last-child) { margin-bottom:0; }
 /* kbd style */
 .kbd { padding: 0.25rem 0.5rem; background-color: rgba(255, 255, 255, 0.1); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 

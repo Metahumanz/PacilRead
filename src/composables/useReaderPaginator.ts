@@ -1,22 +1,21 @@
-import { ref, computed, nextTick, type Ref } from 'vue'
-import type { PageSlice, PaginationSnapshot } from '../types/pagination'
+import { computed, nextTick, ref, type Ref } from 'vue'
+import type { PageLine, PageSlice, PaginationSnapshot } from '../types/pagination'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 
-// Module-level cache — persists across composable lifecycles
 const cachedPageSlicesMap = new Map<string, PageSlice[]>()
 const cacheInsertionOrder: string[] = []
+const cacheVersion = ref(0)
 const MAX_CACHE_ENTRIES = 50
-
-let prewarmGeneration = 0
 
 function computeSnapshotHash(snap: Omit<PaginationSnapshot, 'hash'>): string {
   const parts = [
     snap.containerWidth, snap.containerHeight, snap.pageWidth,
     snap.effectiveMarginX, snap.contentColumnWidth, snap.lineHeightPx,
-    snap.pageGridHeight, snap.gridPaddingY,
+    snap.pageGridHeight, snap.gridPaddingTop, snap.gridPaddingBottom,
     snap.fontSize, snap.lineHeight, snap.letterSpacing, snap.fontWeight,
-    snap.fontFamily, snap.textAlign, snap.chapterTitleDisplay, snap.pageMode, snap.marginX, snap.marginY,
-    snap.pIndent, snap.pSpacing, snap.chapterId,
+    snap.fontFamily, snap.textAlign, snap.chapterTitleDisplay, snap.pageMode,
+    snap.marginX, snap.marginTop, snap.marginBottom, snap.pIndent, snap.pSpacing,
+    snap.chapterId,
   ]
   const str = parts.join('|')
   let hash = 5381
@@ -31,57 +30,213 @@ function cacheKey(chapterId: number, snapshotHash: string): string {
 }
 
 function cacheSet(key: string, slices: PageSlice[]): void {
-  if (cachedPageSlicesMap.size >= MAX_CACHE_ENTRIES) {
+  if (!cachedPageSlicesMap.has(key)) {
+    cacheInsertionOrder.push(key)
+  }
+  cachedPageSlicesMap.set(key, slices)
+  while (cachedPageSlicesMap.size > MAX_CACHE_ENTRIES) {
     const oldest = cacheInsertionOrder.shift()
     if (oldest) cachedPageSlicesMap.delete(oldest)
   }
-  cachedPageSlicesMap.set(key, slices)
-  cacheInsertionOrder.push(key)
+  cacheVersion.value += 1
 }
 
-function createOffscreenContainer(snapshot: PaginationSnapshot): {
-  wrapper: HTMLDivElement
-  content: HTMLDivElement
+function createMeasureRoot(snapshot: PaginationSnapshot): {
+  root: HTMLDivElement
   destroy: () => void
 } {
-  const wrapper = document.createElement('div')
-  wrapper.style.cssText = [
+  const root = document.createElement('div')
+  root.style.cssText = [
     'position:fixed; left:-9999px; top:0;',
-    `width:${snapshot.containerWidth}px;`,
-    `height:${snapshot.containerHeight}px;`,
-    'overflow:hidden; box-sizing:border-box;',
-    `padding:${snapshot.gridPaddingY}px ${snapshot.effectiveMarginX}px;`,
-  ].join('')
-
-  const content = document.createElement('div')
-  content.style.cssText = [
-    `height:${snapshot.pageGridHeight}px; column-fill:auto;`,
-    'orphans:1; widows:1;',
+    `width:${snapshot.contentColumnWidth}px;`,
+    'visibility:hidden; pointer-events:none;',
+    'contain:layout style paint;',
     `font-family:${snapshot.fontFamily};`,
     `font-size:${snapshot.fontSize}px;`,
     `line-height:${snapshot.lineHeightPx}px;`,
     `letter-spacing:${snapshot.letterSpacing}em;`,
     `font-weight:${snapshot.fontWeight};`,
     `text-align:${snapshot.textAlign};`,
-    `column-width:${snapshot.contentColumnWidth}px;`,
-    `column-gap:${snapshot.effectiveMarginX * 2}px;`,
-    'align-content:start;',
-    `--p-indent:${snapshot.pIndent}em;`,
-    `--p-spacing:${snapshot.pSpacing}em;`,
-    `--reader-line-px:${snapshot.lineHeightPx}px;`,
-    `--reader-page-grid-height:${snapshot.pageGridHeight}px;`,
+    'white-space:normal;',
+    'word-break:break-word;',
   ].join('')
-
-  wrapper.appendChild(content)
-  document.body.appendChild(wrapper)
-
+  document.body.appendChild(root)
   return {
-    wrapper,
-    content,
+    root,
     destroy: () => {
-      if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper)
+      if (root.parentNode) root.parentNode.removeChild(root)
     },
   }
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ')
+}
+
+function extractParagraphs(bodyHtml: string, bodyText: string): string[] {
+  const template = document.createElement('template')
+  template.innerHTML = (bodyHtml || '').replace(/<br\s*\/?>/gi, '\n')
+  const paragraphNodes = Array.from(template.content.querySelectorAll('p'))
+  const paragraphs = paragraphNodes
+    .map((node) => normalizeText(node.textContent || '').trim())
+    .filter(Boolean)
+  if (paragraphs.length > 0) return paragraphs
+
+  const text = normalizeText(template.content.textContent || bodyText || '')
+  return text
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function visibleRectCount(range: Range): number {
+  return Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0).length
+}
+
+function findLineEnd(node: Text, start: number, textLength: number): number {
+  let low = start + 1
+  let high = textLength
+  let best = Math.min(textLength, start + 1)
+  const range = document.createRange()
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    range.setStart(node, start)
+    range.setEnd(node, mid)
+    if (visibleRectCount(range) <= 1) {
+      best = mid
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+
+  range.detach()
+  return Math.max(best, start + 1)
+}
+
+function splitMeasuredText(params: {
+  root: HTMLElement
+  text: string
+  keyPrefix: string
+  kind: 'title' | 'body'
+  height: number
+  fontSize: number
+  fontWeight: number
+  lineHeight: number
+  textAlign: string
+  indentPx: number
+  afterBlockSpacing: number
+  bodyOffset: number
+}): PageLine[] {
+  const text = normalizeText(params.text).replace(/\s+/g, ' ').trim()
+  if (!text) return []
+
+  const el = document.createElement(params.kind === 'title' ? 'h2' : 'p')
+  el.style.cssText = [
+    'width:100%; margin:0; padding:0; box-sizing:border-box;',
+    `font-size:${params.fontSize}px;`,
+    `font-weight:${params.fontWeight};`,
+    `line-height:${params.lineHeight}px;`,
+    `text-align:${params.textAlign};`,
+    params.kind === 'body' ? `text-indent:${params.indentPx}px;` : 'text-indent:0;',
+    'white-space:normal; word-break:break-word;',
+  ].join('')
+
+  const node = document.createTextNode(text)
+  el.appendChild(node)
+  params.root.appendChild(el)
+
+  const lines: PageLine[] = []
+  let cursor = 0
+  let lineIndex = 0
+  while (cursor < text.length) {
+    const end = findLineEnd(node, cursor, text.length)
+    const rawText = text.slice(cursor, end)
+    const lineText = rawText.trimStart()
+    const lineStart = params.kind === 'body' ? params.bodyOffset + cursor : -1
+    const lineEnd = params.kind === 'body' ? params.bodyOffset + end : -1
+    lines.push({
+      key: `${params.keyPrefix}-${lineIndex}`,
+      kind: params.kind,
+      text: lineText,
+      bodyStart: lineStart,
+      bodyEnd: lineEnd,
+      height: params.height,
+      afterSpacing: 0,
+      indentPx: params.kind === 'body' && lineIndex === 0 ? params.indentPx : 0,
+      textAlign: params.textAlign,
+      isParagraphStart: lineIndex === 0,
+      isParagraphEnd: false,
+    })
+    cursor = end
+    lineIndex += 1
+  }
+
+  if (lines.length > 0) {
+    const last = lines[lines.length - 1]
+    last.isParagraphEnd = true
+    last.afterSpacing = params.afterBlockSpacing
+  }
+
+  params.root.removeChild(el)
+  return lines
+}
+
+function finalizeSlices(rawPages: PageLine[][], pageGridHeight: number): PageSlice[] {
+  const safePages = rawPages.length > 0 ? rawPages : [[]]
+  return safePages.map((rawLines, pageIndex) => {
+    const lines = rawLines.map((line) => ({ ...line }))
+    if (lines.length > 0) {
+      lines[lines.length - 1].afterSpacing = 0
+    }
+    const bodyLines = lines.filter((line) => line.kind === 'body' && line.bodyEnd > line.bodyStart)
+    const startChar = bodyLines.length > 0 ? bodyLines[0].bodyStart : 0
+    const endChar = bodyLines.length > 0 ? bodyLines[bodyLines.length - 1].bodyEnd : startChar
+    const baseHeight = lines.reduce((sum, line) => sum + line.height + line.afterSpacing, 0)
+    const isLast = pageIndex === safePages.length - 1
+    const adjustableGaps = Math.max(0, lines.length - 1)
+    const extraLineGap = !isLast && adjustableGaps > 0
+      ? Math.max(0, (pageGridHeight - baseHeight) / adjustableGaps)
+      : 0
+
+    return {
+      pageIndex,
+      startChar,
+      endChar,
+      charCount: Math.max(0, endChar - startChar),
+      isLast,
+      text: bodyLines.map((line) => line.text).join(''),
+      lines,
+      bodyStartInSlice: bodyLines.length > 0 ? startChar : -1,
+      bodyEndInSlice: bodyLines.length > 0 ? endChar : -1,
+      baseHeight,
+      extraLineGap,
+    }
+  })
+}
+
+function paginateLines(lines: PageLine[], pageGridHeight: number): PageSlice[] {
+  const pages: PageLine[][] = []
+  let current: PageLine[] = []
+  let currentHeight = 0
+
+  for (const line of lines) {
+    const lineTotalHeight = line.height + line.afterSpacing
+    if (current.length > 0 && currentHeight + lineTotalHeight > pageGridHeight + 0.5) {
+      pages.push(current)
+      current = []
+      currentHeight = 0
+    }
+    current.push(line)
+    currentHeight += lineTotalHeight
+  }
+
+  if (current.length > 0 || pages.length === 0) {
+    pages.push(current)
+  }
+
+  return finalizeSlices(pages, pageGridHeight)
 }
 
 export function useReaderPaginator(opts: {
@@ -94,7 +249,8 @@ export function useReaderPaginator(opts: {
   textAlign: Ref<string>
   chapterTitleDisplay: Ref<string>
   marginX: Ref<number>
-  marginY: Ref<number>
+  marginTop: Ref<number>
+  marginBottom: Ref<number>
   pageMode: Ref<'single' | 'double'>
   pIndent: Ref<number>
   pSpacing: Ref<number>
@@ -109,7 +265,8 @@ export function useReaderPaginator(opts: {
       containerHeight: ch,
       pageMode: opts.pageMode.value,
       marginX: opts.marginX.value,
-      marginY: opts.marginY.value,
+      marginTop: opts.marginTop.value,
+      marginBottom: opts.marginBottom.value,
       fontSize: opts.fontSize.value,
       lineHeight: opts.lineHeight.value,
     })
@@ -122,7 +279,8 @@ export function useReaderPaginator(opts: {
       contentColumnWidth: metrics.contentColumnWidth,
       lineHeightPx: metrics.lineHeightPx,
       pageGridHeight: metrics.pageGridHeight,
-      gridPaddingY: metrics.gridPaddingY,
+      gridPaddingTop: metrics.gridPaddingTop,
+      gridPaddingBottom: metrics.gridPaddingBottom,
       fontSize: opts.fontSize.value,
       lineHeight: opts.lineHeight.value,
       letterSpacing: opts.letterSpacing.value,
@@ -131,7 +289,8 @@ export function useReaderPaginator(opts: {
       textAlign: opts.textAlign.value,
       chapterTitleDisplay: opts.chapterTitleDisplay.value,
       marginX: opts.marginX.value,
-      marginY: opts.marginY.value,
+      marginTop: opts.marginTop.value,
+      marginBottom: opts.marginBottom.value,
       pageMode: opts.pageMode.value,
       pIndent: opts.pIndent.value,
       pSpacing: opts.pSpacing.value,
@@ -147,77 +306,65 @@ export function useReaderPaginator(opts: {
     bodyText: string,
     title: string,
     snapshot: PaginationSnapshot,
-  ): Promise<void> => {
+  ): Promise<PageSlice[] | null> => {
     const key = cacheKey(chapterId, snapshot.hash)
-    if (cachedPageSlicesMap.has(key)) return
+    const cached = cachedPageSlicesMap.get(key)
+    if (cached) return cached
+    if (snapshot.containerWidth <= 0 || snapshot.containerHeight <= 0 || snapshot.contentColumnWidth <= 0) return null
 
-    const gen = ++prewarmGeneration
-
-    const checkCancelled = (): boolean => {
-      if (gen !== prewarmGeneration) return true
-      return false
-    }
-
-    let offscreen: ReturnType<typeof createOffscreenContainer> | null = null
-
+    let measureRoot: ReturnType<typeof createMeasureRoot> | null = null
     try {
-      if (checkCancelled()) return
-
-      if (snapshot.containerWidth <= 0 || snapshot.containerHeight <= 0) return
-
-      offscreen = createOffscreenContainer(snapshot)
-      if (checkCancelled()) { offscreen.destroy(); return }
-
-      // Build chapter HTML
-      let html = ''
-      if (title && snapshot.chapterTitleDisplay !== 'none') {
-        html += `<h2 style="font-weight:700; margin:0 0 1.5em; line-height:1.35; opacity:0.85; font-size:${snapshot.fontSize * 1.4}px; color:inherit; text-align:${snapshot.chapterTitleDisplay}">${title}</h2>`
-      }
-      html += `<div>${bodyHtml}</div>`
-
-      // Inject a style that mirrors .ch-body :deep(p) rules
-      const style = document.createElement('style')
-      style.textContent = '.ch-body-offscreen { min-height: 0; orphans: 1; widows: 1; } .ch-body-offscreen p { text-indent: var(--p-indent); margin: 0 0 var(--p-spacing); break-inside: auto; orphans: 1; widows: 1; } .ch-body-offscreen p:last-child { margin-bottom: 0; }'
-      offscreen.content.innerHTML = html
-      offscreen.content.querySelector('div')?.classList.add('ch-body-offscreen')
-      offscreen.content.insertBefore(style, offscreen.content.firstChild)
-
-      if (checkCancelled()) { offscreen.destroy(); return }
-
-      // Wait for browser layout
+      measureRoot = createMeasureRoot(snapshot)
       await nextTick()
-      if (checkCancelled()) { offscreen.destroy(); return }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
 
-      await new Promise<void>(r => requestAnimationFrame(() => r()))
-      if (checkCancelled()) { offscreen.destroy(); return }
-
-      // Second RAF for stability (mirrors waitForStableLayout pattern)
-      await new Promise<void>(r => requestAnimationFrame(() => r()))
-      if (checkCancelled()) { offscreen.destroy(); return }
-
-      const scrollWidth = offscreen.content.scrollWidth
-      if (scrollWidth <= 0) { offscreen.destroy(); return }
-
-      const pageWidth = snapshot.pageWidth
-      const totalPages = Math.max(1, Math.ceil(scrollWidth / pageWidth))
-      const bodyLen = (bodyText || '').length || 1
-
-      const slices: PageSlice[] = []
-      for (let i = 0; i < totalPages; i++) {
-        const startChar = Math.floor((i / totalPages) * bodyLen)
-        const endChar = Math.floor(((i + 1) / totalPages) * bodyLen)
-        slices.push({
-          pageIndex: i,
-          startChar,
-          endChar,
-          charCount: endChar - startChar,
-          isLast: i === totalPages - 1,
-        })
+      const lines: PageLine[] = []
+      const titleFontSize = snapshot.fontSize * 1.4
+      const titleLineHeight = titleFontSize * 1.35
+      if (title && snapshot.chapterTitleDisplay !== 'none') {
+        lines.push(...splitMeasuredText({
+          root: measureRoot.root,
+          text: title,
+          keyPrefix: 'title',
+          kind: 'title',
+          height: titleLineHeight,
+          fontSize: titleFontSize,
+          fontWeight: Math.max(700, snapshot.fontWeight),
+          lineHeight: titleLineHeight,
+          textAlign: snapshot.chapterTitleDisplay === 'center' ? 'center' : 'left',
+          indentPx: 0,
+          afterBlockSpacing: titleFontSize * 1.5,
+          bodyOffset: -1,
+        }))
       }
 
+      const paragraphs = extractParagraphs(bodyHtml, bodyText)
+      let bodyOffset = 0
+      paragraphs.forEach((paragraph, index) => {
+        const isLastParagraph = index === paragraphs.length - 1
+        lines.push(...splitMeasuredText({
+          root: measureRoot!.root,
+          text: paragraph,
+          keyPrefix: `body-${index}`,
+          kind: 'body',
+          height: snapshot.lineHeightPx,
+          fontSize: snapshot.fontSize,
+          fontWeight: snapshot.fontWeight,
+          lineHeight: snapshot.lineHeightPx,
+          textAlign: snapshot.textAlign,
+          indentPx: snapshot.fontSize * snapshot.pIndent,
+          afterBlockSpacing: isLastParagraph ? 0 : snapshot.fontSize * snapshot.pSpacing,
+          bodyOffset,
+        }))
+        bodyOffset += paragraph.length + (isLastParagraph ? 0 : 1)
+      })
+
+      const slices = paginateLines(lines, snapshot.pageGridHeight)
       cacheSet(key, slices)
+      return slices
     } finally {
-      if (offscreen) offscreen.destroy()
+      if (measureRoot) measureRoot.destroy()
     }
   }
 
@@ -225,6 +372,7 @@ export function useReaderPaginator(opts: {
     slices: PageSlice[] | null
     isCacheHit: boolean
   } => {
+    cacheVersion.value
     const key = cacheKey(chapterId, snapshotHash)
     const slices = cachedPageSlicesMap.get(key) ?? null
     isCacheHit.value = slices !== null
@@ -232,22 +380,40 @@ export function useReaderPaginator(opts: {
   }
 
   const getCachedPageCount = (chapterId: number, snapshotHash: string): number | null => {
+    cacheVersion.value
     return cachedPageSlicesMap.get(cacheKey(chapterId, snapshotHash))?.length ?? null
+  }
+
+  const findPageForOffset = (slices: PageSlice[] | null | undefined, offset: number): number => {
+    if (!slices || slices.length === 0) return 0
+    const safeOffset = Math.max(0, offset)
+    const found = slices.findIndex((slice) => (
+      slice.bodyEndInSlice >= 0
+      && safeOffset >= slice.startChar
+      && safeOffset < Math.max(slice.endChar, slice.startChar + 1)
+    ))
+    if (found >= 0) return found
+    return safeOffset >= slices[slices.length - 1].endChar ? slices.length - 1 : 0
   }
 
   const clearCache = (): void => {
     cachedPageSlicesMap.clear()
     cacheInsertionOrder.length = 0
     isCacheHit.value = false
+    cacheVersion.value += 1
   }
 
-  const cacheSize = computed(() => cachedPageSlicesMap.size)
+  const cacheSize = computed(() => {
+    cacheVersion.value
+    return cachedPageSlicesMap.size
+  })
 
   return {
     capturePaginationSnapshot,
     prewarmChapterText,
     getPagesForChapter,
     getCachedPageCount,
+    findPageForOffset,
     isCacheHit,
     clearCache,
     cacheSize,

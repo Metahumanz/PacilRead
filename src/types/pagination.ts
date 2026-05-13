@@ -1,9 +1,31 @@
+export type PageLineKind = 'title' | 'body'
+
+export interface PageLine {
+  key: string
+  kind: PageLineKind
+  text: string
+  bodyStart: number
+  bodyEnd: number
+  height: number
+  afterSpacing: number
+  indentPx: number
+  textAlign: string
+  isParagraphStart: boolean
+  isParagraphEnd: boolean
+}
+
 export interface PageSlice {
   pageIndex: number
   startChar: number
   endChar: number
   charCount: number
   isLast: boolean
+  text: string
+  lines: PageLine[]
+  bodyStartInSlice: number
+  bodyEndInSlice: number
+  baseHeight: number
+  extraLineGap: number
 }
 
 export type FlipMode = 'slide' | 'cover' | 'simulation' | 'scroll' | 'none'
@@ -33,7 +55,8 @@ export interface PaginationSnapshot {
   contentColumnWidth: number
   lineHeightPx: number
   pageGridHeight: number
-  gridPaddingY: number
+  gridPaddingTop: number
+  gridPaddingBottom: number
   fontSize: number
   lineHeight: number
   letterSpacing: number
@@ -42,7 +65,8 @@ export interface PaginationSnapshot {
   textAlign: string
   chapterTitleDisplay: string
   marginX: number
-  marginY: number
+  marginTop: number
+  marginBottom: number
   pageMode: string
   pIndent: number
   pSpacing: number
