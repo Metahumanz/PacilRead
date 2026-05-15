@@ -2,13 +2,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
 import PageSliceView from './PageSliceView.vue'
 import ReaderHUD from './ReaderHUD.vue'
-import type { PageSlice } from '../../types/pagination'
+import type { PageSlice, PagingTarget } from '../../types/pagination'
 import { PageFlip } from '../../vendor/page-flip/page-flip.module.js'
 
 type HudProps = InstanceType<typeof ReaderHUD>['$props']
 
 const props = defineProps<{
+  turnMode: 'outerPage' | 'spread'
+  currentChapterIndex: number
   pages: PageSlice[]
+  prevPages: PageSlice[]
+  nextPages: PageSlice[]
   currentPage: number
   doublePageStep: 1 | 2
   pageWidth: number
@@ -33,15 +37,23 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  flip: [pageIndex: number]
+  flip: [target: PagingTarget]
   'page-drag': []
   'page-tap': [point: { clientX: number; clientY: number }]
 }>()
 
+interface FlipSpreadItem {
+  key: string
+  chapterIndex: number
+  pageIndex: number
+  pages: PageSlice[]
+}
+
 interface FlipPageItem {
   key: string
   slice: PageSlice | null
-  side: 'left' | 'right'
+  rightSlice: PageSlice | null
+  side: 'left' | 'right' | 'spread'
 }
 
 const bookRef = ref<HTMLElement | null>(null)
@@ -49,41 +61,117 @@ let pageFlip: PageFlip | null = null
 let suppressFlipEmit = false
 let tapStart: { x: number; y: number; time: number } | null = null
 let pageDragStarted = false
+let pendingFlipEmitFrame: number | null = null
 
-const clampPage = (pageIndex: number) => Math.max(0, Math.min(Math.max(0, props.pages.length - 1), pageIndex))
-const logicalStep = computed(() => props.doublePageStep === 2 ? 2 : 1)
-const lastLogicalPage = computed(() => {
-  if (props.pages.length <= 0) return 0
-  if (props.doublePageStep === 1) return props.pages.length - 1
-  return Math.max(0, Math.floor((props.pages.length - 1) / 2) * 2)
-})
-const currentLogicalPage = computed(() => {
-  const safe = clampPage(props.currentPage)
-  return props.doublePageStep === 1 ? safe : Math.floor(safe / 2) * 2
-})
-const logicalPagesInWindow = computed(() => {
+const DRAG_COMMIT_PROGRESS = 38
+const wholeSpreadMode = computed(() => props.turnMode === 'spread')
+const clampPageFor = (pages: PageSlice[], pageIndex: number) => Math.max(0, Math.min(Math.max(0, pages.length - 1), pageIndex))
+const logicalStep = computed(() => wholeSpreadMode.value ? 2 : props.doublePageStep === 2 ? 2 : 1)
+const flipPageWidth = computed(() => wholeSpreadMode.value ? props.pageWidth * 2 : props.pageWidth)
+const flipBookWidth = computed(() => wholeSpreadMode.value ? props.pageWidth * 2 : props.pageWidth * 2)
+
+const normalizeLogicalPageFor = (pages: PageSlice[], pageIndex: number) => {
+  const safe = clampPageFor(pages, pageIndex)
+  return logicalStep.value === 1 ? safe : Math.floor(safe / 2) * 2
+}
+
+const lastLogicalPageFor = (pages: PageSlice[]) => {
+  if (pages.length <= 0) return 0
+  if (logicalStep.value === 1) return pages.length - 1
+  return Math.max(0, Math.floor((pages.length - 1) / 2) * 2)
+}
+
+const logicalPagesFor = (pagesForChapter: PageSlice[]) => {
   const pages: number[] = []
-  for (let page = 0; page <= lastLogicalPage.value; page += logicalStep.value) {
+  const lastPage = lastLogicalPageFor(pagesForChapter)
+  for (let page = 0; pagesForChapter.length > 0 && page <= lastPage; page += logicalStep.value) {
     pages.push(page)
   }
   return pages
-})
-const logicalToFlipPage = (pageIndex: number) => {
-  const safe = props.doublePageStep === 1
-    ? clampPage(pageIndex)
-    : Math.floor(clampPage(pageIndex) / 2) * 2
-  const spreadIndex = logicalPagesInWindow.value.indexOf(safe)
-  return Math.max(0, spreadIndex) * 2
 }
-const flipToLogicalPage = (flipPageIndex: number) => {
-  const localSpread = Math.floor(Math.max(0, flipPageIndex) / 2)
-  return logicalPagesInWindow.value[localSpread] ?? currentLogicalPage.value
+
+const currentLogicalPage = computed(() => normalizeLogicalPageFor(props.pages, props.currentPage))
+
+const flipSpreads = computed<FlipSpreadItem[]>(() => {
+  const spreads: FlipSpreadItem[] = []
+  const prevChapterIndex = props.currentChapterIndex - 1
+  const nextChapterIndex = props.currentChapterIndex + 1
+
+  if (props.prevPages.length > 0) {
+    const pageIndex = lastLogicalPageFor(props.prevPages)
+    spreads.push({
+      key: `chapter-${prevChapterIndex}-page-${pageIndex}`,
+      chapterIndex: prevChapterIndex,
+      pageIndex,
+      pages: props.prevPages,
+    })
+  }
+
+  for (const pageIndex of logicalPagesFor(props.pages)) {
+    spreads.push({
+      key: `chapter-${props.currentChapterIndex}-page-${pageIndex}`,
+      chapterIndex: props.currentChapterIndex,
+      pageIndex,
+      pages: props.pages,
+    })
+  }
+
+  if (props.nextPages.length > 0) {
+    spreads.push({
+      key: `chapter-${nextChapterIndex}-page-0`,
+      chapterIndex: nextChapterIndex,
+      pageIndex: 0,
+      pages: props.nextPages,
+    })
+  }
+
+  return spreads
+})
+
+const targetToFlipPage = (target: PagingTarget) => {
+  const spreadIndex = flipSpreads.value.findIndex((spread) => (
+    spread.chapterIndex === target.chapterIndex
+    && spread.pageIndex === normalizeLogicalPageFor(spread.pages, target.pageIndex)
+  ))
+  if (spreadIndex >= 0) return wholeSpreadMode.value ? spreadIndex : spreadIndex * 2
+
+  const currentIndex = flipSpreads.value.findIndex((spread) => (
+    spread.chapterIndex === props.currentChapterIndex
+    && spread.pageIndex === currentLogicalPage.value
+  ))
+  return Math.max(0, wholeSpreadMode.value ? currentIndex : currentIndex * 2)
+}
+
+const flipToTarget = (flipPageIndex: number): PagingTarget => {
+  const localSpread = wholeSpreadMode.value
+    ? Math.max(0, flipPageIndex)
+    : Math.floor(Math.max(0, flipPageIndex) / 2)
+  const spread = flipSpreads.value[localSpread]
+  if (spread) {
+    return {
+      chapterIndex: spread.chapterIndex,
+      pageIndex: spread.pageIndex,
+    }
+  }
+  return {
+    chapterIndex: props.currentChapterIndex,
+    pageIndex: currentLogicalPage.value,
+  }
 }
 
 const flipPages = computed<FlipPageItem[]>(() => {
-  return logicalPagesInWindow.value.flatMap((page) => ([
-    { key: `page-${page}-left`, slice: props.pages[page] ?? null, side: 'left' as const },
-    { key: `page-${page}-right`, slice: props.pages[page + 1] ?? null, side: 'right' as const },
+  if (wholeSpreadMode.value) {
+    return flipSpreads.value.map((spread) => ({
+      key: `${spread.key}-spread`,
+      slice: spread.pages[spread.pageIndex] ?? null,
+      rightSlice: spread.pages[spread.pageIndex + 1] ?? null,
+      side: 'spread' as const,
+    }))
+  }
+
+  return flipSpreads.value.flatMap((spread) => ([
+    { key: `${spread.key}-left`, slice: spread.pages[spread.pageIndex] ?? null, rightSlice: null, side: 'left' as const },
+    { key: `${spread.key}-right`, slice: spread.pages[spread.pageIndex + 1] ?? null, rightSlice: null, side: 'right' as const },
   ]))
 })
 
@@ -95,6 +183,8 @@ const rootStyle = computed<CSSProperties>(() => ({
   '--reader-bg-transform': props.bgTransform,
   '--reader-bg-scrim': props.bgScrim,
   '--reader-page-width': `${props.pageWidth}px`,
+  '--reader-flip-page-width': `${flipPageWidth.value}px`,
+  '--reader-book-width': `${flipBookWidth.value}px`,
   '--reader-page-height': `${props.pageHeight}px`,
   '--reader-page-grid-height': `${props.pageGridHeight}px`,
   '--reader-grid-padding-top': `${props.gridPaddingTop}px`,
@@ -124,6 +214,43 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
 
   const controller = patched.getFlipController()
   if (!controller?.fold || !controller?.flip) return
+
+  if (wholeSpreadMode.value) {
+    const collection = patched.getPageCollection?.()
+    const render = patched.getRender?.()
+    if (collection?.getFlippingPage && collection?.getBottomPage && render?.drawBottomPage) {
+      const originalGetFlippingPage = collection.getFlippingPage.bind(collection)
+      const originalGetBottomPage = collection.getBottomPage.bind(collection)
+      collection.getFlippingPage = function getFlippingPage(direction: number) {
+        if (render.getOrientation?.() === 'portrait' && direction === 1) {
+          const currentIndex = this.getCurrentPageIndex?.() ?? patched.getCurrentPageIndex?.()
+          const currentPage = Number.isFinite(currentIndex) ? this.getPage?.(currentIndex) : null
+          return currentPage?.newTemporaryCopy?.() ?? originalGetFlippingPage(direction)
+        }
+        return originalGetFlippingPage(direction)
+      }
+      collection.getBottomPage = function getBottomPage(direction: number) {
+        if (render.getOrientation?.() === 'portrait' && direction === 1) {
+          const currentIndex = this.getCurrentPageIndex?.() ?? patched.getCurrentPageIndex?.()
+          const prevIndex = Number.isFinite(currentIndex) ? currentIndex - 1 : -1
+          if (prevIndex >= 0) return this.getPage?.(prevIndex) ?? originalGetBottomPage(direction)
+        }
+        return originalGetBottomPage(direction)
+      }
+
+      const originalDrawBottomPage = render.drawBottomPage.bind(render)
+      render.drawBottomPage = function drawBottomPage() {
+        if (this.getOrientation?.() === 'portrait' && this.getDirection?.() === 1 && this.bottomPage) {
+          const density = this.flippingPage?.getDrawingDensity?.() ?? null
+          const bottomElement = this.bottomPage.getElement?.()
+          if (bottomElement) bottomElement.style.zIndex = String(this.getSettings().startZIndex + 3)
+          this.bottomPage.draw?.(density)
+          return
+        }
+        return originalDrawBottomPage()
+      }
+    }
+  }
 
   const originalFold = controller.fold.bind(controller)
   controller.fold = function fold(point: { x: number; y: number }) {
@@ -160,7 +287,32 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       }
     }
     hasGrabStart = false
-    return originalFlip(nextPoint)
+    if (
+      !controller.start
+      || !controller.getBoundsRect
+      || !controller.setState
+      || !controller.animateFlippingTo
+    ) {
+      return originalFlip(nextPoint)
+    }
+    try {
+      controller.render?.finishAnimation?.()
+      if (!controller.start(nextPoint)) return
+      const bounds = controller.getBoundsRect()
+      const corner = controller.calc?.getCorner?.() ?? controller.getCalculation?.()?.getCorner?.()
+      const inset = bounds.height / 10
+      const startY = corner === 'bottom' ? bounds.height - inset : inset
+      const finishY = corner === 'bottom' ? bounds.height : 0
+      controller.setState('flipping')
+      controller.calc?.calc?.({ x: bounds.pageWidth - inset, y: startY })
+      return controller.animateFlippingTo(
+        { x: bounds.pageWidth - inset, y: startY },
+        { x: -bounds.pageWidth * 1.12, y: finishY },
+        true,
+      )
+    } catch (_) {
+      return originalFlip(nextPoint)
+    }
   }
 
   if (controller.stopMove) {
@@ -173,10 +325,10 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       const bounds = controller.getBoundsRect()
       const progress = calc.getFlippingProgress?.() ?? Math.abs((position.x - bounds.pageWidth) / (2 * bounds.pageWidth) * 100)
       const finishY = calc.getCorner?.() === 'bottom' ? bounds.height : 0
-      const shouldCommit = progress >= 62
+      const shouldCommit = progress >= DRAG_COMMIT_PROGRESS
       return controller.animateFlippingTo(
         position,
-        { x: shouldCommit ? -bounds.pageWidth : bounds.pageWidth, y: finishY },
+        { x: shouldCommit ? -bounds.pageWidth * 1.12 : bounds.pageWidth, y: finishY },
         shouldCommit,
       )
     }
@@ -184,6 +336,10 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
 }
 
 const destroyPageFlip = () => {
+  if (pendingFlipEmitFrame !== null) {
+    cancelAnimationFrame(pendingFlipEmitFrame)
+    pendingFlipEmitFrame = null
+  }
   if (!pageFlip) return
   pageFlip.destroy()
   pageFlip = null
@@ -194,35 +350,48 @@ const initPageFlip = async () => {
   await nextTick()
   if (!bookRef.value || flipPages.value.length === 0) return
 
-  pageFlip = new PageFlip(bookRef.value, {
-    width: Math.max(1, Math.round(props.pageWidth)),
-    height: Math.max(1, Math.round(props.pageHeight)),
-    size: 'stretch',
-    minWidth: 100,
-    maxWidth: Math.max(100, Math.round(props.pageWidth)),
-    minHeight: 100,
-    maxHeight: Math.max(100, Math.round(props.pageHeight)),
+  const pageWidth = Math.max(1, Math.round(flipPageWidth.value))
+  const pageHeight = Math.max(1, Math.round(props.pageHeight))
+  const fixedSpread = wholeSpreadMode.value
+  const pageFlipSettings = {
+    width: pageWidth,
+    height: pageHeight,
+    size: fixedSpread ? 'fixed' : 'stretch',
+    minWidth: fixedSpread ? pageWidth : 100,
+    maxWidth: fixedSpread ? pageWidth : Math.max(100, pageWidth),
+    minHeight: fixedSpread ? pageHeight : 100,
+    maxHeight: fixedSpread ? pageHeight : Math.max(100, pageHeight),
     maxShadowOpacity: 0.5,
     showCover: false,
     mobileScrollSupport: true,
     showPageCorners: false,
     disableFlipByClick: true,
+    autoSize: false,
     flippingTime: 300,
     swipeDistance: 10,
-    startPage: logicalToFlipPage(props.currentPage),
-  })
+    startPage: targetToFlipPage({ chapterIndex: props.currentChapterIndex, pageIndex: props.currentPage }),
+    usePortrait: true,
+  }
+
+  pageFlip = new PageFlip(bookRef.value, pageFlipSettings as any)
 
   pageFlip.loadFromHTML(bookRef.value.querySelectorAll('.r-page'))
   patchDemoTouchBehavior(pageFlip)
   pageFlip.on<number>('flip', (event) => {
     if (suppressFlipEmit) return
-    if (typeof event.data === 'number') emit('flip', flipToLogicalPage(event.data))
+    if (typeof event.data !== 'number') return
+    const target = flipToTarget(event.data)
+    if (pendingFlipEmitFrame !== null) cancelAnimationFrame(pendingFlipEmitFrame)
+    pendingFlipEmitFrame = requestAnimationFrame(() => {
+      pendingFlipEmitFrame = null
+      emit('flip', target)
+    })
   })
 }
 
 const turnToPage = (pageIndex: number) => {
   if (!pageFlip) return
-  const target = logicalToFlipPage(pageIndex)
+  const target = targetToFlipPage({ chapterIndex: props.currentChapterIndex, pageIndex })
   if (pageFlip.getCurrentPageIndex() === target) return
   suppressFlipEmit = true
   pageFlip.turnToPage(target)
@@ -233,14 +402,20 @@ const turnToPage = (pageIndex: number) => {
 
 const flipNext = () => {
   if (!pageFlip) return false
-  if (clampPage(props.currentPage) >= lastLogicalPage.value) return false
-  pageFlip.flipNext('top')
+  const currentSpreadIndex = wholeSpreadMode.value
+    ? Math.max(0, pageFlip.getCurrentPageIndex())
+    : Math.floor(Math.max(0, pageFlip.getCurrentPageIndex()) / 2)
+  if (currentSpreadIndex >= flipSpreads.value.length - 1) return false
+  pageFlip.flipNext('bottom')
   return true
 }
 
 const flipPrev = () => {
   if (!pageFlip) return false
-  if (clampPage(props.currentPage) <= 0) return false
+  const currentSpreadIndex = wholeSpreadMode.value
+    ? Math.max(0, pageFlip.getCurrentPageIndex())
+    : Math.floor(Math.max(0, pageFlip.getCurrentPageIndex()) / 2)
+  if (currentSpreadIndex <= 0) return false
   pageFlip.flipPrev('top')
   return true
 }
@@ -286,7 +461,7 @@ const handleTouchEndCapture = (event: TouchEvent) => {
   finishTapCandidate(touch.clientX, touch.clientY)
 }
 
-watch(() => props.currentPage, (pageIndex) => turnToPage(pageIndex))
+watch(() => [props.currentChapterIndex, props.currentPage] as const, ([, pageIndex]) => turnToPage(pageIndex))
 
 onMounted(initPageFlip)
 onBeforeUnmount(destroyPageFlip)
@@ -301,6 +476,7 @@ defineExpose({
 <template>
   <div
     class="pageflip-reader"
+    :class="{ 'pageflip-spread-reader': wholeSpreadMode }"
     :style="rootStyle"
     @mousedown.capture="handleMouseDownCapture"
     @mouseup.capture="handleMouseUpCapture"
@@ -316,10 +492,19 @@ defineExpose({
       >
         <div class="pageflip-page-bg"></div>
         <div
+          v-if="!wholeSpreadMode"
           class="pageflip-binding"
           :class="item.side === 'left' ? 'pageflip-binding-left' : 'pageflip-binding-right'"
         ></div>
-        <div class="pageflip-page-slot">
+        <div v-if="wholeSpreadMode" class="pageflip-spread-slot">
+          <div class="pageflip-spread-page-slot">
+            <PageSliceView v-if="item.slice" :slice="item.slice" :justify="justify" />
+          </div>
+          <div class="pageflip-spread-page-slot">
+            <PageSliceView v-if="item.rightSlice" :slice="item.rightSlice" :justify="justify" />
+          </div>
+        </div>
+        <div v-else class="pageflip-page-slot">
           <PageSliceView v-if="item.slice" :slice="item.slice" :justify="justify" />
         </div>
       </div>
@@ -341,7 +526,7 @@ defineExpose({
 }
 
 .pageflip-book {
-  width: calc(var(--reader-page-width) * 2);
+  width: var(--reader-book-width);
   height: var(--reader-page-height);
   margin: 0 auto;
   position: relative;
@@ -350,6 +535,8 @@ defineExpose({
 .pageflip-book :deep(.stf__wrapper) {
   position: relative;
   width: 100%;
+  height: var(--reader-page-height);
+  padding-bottom: 0 !important;
   box-sizing: border-box;
 }
 
@@ -378,14 +565,42 @@ defineExpose({
   pointer-events: none;
 }
 
+.pageflip-book :deep(canvas) {
+  width: 100%;
+  height: var(--reader-page-height);
+}
+
+.pageflip-spread-reader .pageflip-book,
+.pageflip-spread-reader .pageflip-book :deep(.stf__wrapper),
+.pageflip-spread-reader .pageflip-book :deep(.stf__block) {
+  width: var(--reader-book-width) !important;
+  height: var(--reader-page-height) !important;
+}
+
+.pageflip-spread-reader .pageflip-book :deep(.stf__block) {
+  overflow: visible;
+}
+
+.pageflip-spread-reader .pageflip-book :deep(.stf__hardShadow),
+.pageflip-spread-reader .pageflip-book :deep(.stf__hardInnerShadow) {
+  display: none !important;
+  opacity: 0 !important;
+}
+
 .r-page {
   position: relative;
-  width: var(--reader-page-width);
+  width: var(--reader-flip-page-width);
   height: var(--reader-page-height);
   overflow: hidden;
   background: var(--reader-paper, #f7f2e6);
   color: inherit;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.035);
+}
+
+.pageflip-spread-reader .r-page {
+  width: var(--reader-book-width) !important;
+  height: var(--reader-page-height) !important;
+  box-shadow: none;
 }
 
 .pageflip-page-bg {
@@ -415,6 +630,28 @@ defineExpose({
   top: var(--reader-grid-padding-top);
   left: 0;
   z-index: 2;
+  width: var(--reader-page-width);
+  height: var(--reader-page-grid-height);
+  padding: 0 var(--reader-margin-x);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.pageflip-spread-slot {
+  position: absolute;
+  top: var(--reader-grid-padding-top);
+  left: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: var(--reader-page-width) var(--reader-page-width);
+  column-gap: 0;
+  width: calc(var(--reader-page-width) * 2);
+  height: var(--reader-page-grid-height);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.pageflip-spread-page-slot {
   width: var(--reader-page-width);
   height: var(--reader-page-grid-height);
   padding: 0 var(--reader-margin-x);

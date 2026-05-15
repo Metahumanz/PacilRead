@@ -27,6 +27,7 @@ import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 import PageSliceView from './reader/PageSliceView.vue'
 import PageFlipOuterBook from './reader/PageFlipOuterBook.vue'
+import type { PageSlice, PagingTarget } from '../types/pagination'
 
 interface Chapter {
   id: number
@@ -471,13 +472,66 @@ const incomingRightSlice = computed(() => {
   return incomingPages.value[target.pageIndex + 1] ?? null
 })
 
-const outerPageFlipEnabled = computed(() => (
+const getCachedChapterPages = (chapterIndex: number): { slices: PageSlice[]; complete: boolean } => {
+  if (chapterIndex === currentChapterIndex.value) {
+    return {
+      slices: currentPages.value,
+      complete: currentPagesComplete.value,
+    }
+  }
+
+  const chapter = chapters.value[chapterIndex]
+  if (!chapter) return { slices: [], complete: false }
+
+  const snap = paginator.capturePaginationSnapshot(chapter.id)
+  const result = paginator.getPagesForChapter(chapter.id, snap.hash)
+  return {
+    slices: result.slices ?? [],
+    complete: result.complete,
+  }
+}
+
+const previousPageFlipPages = computed(() => {
+  if (currentChapterIndex.value <= 0) return []
+  const result = getCachedChapterPages(currentChapterIndex.value - 1)
+  return result.complete ? result.slices : []
+})
+
+const nextPageFlipPages = computed(() => {
+  if (!currentPagesComplete.value) return []
+  if (currentChapterIndex.value >= chapters.value.length - 1) return []
+  return getCachedChapterPages(currentChapterIndex.value + 1).slices
+})
+
+const pageFlipSimulationEnabled = computed(() => (
   pageMode.value === 'double'
   && flipMode.value === 'simulation'
-  && simulationDoublePageTurnMode.value === 'outerPage'
+  && (simulationDoublePageTurnMode.value === 'outerPage' || simulationDoublePageTurnMode.value === 'spread')
 ))
 const pageFlipBookRef = ref<InstanceType<typeof PageFlipOuterBook> | null>(null)
 let pageFlipClickSuppressedUntil = 0
+
+const scheduleOuterPageFlip = (
+  direction: 1 | -1,
+  prepare: Promise<unknown>,
+  fallback?: () => boolean | void,
+) => {
+  prepare
+    .then(() => {
+      nextTick(() => {
+        requestAnimationFrame(() => {
+          const flipped = direction > 0
+            ? pageFlipBookRef.value?.flipNext()
+            : pageFlipBookRef.value?.flipPrev()
+          if (!flipped) fallback?.()
+        })
+      })
+    })
+    .catch((error) => {
+      console.error('Prepare outer page flip failed:', error)
+      fallback?.()
+    })
+}
 
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
@@ -490,24 +544,51 @@ const recordReadingActivity = () => {
 
 const trackedNextPage = () => {
   recordReadingActivity()
-  if (outerPageFlipEnabled.value) {
+  if (pageFlipSimulationEnabled.value) {
     if (pageFlipBookRef.value?.flipNext()) return true
     if (!currentPagesComplete.value) {
-      prewarmChapterAt(currentChapterIndex.value).then(() => {
-        nextTick(() => requestAnimationFrame(() => pageFlipBookRef.value?.flipNext()))
+      scheduleOuterPageFlip(1, prewarmChapterAt(currentChapterIndex.value), () => {
+        const nextChapterIndex = currentChapterIndex.value + 1
+        if (nextChapterIndex >= chapters.value.length) return false
+        scheduleOuterPageFlip(
+          1,
+          prewarmChapterAt(nextChapterIndex, { mode: 'partial', targetPageIndex: 0, extraPagesAfterTarget: 2 }),
+          () => slideToNextChapter(),
+        )
+        return true
       })
       return true
     }
-    return slideToNextChapter()
+
+    const nextChapterIndex = currentChapterIndex.value + 1
+    if (nextChapterIndex < chapters.value.length) {
+      scheduleOuterPageFlip(
+        1,
+        prewarmChapterAt(nextChapterIndex, { mode: 'partial', targetPageIndex: 0, extraPagesAfterTarget: 2 }),
+        () => slideToNextChapter(),
+      )
+      return true
+    }
+    return false
   }
   return nextPage()
 }
 
 const trackedPrevPage = () => {
   recordReadingActivity()
-  if (outerPageFlipEnabled.value) {
+  if (pageFlipSimulationEnabled.value) {
     if (pageFlipBookRef.value?.flipPrev()) return true
-    return prevPage()
+
+    const prevChapterIndex = currentChapterIndex.value - 1
+    if (prevChapterIndex >= 0) {
+      scheduleOuterPageFlip(
+        -1,
+        prewarmChapterAt(prevChapterIndex),
+        () => prevPage(),
+      )
+      return true
+    }
+    return false
   }
   return prevPage()
 }
@@ -524,12 +605,33 @@ const trackedGoToChapter = (idx: number, keepMenu = false) => {
 
 const trackedSetCurrentPage = (page: number) => {
   recordReadingActivity()
-  currentPage.value = page
+  currentPage.value = pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread'
+    ? Math.floor(Math.max(0, page) / 2) * 2
+    : page
 }
 
-const handlePageFlip = (pageIndex: number) => {
+const handlePageFlip = (target: PagingTarget) => {
   recordReadingActivity()
-  currentPage.value = Math.max(0, Math.min(totalPages.value - 1, pageIndex))
+  const safeChapterIndex = Math.max(0, Math.min(chapters.value.length - 1, target.chapterIndex))
+  const targetPageIndex = pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread'
+    ? Math.floor(Math.max(0, target.pageIndex) / 2) * 2
+    : target.pageIndex
+  if (safeChapterIndex === currentChapterIndex.value) {
+    const currentPageCount = Math.max(1, currentPages.value.length || totalPages.value)
+    currentPage.value = Math.max(0, Math.min(currentPageCount - 1, targetPageIndex))
+    return
+  }
+
+  const targetPages = getCachedChapterPages(safeChapterIndex).slices
+  const targetPageCount = Math.max(1, targetPages.length || targetPageIndex + 1)
+  currentChapterIndex.value = safeChapterIndex
+  currentPage.value = Math.max(0, Math.min(targetPageCount - 1, targetPageIndex))
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      calculatePages()
+      saveProgress()
+    })
+  })
 }
 
 const handlePageFlipDrag = () => {
@@ -693,6 +795,11 @@ const pageFlipBookKey = computed(() => [
   currentChapterData.value?.id ?? 'none',
   currentPages.value.length,
   currentPagesComplete.value ? 'complete' : 'partial',
+  chapters.value[currentChapterIndex.value - 1]?.id ?? 'no-prev',
+  previousPageFlipPages.value.length,
+  chapters.value[currentChapterIndex.value + 1]?.id ?? 'no-next',
+  nextPageFlipPages.value.length,
+  simulationDoublePageTurnMode.value,
   doublePageStep.value,
   Math.round(readerPageMetrics.value.pageWidth),
   Math.round(readerPageHeight.value),
@@ -762,7 +869,12 @@ const hudPropsFor = (chapterIndex: number, pageIndex: number, pageCount: number)
   }
 }
 
-const currentHudProps = computed(() => hudPropsFor(currentChapterIndex.value, currentPage.value, totalPages.value))
+const spreadHudEnabled = computed(() => pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread')
+const spreadHudPage = (pageIndex: number) => Math.floor(Math.max(0, pageIndex) / 2)
+const spreadHudPageCount = (pageCount: number) => Math.max(1, Math.ceil(Math.max(1, pageCount) / 2))
+const currentHudPage = computed(() => spreadHudEnabled.value ? spreadHudPage(currentPage.value) : currentPage.value)
+const currentHudPageCount = computed(() => spreadHudEnabled.value ? spreadHudPageCount(totalPages.value) : totalPages.value)
+const currentHudProps = computed(() => hudPropsFor(currentChapterIndex.value, currentHudPage.value, currentHudPageCount.value))
 const incomingHudProps = computed(() => {
   const target = incomingTarget.value
   if (!target) return currentHudProps.value
@@ -853,27 +965,27 @@ const isReaderChromeTarget = (target: EventTarget | null) => {
 const handleClick = (e: MouseEvent) => {
   if (consumeClickAfterDrag()) return
   if (isReaderChromeTarget(e.target)) return
-  if (outerPageFlipEnabled.value && Date.now() < pageFlipClickSuppressedUntil) return
+  if (pageFlipSimulationEnabled.value && Date.now() < pageFlipClickSuppressedUntil) return
   handleReaderTap(e.clientX, e.clientY)
 }
 
 const handlePointerDown = (e: PointerEvent) => {
-  if (outerPageFlipEnabled.value) return
+  if (pageFlipSimulationEnabled.value) return
   if (showMenu.value || isReaderChromeTarget(e.target)) return
   recordReadingActivity()
   paginationPointerDown(e)
 }
 const handlePointerMove = (e: PointerEvent) => {
-  if (outerPageFlipEnabled.value) return
+  if (pageFlipSimulationEnabled.value) return
   if (showMenu.value) return
   paginationPointerMove(e)
 }
 const handlePointerUp = (e: PointerEvent) => {
-  if (outerPageFlipEnabled.value) return
+  if (pageFlipSimulationEnabled.value) return
   paginationPointerUp(e)
 }
 const handlePointerCancel = (e: PointerEvent) => {
-  if (outerPageFlipEnabled.value) return
+  if (pageFlipSimulationEnabled.value) return
   paginationPointerCancel(e)
 }
 const handleContextMenu = (e: MouseEvent) => {
@@ -988,6 +1100,11 @@ watch([
     })
   prewarmNearbyChapters()
 })
+watch([pageFlipSimulationEnabled, simulationDoublePageTurnMode, currentPage], () => {
+  if (!pageFlipSimulationEnabled.value || simulationDoublePageTurnMode.value !== 'spread') return
+  const normalized = Math.floor(Math.max(0, currentPage.value) / 2) * 2
+  if (currentPage.value !== normalized) currentPage.value = normalized
+})
 watch(currentPage, () => saveProgress())
 
 // ---- Lifecycle ----
@@ -1101,10 +1218,14 @@ onUnmounted(async () => {
         }"
       >
         <PageFlipOuterBook
-          v-if="outerPageFlipEnabled"
+          v-if="pageFlipSimulationEnabled"
           :key="pageFlipBookKey"
           ref="pageFlipBookRef"
+          :turn-mode="simulationDoublePageTurnMode"
+          :current-chapter-index="currentChapterIndex"
           :pages="currentPages"
+          :prev-pages="previousPageFlipPages"
+          :next-pages="nextPageFlipPages"
           :current-page="currentPage"
           :double-page-step="doublePageStep"
           :page-width="readerPageMetrics.pageWidth"
@@ -1131,7 +1252,7 @@ onUnmounted(async () => {
           @page-tap="handlePageFlipTap"
         />
 
-        <div class="page-layer page-current" :style="outerPageFlipEnabled ? { ...pagingVisuals.current, visibility: 'hidden', pointerEvents: 'none' } : pagingVisuals.current">
+        <div class="page-layer page-current" :style="pageFlipSimulationEnabled ? { ...pagingVisuals.current, visibility: 'hidden', pointerEvents: 'none' } : pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="pageContainerStyle">
             <div
               ref="contentRef"
@@ -1150,7 +1271,7 @@ onUnmounted(async () => {
           </div>
         </div>
 
-        <div v-if="!outerPageFlipEnabled && incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
+        <div v-if="!pageFlipSimulationEnabled && incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
           <div class="pg-ctr" :style="pageContainerStyle">
             <div class="pg-spread" :style="pageSpreadStyle">
               <div class="pg-page-slot">
@@ -1164,14 +1285,14 @@ onUnmounted(async () => {
           </div>
         </div>
 
-        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-snapshot" :style="pagingVisuals.currentSnapshot">
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !pageFlipSimulationEnabled" class="page-snapshot" :style="pagingVisuals.currentSnapshot">
           <div v-html="animationState.currentSnapshotHtml"></div>
         </div>
-        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold" :style="pagingVisuals.fold">
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !pageFlipSimulationEnabled" class="page-fold" :style="pagingVisuals.fold">
           <div class="page-fold-inner" :style="pagingVisuals.foldInner" v-html="animationState.currentSnapshotHtml"></div>
         </div>
-        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
-        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !pageFlipSimulationEnabled" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !pageFlipSimulationEnabled" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
       </div>
 
       <!-- Key Hints -->

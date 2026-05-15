@@ -49,7 +49,9 @@ export interface PagingAnimationState {
   mode: FlipMode
   direction: PagingDirection
   progress: number
+  touchXRatio: number
   touchYRatio: number
+  grabXRatio: number
   currentSnapshotHtml: string
 }
 
