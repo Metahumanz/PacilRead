@@ -678,6 +678,107 @@ function getChapterContentBatchJson(bookId: number, chapterIds: number[]) {
   return result
 }
 
+function bookRowToSummary(book: any) {
+  const bookId = Number(book.id)
+  const chapterCount = Number(book.chapterCount || 0)
+  const progressIndex = Math.max(0, Math.min(Number(book.progressIndex || 0), Math.max(0, chapterCount - 1)))
+  const currentChapter = getChapterRowsForBook(bookId)[progressIndex]
+  return {
+    id: bookId,
+    title: String(book.title || '未命名'),
+    author: book.author === undefined || book.author === null ? null : String(book.author),
+    bookType: String(book.bookType || 'text'),
+    readingStatsKey: String(book.readingStatsKey || ''),
+    progressIndex,
+    progressOffset: Number(book.progressOffset || 0),
+    lastReadAt: Number(book.lastReadAt || 0),
+    pinned: Boolean(book.pinned),
+    currentChapterTitle: String(currentChapter?.title || book.currentChapterTitle || ''),
+    chapterCount,
+    coverFile: book.coverFile === undefined || book.coverFile === null ? null : String(book.coverFile),
+    sourceFile: book.sourceFile === undefined || book.sourceFile === null ? null : String(book.sourceFile),
+    createdAt: Number(book.createdAt || 0),
+    updatedAt: Number(book.updatedAt || 0),
+  }
+}
+
+function sortBookSummaries<T extends { pinned: boolean; lastReadAt: number; title: string }>(books: T[]): T[] {
+  return [...books].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    if (a.lastReadAt !== b.lastReadAt) return b.lastReadAt - a.lastReadAt
+    return a.title.localeCompare(b.title, 'zh-CN')
+  })
+}
+
+function sortBookRows(books: any[]): any[] {
+  return [...books].sort((a, b) => {
+    const aPinned = Boolean(a.pinned)
+    const bPinned = Boolean(b.pinned)
+    if (aPinned !== bPinned) return aPinned ? -1 : 1
+    const aLastReadAt = Number(a.lastReadAt || 0)
+    const bLastReadAt = Number(b.lastReadAt || 0)
+    if (aLastReadAt !== bLastReadAt) return bLastReadAt - aLastReadAt
+    return String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN')
+  })
+}
+
+function getBookshelfBooksJson() {
+  const startedAt = performance.now()
+  const books = readJsonEntity('books', []) as any[]
+  const result = sortBookSummaries(books.map(bookRowToSummary))
+  perfLog('library:getBookshelfBooks', startedAt, `books=${result.length}`)
+  return result
+}
+
+function getBookSummaryJson(bookId: number) {
+  const startedAt = performance.now()
+  const books = readJsonEntity('books', []) as any[]
+  const book = books.find(row => Number(row.id) === Number(bookId))
+  const result = book ? bookRowToSummary(book) : null
+  perfLog('library:getBookSummary', startedAt, `book=${bookId} found=${result ? 1 : 0}`)
+  return result
+}
+
+function getMostRecentBookJson() {
+  const startedAt = performance.now()
+  const book = sortBookRows(readJsonEntity('books', []) as any[])[0]
+  const result = book ? bookRowToSummary(book) : null
+  perfLog('library:getMostRecentBook', startedAt, `found=${result ? 1 : 0}`)
+  return result
+}
+
+function updateBookJson(bookId: number, fields: Record<string, unknown>) {
+  const startedAt = performance.now()
+  const allowedFields = new Set([
+    'title',
+    'author',
+    'coverFile',
+    'sourceFile',
+    'progressIndex',
+    'progressOffset',
+    'lastReadAt',
+    'pinned',
+    'currentChapterTitle',
+    'bookType',
+    'readingStatsKey',
+  ])
+  const books = readJsonEntity('books', []) as any[]
+  const idx = books.findIndex(book => Number(book.id) === Number(bookId))
+  if (idx < 0) return null
+
+  const next = { ...books[idx] }
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (!allowedFields.has(key)) continue
+    next[key] = value
+  }
+  next.updatedAt = Date.now()
+  books[idx] = next
+  writeJsonEntity('books', books)
+  const result = bookRowToSummary(next)
+  perfLog('library:updateBook', startedAt, `book=${bookId}`)
+  return result
+}
+
 function deleteBookJson(bookId: number): { success: boolean } {
   const books = readJsonEntity('books', []) as any[]
   const target = books.find(book => Number(book.id) === bookId)
@@ -882,6 +983,10 @@ ipcMain.handle('app:quit', async () => app.quit())
 
 ipcMain.handle('library:importBook', async (_, filePath: string) => importBookJson(filePath))
 ipcMain.handle('library:deleteBook', async (_, bookId: number) => deleteBookJson(bookId))
+ipcMain.handle('library:getBookshelfBooks', async () => getBookshelfBooksJson())
+ipcMain.handle('library:getBookSummary', async (_, bookId: number) => getBookSummaryJson(bookId))
+ipcMain.handle('library:getMostRecentBook', async () => getMostRecentBookJson())
+ipcMain.handle('library:updateBook', async (_, bookId: number, fields: Record<string, unknown>) => updateBookJson(bookId, fields))
 ipcMain.handle('library:getBookChapters', async (_, bookId: number) => getBookChaptersJson(bookId))
 ipcMain.handle('library:getBookChapterList', async (_, bookId: number) => getBookChapterListJson(bookId))
 ipcMain.handle('library:getChapterContentBatch', async (_, bookId: number, chapterIds: number[]) => getChapterContentBatchJson(bookId, chapterIds))

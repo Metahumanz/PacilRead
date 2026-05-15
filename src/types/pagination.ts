@@ -34,6 +34,7 @@ export interface PaginationResult {
 }
 
 export type FlipMode = 'slide' | 'cover' | 'simulation' | 'scroll' | 'none'
+export type SimulationDoublePageTurnMode = 'outerPage' | 'spread'
 
 export type PagingDirection = -1 | 1
 

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
-import { useDataStore } from '../../../composables/useDataStore'
-import type { FlipMode } from '../../../types/pagination'
+import type { FlipMode, SimulationDoublePageTurnMode } from '../../../types/pagination'
 
 interface Book { id: number; title: string; author: string | null }
 
@@ -17,7 +16,7 @@ const emit = defineEmits<{
 
 const settings = useSettings()
 const {
-  sliderMode, flipMode, saveSetting, saveAllStyling,
+  sliderMode, flipMode, pageMode, simulationDoublePageTurnMode, saveSetting, saveAllStyling,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight, hudFollowPage,
@@ -44,8 +43,7 @@ const saveBookInfo = () => {
     const title = editTitle.value.trim() || '未命名'
     const author = editAuthor.value.trim()
     try {
-      const { updateBook } = useDataStore()
-      await updateBook(props.book!.id, { title, author: author || null })
+      await window.electronAPI.library.updateBook(props.book!.id, { title, author: author || null })
       emit('update-book', { title, author })
     } catch (e) {
       console.error('Save book info failed:', e)
@@ -69,6 +67,11 @@ const hudOptions = [
 const setFlipMode = (mode: FlipMode) => {
   flipMode.value = mode
   saveSetting('reader_flipMode', mode)
+}
+
+const setSimulationDoublePageTurnMode = (mode: SimulationDoublePageTurnMode) => {
+  simulationDoublePageTurnMode.value = mode
+  saveSetting('reader_simulationDoublePageTurnMode', mode)
 }
 
 const saveAutoNight = () => {
@@ -111,6 +114,14 @@ const saveAutoNight = () => {
         <button @click="setFlipMode('simulation')" :class="{active: flipMode==='simulation'}">仿真</button>
         <button @click="setFlipMode('scroll')" :class="{active: flipMode==='scroll'}">滚动</button>
         <button @click="setFlipMode('none')" :class="{active: flipMode==='none'}">无动画</button>
+      </div>
+    </div>
+
+    <div class="sr" v-if="flipMode === 'simulation' && pageMode === 'double'">
+      <label>双页仿真方式</label>
+      <div class="btn-group">
+        <button @click="setSimulationDoublePageTurnMode('outerPage')" :class="{active: simulationDoublePageTurnMode==='outerPage'}">外侧单页</button>
+        <button @click="setSimulationDoublePageTurnMode('spread')" :class="{active: simulationDoublePageTurnMode==='spread'}">整张双页</button>
       </div>
     </div>
 

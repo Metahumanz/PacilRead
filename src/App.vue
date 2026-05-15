@@ -3,7 +3,6 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useSettings } from './composables/useSettings'
 import { useAppTheme } from './composables/useAppTheme'
 import { hasReadingStatsHistory } from './composables/useReadingStats'
-import { useDataStore } from './composables/useDataStore'
 import type { BookmarkTarget } from './composables/useBookmarks'
 import BookshelfView from './components/BookshelfView.vue'
 import ReaderView from './components/ReaderView.vue'
@@ -250,11 +249,9 @@ onMounted(async () => {
   
   if (autoOpenLastRead.value) {
     try {
-      const dataStore2 = useDataStore()
-      if (!dataStore2.dataLoaded.value) await dataStore2.loadAllData()
-      const sortedBooks = dataStore2.getBooksSorted()
-      if (sortedBooks.length > 0) {
-        selectedBookId.value = sortedBooks[0].id
+      const recentBook = await window.electronAPI.library.getMostRecentBook()
+      if (recentBook) {
+        selectedBookId.value = recentBook.id
         selectedBookmarkTarget.value = null
         currentView.value = 'reader'
       }

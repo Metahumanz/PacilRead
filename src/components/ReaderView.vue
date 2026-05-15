@@ -11,7 +11,6 @@ import { useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
-import { useDataStore } from '../composables/useDataStore'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
 
@@ -27,6 +26,7 @@ import TTSPanel from './reader/panels/TTSPanel.vue'
 import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 import PageSliceView from './reader/PageSliceView.vue'
+import PageFlipOuterBook from './reader/PageFlipOuterBook.vue'
 
 interface Chapter {
   id: number
@@ -102,7 +102,7 @@ const {
   fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginTop, marginBottom,
   fontFamily, fontColor, coverColor, bgImage, blurAmount,
   textAlign, pageMode, doublePageStep,
-  flipMode, flipSpeed, autoPageSpeed,
+  flipMode, flipSpeed, simulationDoublePageTurnMode, autoPageSpeed,
   ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   readingTimeTrackingEnabled, readingTimeStatsHidden,
@@ -142,9 +142,7 @@ const toggleAlwaysOnTop = () => {
 const fetchBook = async () => {
   const startedAt = perfNow()
   try {
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    const b = dataStore.getBook(props.bookId)
+    const b = await window.electronAPI.library.getBookSummary(props.bookId)
     if (b) {
       book.value = {
         id: b.id,
@@ -323,11 +321,11 @@ const persistProgressNow = async () => {
   if (!readerProgressReady) return
   const startedAt = perfNow()
   try {
-    const { updateBook } = useDataStore()
-    await updateBook(props.bookId, {
+    await window.electronAPI.library.updateBook(props.bookId, {
       progressIndex: currentChapterIndex.value,
       progressOffset: pagination.currentPage.value,
       lastReadAt: Date.now(),
+      currentChapterTitle: currentChapterData.value?.title || '',
     })
     
     uploadProgressToWebdav({
@@ -473,6 +471,14 @@ const incomingRightSlice = computed(() => {
   return incomingPages.value[target.pageIndex + 1] ?? null
 })
 
+const outerPageFlipEnabled = computed(() => (
+  pageMode.value === 'double'
+  && flipMode.value === 'simulation'
+  && simulationDoublePageTurnMode.value === 'outerPage'
+))
+const pageFlipBookRef = ref<InstanceType<typeof PageFlipOuterBook> | null>(null)
+let pageFlipClickSuppressedUntil = 0
+
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
 
@@ -484,11 +490,25 @@ const recordReadingActivity = () => {
 
 const trackedNextPage = () => {
   recordReadingActivity()
+  if (outerPageFlipEnabled.value) {
+    if (pageFlipBookRef.value?.flipNext()) return true
+    if (!currentPagesComplete.value) {
+      prewarmChapterAt(currentChapterIndex.value).then(() => {
+        nextTick(() => requestAnimationFrame(() => pageFlipBookRef.value?.flipNext()))
+      })
+      return true
+    }
+    return slideToNextChapter()
+  }
   return nextPage()
 }
 
 const trackedPrevPage = () => {
   recordReadingActivity()
+  if (outerPageFlipEnabled.value) {
+    if (pageFlipBookRef.value?.flipPrev()) return true
+    return prevPage()
+  }
   return prevPage()
 }
 
@@ -505,6 +525,34 @@ const trackedGoToChapter = (idx: number, keepMenu = false) => {
 const trackedSetCurrentPage = (page: number) => {
   recordReadingActivity()
   currentPage.value = page
+}
+
+const handlePageFlip = (pageIndex: number) => {
+  recordReadingActivity()
+  currentPage.value = Math.max(0, Math.min(totalPages.value - 1, pageIndex))
+}
+
+const handlePageFlipDrag = () => {
+  recordReadingActivity()
+  pageFlipClickSuppressedUntil = Date.now() + 500
+}
+
+const handleReaderTap = (clientX: number, clientY: number) => {
+  recordReadingActivity()
+  if (showMenu.value) { closeAll(); return }
+  if (handleTtsClick(clientX, clientY)) return
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const isCenterCol = clientX > w / 3 && clientX < (w / 3) * 2
+  const isCenterRow = clientY > h / 3 && clientY < (h / 3) * 2
+  if (isCenterCol && isCenterRow) showMenu.value = true
+  else if (clientX < w / 3 || (isCenterCol && clientY < h / 3)) trackedPrevPage()
+  else trackedNextPage()
+}
+
+const handlePageFlipTap = (point: { clientX: number; clientY: number }) => {
+  pageFlipClickSuppressedUntil = Date.now() + 120
+  handleReaderTap(point.clientX, point.clientY)
 }
 
 const getChapterOffset = () => {
@@ -634,6 +682,38 @@ const pageSpreadStyle = computed<CSSProperties>(() => ({
     : `${readerPageMetrics.value.pageWidth}px`,
   height: `${readerPageMetrics.value.pageGridHeight}px`,
 } as CSSProperties))
+
+const readerPageHeight = computed(() => (
+  readerPageMetrics.value.pageGridHeight
+  + readerPageMetrics.value.gridPaddingTop
+  + readerPageMetrics.value.gridPaddingBottom
+))
+
+const pageFlipBookKey = computed(() => [
+  currentChapterData.value?.id ?? 'none',
+  currentPages.value.length,
+  currentPagesComplete.value ? 'complete' : 'partial',
+  doublePageStep.value,
+  Math.round(readerPageMetrics.value.pageWidth),
+  Math.round(readerPageHeight.value),
+  Math.round(readerPageMetrics.value.pageGridHeight),
+  Math.round(readerPageMetrics.value.gridPaddingTop),
+  Math.round(readerPageMetrics.value.gridPaddingBottom),
+  fontSize.value,
+  lineHeight.value,
+  letterSpacing.value,
+  fontFamily.value,
+  fontWeight.value,
+  textAlign.value,
+  marginX.value,
+  pIndent.value,
+  pSpacing.value,
+  readerPaperColor.value,
+  readerPaperImage.value,
+  readerPageBgFilter.value,
+  readerPageBgTransform.value,
+  readerPageBgScrim.value,
+].join('|'))
 
 // HUD logic handled by useHUD
 const calculateHudProgress = (chapterIndex: number, pageIndex: number, pageCount: number) => {
@@ -773,31 +853,27 @@ const isReaderChromeTarget = (target: EventTarget | null) => {
 const handleClick = (e: MouseEvent) => {
   if (consumeClickAfterDrag()) return
   if (isReaderChromeTarget(e.target)) return
-  recordReadingActivity()
-  if (showMenu.value) { closeAll(); return }
-  const x = e.clientX, y = e.clientY
-  if (handleTtsClick(x, y)) return
-  const w = window.innerWidth, h = window.innerHeight
-  const isCenterCol = x > w / 3 && x < (w / 3) * 2
-  const isCenterRow = y > h / 3 && y < (h / 3) * 2
-  if (isCenterCol && isCenterRow) showMenu.value = true
-  else if (x < w / 3 || (isCenterCol && y < h / 3)) trackedPrevPage()
-  else trackedNextPage()
+  if (outerPageFlipEnabled.value && Date.now() < pageFlipClickSuppressedUntil) return
+  handleReaderTap(e.clientX, e.clientY)
 }
 
 const handlePointerDown = (e: PointerEvent) => {
+  if (outerPageFlipEnabled.value) return
   if (showMenu.value || isReaderChromeTarget(e.target)) return
   recordReadingActivity()
   paginationPointerDown(e)
 }
 const handlePointerMove = (e: PointerEvent) => {
+  if (outerPageFlipEnabled.value) return
   if (showMenu.value) return
   paginationPointerMove(e)
 }
 const handlePointerUp = (e: PointerEvent) => {
+  if (outerPageFlipEnabled.value) return
   paginationPointerUp(e)
 }
 const handlePointerCancel = (e: PointerEvent) => {
+  if (outerPageFlipEnabled.value) return
   paginationPointerCancel(e)
 }
 const handleContextMenu = (e: MouseEvent) => {
@@ -1024,7 +1100,38 @@ onUnmounted(async () => {
           backgroundColor: (bgImage || shouldOverrideAutoNight) ? 'transparent' : readerPaperColor
         }"
       >
-        <div class="page-layer page-current" :style="pagingVisuals.current">
+        <PageFlipOuterBook
+          v-if="outerPageFlipEnabled"
+          :key="pageFlipBookKey"
+          ref="pageFlipBookRef"
+          :pages="currentPages"
+          :current-page="currentPage"
+          :double-page-step="doublePageStep"
+          :page-width="readerPageMetrics.pageWidth"
+          :page-height="readerPageHeight"
+          :page-grid-height="readerPageMetrics.pageGridHeight"
+          :grid-padding-top="readerPageMetrics.gridPaddingTop"
+          :grid-padding-bottom="readerPageMetrics.gridPaddingBottom"
+          :margin-x="readerPageMetrics.effectiveMarginX"
+          :content-column-width="readerPageMetrics.contentColumnWidth"
+          :line-height-px="readerPageMetrics.lineHeightPx"
+          :p-indent="pIndent"
+          :p-spacing="pSpacing"
+          :page-style="textStyle"
+          :paper-color="readerPaperColor"
+          :paper-image="readerPaperImage"
+          :bg-filter="readerPageBgFilter"
+          :bg-transform="readerPageBgTransform"
+          :bg-scrim="readerPageBgScrim"
+          :justify="textAlign === 'justify'"
+          :show-hud="!showMenu && hudFollowPage"
+          :hud-props="currentHudProps"
+          @flip="handlePageFlip"
+          @page-drag="handlePageFlipDrag"
+          @page-tap="handlePageFlipTap"
+        />
+
+        <div class="page-layer page-current" :style="outerPageFlipEnabled ? { ...pagingVisuals.current, visibility: 'hidden', pointerEvents: 'none' } : pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="pageContainerStyle">
             <div
               ref="contentRef"
@@ -1043,7 +1150,7 @@ onUnmounted(async () => {
           </div>
         </div>
 
-        <div v-if="incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
+        <div v-if="!outerPageFlipEnabled && incomingTarget && incomingChapterData" class="page-layer page-incoming" :style="pagingVisuals.incoming">
           <div class="pg-ctr" :style="pageContainerStyle">
             <div class="pg-spread" :style="pageSpreadStyle">
               <div class="pg-page-slot">
@@ -1057,14 +1164,14 @@ onUnmounted(async () => {
           </div>
         </div>
 
-        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-snapshot" :style="pagingVisuals.currentSnapshot">
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-snapshot" :style="pagingVisuals.currentSnapshot">
           <div v-html="animationState.currentSnapshotHtml"></div>
         </div>
-        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold" :style="pagingVisuals.fold">
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold" :style="pagingVisuals.fold">
           <div class="page-fold-inner" :style="pagingVisuals.foldInner" v-html="animationState.currentSnapshotHtml"></div>
         </div>
-        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
-        <div v-if="animationState.active && animationState.mode === 'simulation'" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold-shadow" :style="pagingVisuals.shadow"></div>
+        <div v-if="animationState.active && animationState.mode === 'simulation' && !outerPageFlipEnabled" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
       </div>
 
       <!-- Key Hints -->

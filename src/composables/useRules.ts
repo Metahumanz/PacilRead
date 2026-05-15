@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { useDataStore, type Rule } from './useDataStore'
+import type { Rule } from './useDataStore'
 
 export type ReplacementRule = Rule
 
@@ -8,13 +8,17 @@ export function useRules() {
 
   const fetchRules = async (bookId: number) => {
     try {
-      const dataStore = useDataStore()
-      rules.value = dataStore.getRules(bookId).map(r => ({
-        ...r,
-        book_id: r.bookId,
-        is_regex: r.regex ? 1 : 0,
-        active: r.active ? 1 : 0,
-      })) as any
+      const rows = await window.electronAPI.data.readEntity('rules')
+      const allRules = Array.isArray(rows) ? rows as Rule[] : []
+      rules.value = allRules
+        .filter(r => r.scope === 'global' || (r.scope === 'book' && r.bookId === bookId))
+        .sort((a, b) => a.id - b.id)
+        .map(r => ({
+          ...r,
+          book_id: r.bookId,
+          is_regex: r.regex ? 1 : 0,
+          active: r.active ? 1 : 0,
+        })) as any
     } catch (e) {
       console.error('Failed to fetch rules:', e)
     }
