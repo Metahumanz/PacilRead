@@ -601,6 +601,7 @@ export function usePagination(opts: {
 
     if (state.mode === 'cover') {
       const reveal = width * progress
+      const seamBleed = reveal > 0 ? 2 : 0
       if (direction < 0) {
         return {
           current: { ...baseLayer, zIndex: 2 },
@@ -625,7 +626,7 @@ export function usePagination(opts: {
         incoming: {
           ...baseLayer,
           zIndex: 2,
-          clipPath: clipInset(0, 0, 0, width - reveal),
+          clipPath: clipInset(0, 0, 0, width - reveal - seamBleed),
         },
         currentSnapshot: hidden,
         fold: hidden,
