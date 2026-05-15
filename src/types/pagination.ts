@@ -28,6 +28,11 @@ export interface PageSlice {
   extraLineGap: number
 }
 
+export interface PaginationResult {
+  slices: PageSlice[]
+  complete: boolean
+}
+
 export type FlipMode = 'slide' | 'cover' | 'simulation' | 'scroll' | 'none'
 
 export type PagingDirection = -1 | 1

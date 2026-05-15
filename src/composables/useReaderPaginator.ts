@@ -1,11 +1,20 @@
 import { computed, nextTick, ref, type Ref } from 'vue'
-import type { PageLine, PageSlice, PaginationSnapshot } from '../types/pagination'
+import type { PageLine, PageSlice, PaginationResult, PaginationSnapshot } from '../types/pagination'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 
-const cachedPageSlicesMap = new Map<string, PageSlice[]>()
+interface PrewarmOptions {
+  mode?: 'partial' | 'full'
+  targetPageIndex?: number
+  targetOffset?: number
+  extraPagesAfterTarget?: number
+}
+
+const cachedPageSlicesMap = new Map<string, PaginationResult>()
 const cacheInsertionOrder: string[] = []
+const pendingPaginationTasks = new Map<string, Promise<PaginationResult | null>>()
 const cacheVersion = ref(0)
 const MAX_CACHE_ENTRIES = 50
+let cacheEpoch = 0
 
 function computeSnapshotHash(snap: Omit<PaginationSnapshot, 'hash'>): string {
   const parts = [
@@ -29,11 +38,15 @@ function cacheKey(chapterId: number, snapshotHash: string): string {
   return `${chapterId}@${snapshotHash}`
 }
 
-function cacheSet(key: string, slices: PageSlice[]): void {
+function cacheSet(key: string, result: PaginationResult): void {
+  const existing = cachedPageSlicesMap.get(key)
+  if (existing?.complete && !result.complete) return
+  if (!result.complete && existing && !existing.complete && existing.slices.length >= result.slices.length) return
+
   if (!cachedPageSlicesMap.has(key)) {
     cacheInsertionOrder.push(key)
   }
-  cachedPageSlicesMap.set(key, slices)
+  cachedPageSlicesMap.set(key, result)
   while (cachedPageSlicesMap.size > MAX_CACHE_ENTRIES) {
     const oldest = cacheInsertionOrder.shift()
     if (oldest) cachedPageSlicesMap.delete(oldest)
@@ -183,7 +196,7 @@ function splitMeasuredText(params: {
   return lines
 }
 
-function finalizeSlices(rawPages: PageLine[][], pageGridHeight: number): PageSlice[] {
+function finalizeSlices(rawPages: PageLine[][], pageGridHeight: number, complete = true): PageSlice[] {
   const safePages = rawPages.length > 0 ? rawPages : [[]]
   return safePages.map((rawLines, pageIndex) => {
     const lines = rawLines.map((line) => ({ ...line }))
@@ -194,7 +207,7 @@ function finalizeSlices(rawPages: PageLine[][], pageGridHeight: number): PageSli
     const startChar = bodyLines.length > 0 ? bodyLines[0].bodyStart : 0
     const endChar = bodyLines.length > 0 ? bodyLines[bodyLines.length - 1].bodyEnd : startChar
     const baseHeight = lines.reduce((sum, line) => sum + line.height + line.afterSpacing, 0)
-    const isLast = pageIndex === safePages.length - 1
+    const isLast = complete && pageIndex === safePages.length - 1
     const adjustableGaps = Math.max(0, lines.length - 1)
     const extraLineGap = !isLast && adjustableGaps > 0
       ? Math.max(0, (pageGridHeight - baseHeight) / adjustableGaps)
@@ -216,7 +229,7 @@ function finalizeSlices(rawPages: PageLine[][], pageGridHeight: number): PageSli
   })
 }
 
-function paginateLines(lines: PageLine[], pageGridHeight: number): PageSlice[] {
+function paginateLines(lines: PageLine[], pageGridHeight: number, complete = true): PageSlice[] {
   const pages: PageLine[][] = []
   let current: PageLine[] = []
   let currentHeight = 0
@@ -236,7 +249,28 @@ function paginateLines(lines: PageLine[], pageGridHeight: number): PageSlice[] {
     pages.push(current)
   }
 
-  return finalizeSlices(pages, pageGridHeight)
+  return finalizeSlices(pages, pageGridHeight, complete)
+}
+
+function hasReachedPaginationGoal(slices: PageSlice[], opts: PrewarmOptions): boolean {
+  if (opts.mode !== 'partial' || slices.length === 0) return false
+  const extraPages = Math.max(0, opts.extraPagesAfterTarget ?? 2)
+
+  if (Number.isFinite(opts.targetPageIndex)) {
+    return slices.length > Math.max(0, Math.floor(opts.targetPageIndex!)) + extraPages
+  }
+
+  if (Number.isFinite(opts.targetOffset)) {
+    const safeOffset = Math.max(0, Math.floor(opts.targetOffset!))
+    const containingPage = slices.findIndex((slice) => (
+      slice.bodyEndInSlice >= 0
+      && safeOffset >= slice.startChar
+      && safeOffset < Math.max(slice.endChar, slice.startChar + 1)
+    ))
+    return containingPage >= 0 && slices.length > containingPage + extraPages
+  }
+
+  return slices.length > extraPages + 1
 }
 
 export function useReaderPaginator(opts: {
@@ -306,82 +340,116 @@ export function useReaderPaginator(opts: {
     bodyText: string,
     title: string,
     snapshot: PaginationSnapshot,
-  ): Promise<PageSlice[] | null> => {
+    options: PrewarmOptions = {},
+  ): Promise<PaginationResult | null> => {
     const key = cacheKey(chapterId, snapshot.hash)
     const cached = cachedPageSlicesMap.get(key)
-    if (cached) return cached
+    const wantsFull = options.mode !== 'partial'
+    if (cached && (!wantsFull || cached.complete)) return cached
     if (snapshot.containerWidth <= 0 || snapshot.containerHeight <= 0 || snapshot.contentColumnWidth <= 0) return null
+    const taskKey = [
+      key,
+      options.mode || 'full',
+      options.targetPageIndex ?? '',
+      options.targetOffset ?? '',
+      options.extraPagesAfterTarget ?? '',
+    ].join('|')
+    const pending = pendingPaginationTasks.get(taskKey)
+    if (pending) return pending
+    const taskEpoch = cacheEpoch
 
-    let measureRoot: ReturnType<typeof createMeasureRoot> | null = null
-    try {
-      measureRoot = createMeasureRoot(snapshot)
-      await nextTick()
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    const task = (async (): Promise<PaginationResult | null> => {
+      let measureRoot: ReturnType<typeof createMeasureRoot> | null = null
+      try {
+        measureRoot = createMeasureRoot(snapshot)
+        await nextTick()
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
 
-      const lines: PageLine[] = []
-      const titleFontSize = snapshot.fontSize * 1.4
-      const titleLineHeight = titleFontSize * 1.35
-      if (title && snapshot.chapterTitleDisplay !== 'none') {
-        lines.push(...splitMeasuredText({
-          root: measureRoot.root,
-          text: title,
-          keyPrefix: 'title',
-          kind: 'title',
-          height: titleLineHeight,
-          fontSize: titleFontSize,
-          fontWeight: Math.max(700, snapshot.fontWeight),
-          lineHeight: titleLineHeight,
-          textAlign: snapshot.chapterTitleDisplay === 'center' ? 'center' : 'left',
-          indentPx: 0,
-          afterBlockSpacing: titleFontSize * 1.5,
-          bodyOffset: -1,
-        }))
+        const lines: PageLine[] = []
+        const titleFontSize = snapshot.fontSize * 1.4
+        const titleLineHeight = titleFontSize * 1.35
+        if (title && snapshot.chapterTitleDisplay !== 'none') {
+          lines.push(...splitMeasuredText({
+            root: measureRoot.root,
+            text: title,
+            keyPrefix: 'title',
+            kind: 'title',
+            height: titleLineHeight,
+            fontSize: titleFontSize,
+            fontWeight: Math.max(700, snapshot.fontWeight),
+            lineHeight: titleLineHeight,
+            textAlign: snapshot.chapterTitleDisplay === 'center' ? 'center' : 'left',
+            indentPx: 0,
+            afterBlockSpacing: titleFontSize * 1.5,
+            bodyOffset: -1,
+          }))
+        }
+
+        const paragraphs = extractParagraphs(bodyHtml, bodyText)
+        let bodyOffset = 0
+        for (let index = 0; index < paragraphs.length; index++) {
+          const paragraph = paragraphs[index]
+          const isLastParagraph = index === paragraphs.length - 1
+          lines.push(...splitMeasuredText({
+            root: measureRoot.root,
+            text: paragraph,
+            keyPrefix: `body-${index}`,
+            kind: 'body',
+            height: snapshot.lineHeightPx,
+            fontSize: snapshot.fontSize,
+            fontWeight: snapshot.fontWeight,
+            lineHeight: snapshot.lineHeightPx,
+            textAlign: snapshot.textAlign,
+            indentPx: snapshot.fontSize * snapshot.pIndent,
+            afterBlockSpacing: isLastParagraph ? 0 : snapshot.fontSize * snapshot.pSpacing,
+            bodyOffset,
+          }))
+          bodyOffset += paragraph.length + (isLastParagraph ? 0 : 1)
+
+          if (index % 8 === 7) {
+            const partialSlices = paginateLines(lines, snapshot.pageGridHeight, false)
+            if (hasReachedPaginationGoal(partialSlices, options)) {
+              const result = { slices: partialSlices, complete: false }
+              if (taskEpoch !== cacheEpoch) return null
+              cacheSet(key, result)
+              return result
+            }
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          }
+        }
+
+        const slices = paginateLines(lines, snapshot.pageGridHeight, true)
+        const result = { slices, complete: true }
+        if (taskEpoch !== cacheEpoch) return null
+        cacheSet(key, result)
+        return result
+      } finally {
+        if (measureRoot) measureRoot.destroy()
+        pendingPaginationTasks.delete(taskKey)
       }
+    })()
 
-      const paragraphs = extractParagraphs(bodyHtml, bodyText)
-      let bodyOffset = 0
-      paragraphs.forEach((paragraph, index) => {
-        const isLastParagraph = index === paragraphs.length - 1
-        lines.push(...splitMeasuredText({
-          root: measureRoot!.root,
-          text: paragraph,
-          keyPrefix: `body-${index}`,
-          kind: 'body',
-          height: snapshot.lineHeightPx,
-          fontSize: snapshot.fontSize,
-          fontWeight: snapshot.fontWeight,
-          lineHeight: snapshot.lineHeightPx,
-          textAlign: snapshot.textAlign,
-          indentPx: snapshot.fontSize * snapshot.pIndent,
-          afterBlockSpacing: isLastParagraph ? 0 : snapshot.fontSize * snapshot.pSpacing,
-          bodyOffset,
-        }))
-        bodyOffset += paragraph.length + (isLastParagraph ? 0 : 1)
-      })
-
-      const slices = paginateLines(lines, snapshot.pageGridHeight)
-      cacheSet(key, slices)
-      return slices
-    } finally {
-      if (measureRoot) measureRoot.destroy()
-    }
+    pendingPaginationTasks.set(taskKey, task)
+    return task
   }
 
   const getPagesForChapter = (chapterId: number, snapshotHash: string): {
     slices: PageSlice[] | null
+    complete: boolean
     isCacheHit: boolean
   } => {
     cacheVersion.value
     const key = cacheKey(chapterId, snapshotHash)
-    const slices = cachedPageSlicesMap.get(key) ?? null
-    isCacheHit.value = slices !== null
-    return { slices, isCacheHit: slices !== null }
+    const result = cachedPageSlicesMap.get(key) ?? null
+    isCacheHit.value = result !== null
+    return { slices: result?.slices ?? null, complete: result?.complete ?? false, isCacheHit: result !== null }
   }
 
   const getCachedPageCount = (chapterId: number, snapshotHash: string): number | null => {
     cacheVersion.value
-    return cachedPageSlicesMap.get(cacheKey(chapterId, snapshotHash))?.length ?? null
+    const result = cachedPageSlicesMap.get(cacheKey(chapterId, snapshotHash))
+    return result?.complete ? result.slices.length : null
   }
 
   const findPageForOffset = (slices: PageSlice[] | null | undefined, offset: number): number => {
@@ -399,6 +467,8 @@ export function useReaderPaginator(opts: {
   const clearCache = (): void => {
     cachedPageSlicesMap.clear()
     cacheInsertionOrder.length = 0
+    pendingPaginationTasks.clear()
+    cacheEpoch += 1
     isCacheHit.value = false
     cacheVersion.value += 1
   }

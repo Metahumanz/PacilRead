@@ -59,6 +59,7 @@ export function usePagination(opts: {
   currentChapterIndex: Ref<number>
   saveProgress: () => void
   precomputedPages?: Ref<PageSlice[] | null>
+  precomputedPagesComplete?: Ref<boolean>
   pageCacheHit?: Ref<boolean>
   findPageForOffset?: (slices: PageSlice[] | null | undefined, offset: number) => number
   getPageCountForChapter?: (chapterIndex: number) => number | null
@@ -184,7 +185,7 @@ export function usePagination(opts: {
   }
 
   watch(
-    () => opts.precomputedPages?.value?.length ?? 0,
+    () => `${opts.precomputedPages?.value?.length ?? 0}:${opts.precomputedPagesComplete?.value === false ? '0' : '1'}`,
     () => calculatePages(),
     { flush: 'post' },
   )
@@ -212,6 +213,9 @@ export function usePagination(opts: {
       const nextPageIndex = currentPage.value + step
       if (nextPageIndex < totalPages.value) {
         return { chapterIndex: opts.currentChapterIndex.value, pageIndex: nextPageIndex }
+      }
+      if (opts.precomputedPages?.value && opts.precomputedPagesComplete?.value === false) {
+        return null
       }
       if (opts.currentChapterIndex.value < opts.chapters.value.length - 1) {
         return { chapterIndex: opts.currentChapterIndex.value + 1, pageIndex: 0 }
