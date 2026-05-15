@@ -29,6 +29,8 @@ export interface ElectronAPI {
       body_text_missing: number
       body_text_fallback: string | null
     }>>
+    getBookChapterList: (bookId: number) => Promise<ChapterMeta[]>
+    getChapterContentBatch: (bookId: number, chapterIds: number[]) => Promise<ChapterContent[]>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
     hasBookChapterTextFiles: (bookId: number) => Promise<boolean>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
@@ -83,6 +85,21 @@ export interface ElectronAPI {
     onMimoDone: (cb: () => void) => () => void
     onMimoError: (cb: (err: string) => void) => () => void
   }
+}
+
+export interface ChapterMeta {
+  id: number
+  title: string
+  order_index: number
+  body_text_storage: string
+  body_text_missing: number
+  body_text_size?: number
+}
+
+export interface ChapterContent extends ChapterMeta {
+  body: string
+  body_text: string
+  body_text_fallback: string | null
 }
 
 declare global {

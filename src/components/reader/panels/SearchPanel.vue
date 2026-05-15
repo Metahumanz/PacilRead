@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { perfLog, perfNow } from '../../../utils/perf'
 
-interface Chapter { id: number; title: string; body: string; body_text: string; order_index: number }
-interface SearchResult { chapterIndex: number; chapterTitle: string; snippet: string }
+interface Chapter { id: number; title: string; body?: string; body_text?: string; order_index: number }
+interface ChapterContent { id: number; body_text: string; body?: string }
+interface SearchResult { chapterIndex: number; matchIndex: number; chapterTitle: string; snippet: string }
 
 const props = defineProps<{
+  bookId: number
   chapters: Chapter[]
 }>()
 
@@ -16,34 +19,63 @@ const emit = defineEmits<{
 const searchQuery = ref('')
 const searchResults = ref<SearchResult[]>([])
 const searching = ref(false)
+let searchRunId = 0
 
 const doSearch = async () => {
+  const runId = ++searchRunId
   const q = searchQuery.value.trim()
-  if (!q) { searchResults.value = []; return }
-  
+  if (!q) { searchResults.value = []; searching.value = false; return }
+  const queryLower = q.toLowerCase()
+  const startedAt = perfNow()
   searching.value = true
   try {
     const results: SearchResult[] = []
-    for (let i = 0; i < props.chapters.length; i++) {
-      const plain = props.chapters[i].body_text || props.chapters[i].body.replace(/<[^>]+>/g, '')
-      let startIndex = 0
-      while (startIndex < plain.length) {
-        const idx = plain.toLowerCase().indexOf(q.toLowerCase(), startIndex)
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 20)
-          const end = Math.min(plain.length, idx + q.length + 40)
+    const batchSize = 8
+    for (let start = 0; start < props.chapters.length; start += batchSize) {
+      if (runId !== searchRunId) return
+      const batch = props.chapters.slice(start, start + batchSize)
+      const idsToLoad = batch
+        .filter((chapter) => !chapter.body_text && !chapter.body)
+        .map((chapter) => chapter.id)
+      const loaded = idsToLoad.length > 0
+        ? await window.electronAPI.library.getChapterContentBatch(props.bookId, idsToLoad) as ChapterContent[]
+        : []
+      if (runId !== searchRunId) return
+      const loadedById = new Map(loaded.map((chapter) => [chapter.id, chapter]))
+
+      for (let offset = 0; offset < batch.length; offset++) {
+        const chapter = batch[offset]
+        const i = start + offset
+        const loadedChapter = loadedById.get(chapter.id)
+        const plain = chapter.body_text || loadedChapter?.body_text || (chapter.body || loadedChapter?.body || '').replace(/<[^>]+>/g, '')
+        const plainLower = plain.toLowerCase()
+        let matchIndex = 0
+        let startIndex = 0
+        while (startIndex < plain.length) {
+          const idx = plainLower.indexOf(queryLower, startIndex)
+          if (idx < 0) break
+          const snippetStart = Math.max(0, idx - 20)
+          const snippetEnd = Math.min(plain.length, idx + q.length + 40)
           results.push({
             chapterIndex: i,
-            chapterTitle: props.chapters[i].title,
-            snippet: (start > 0 ? '...' : '') + plain.substring(start, end) + (end < plain.length ? '...' : '')
+            matchIndex: matchIndex++,
+            chapterTitle: chapter.title,
+            snippet: (snippetStart > 0 ? '...' : '') + plain.substring(snippetStart, snippetEnd) + (snippetEnd < plain.length ? '...' : '')
           })
           startIndex = idx + q.length
-        } else break
+        }
       }
+      searchResults.value = [...results]
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
     }
-    searchResults.value = results
-  } catch (e) { console.error(e) }
-  searching.value = false
+  } catch (e) {
+    console.error(e)
+  } finally {
+    if (runId === searchRunId) {
+      searching.value = false
+      perfLog('reader:search', startedAt, `chapters=${props.chapters.length} results=${searchResults.value.length}`)
+    }
+  }
 }
 
 const handleJump = (idx: number) => {
@@ -61,7 +93,7 @@ const handleJump = (idx: number) => {
     <div v-if="searchResults.length > 0" class="search-count">找到 {{ searchResults.length }} 个结果</div>
     <div v-else-if="searchQuery && !searching" class="search-count empty">未找到匹配内容</div>
     <div class="search-list">
-      <button v-for="sr in searchResults" :key="sr.chapterIndex" @click="handleJump(sr.chapterIndex)" class="search-item">
+      <button v-for="sr in searchResults" :key="`${sr.chapterIndex}-${sr.matchIndex}`" @click="handleJump(sr.chapterIndex)" class="search-item">
         <span class="sr-ch">{{ sr.chapterTitle }}</span>
         <span class="sr-snip">{{ sr.snippet }}</span>
       </button>

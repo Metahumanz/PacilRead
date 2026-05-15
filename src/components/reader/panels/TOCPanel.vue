@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch } from 'vue'
 
-interface Chapter { id: number; title: string; body: string; order_index: number }
+interface Chapter { id: number; title: string; order_index: number }
 
 const props = defineProps<{
   chapters: Chapter[]
