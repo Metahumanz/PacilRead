@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteBook: (bookId: number) => ipcRenderer.invoke('library:deleteBook', bookId),
     getSize: () => ipcRenderer.invoke('library:getSize'),
     getBookChapters: (bookId: number) => ipcRenderer.invoke('library:getBookChapters', bookId),
+    getBookChapterList: (bookId: number) => ipcRenderer.invoke('library:getBookChapterList', bookId),
+    getChapterContentBatch: (bookId: number, chapterIds: number[]) => ipcRenderer.invoke('library:getChapterContentBatch', bookId, chapterIds),
     getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('library:getBookIdsWithFileGzipChapters'),
     hasBookChapterTextFiles: (bookId: number) => ipcRenderer.invoke('library:hasBookChapterTextFiles', bookId),
     createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('library:createBookChapterTextZip', bookId),

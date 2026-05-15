@@ -26,28 +26,55 @@ const JSON_FILES: Record<string, string> = {
   settings: 'settings.json',
 }
 
+type JsonEntityType = keyof typeof JSON_FILES
+
+const jsonEntityCache = new Map<JsonEntityType, unknown>()
+let chaptersByBookIdCache: Map<number, any[]> | null = null
+
+function perfLog(label: string, startedAt: number, extra = ''): void {
+  if (!is.dev && process.env.PACILREAD_PERF !== '1') return
+  const elapsed = Math.round((performance.now() - startedAt) * 10) / 10
+  console.log(`[Perf] ${label}: ${elapsed}ms${extra ? ` ${extra}` : ''}`)
+}
+
+function invalidateDerivedEntityCache(entityType: JsonEntityType): void {
+  if (entityType === 'chapters') {
+    chaptersByBookIdCache = null
+  }
+}
+
 function ensureDataDir(): void {
   mkdirSync(DATA_DIR, { recursive: true })
 }
 
-function readJsonEntity<T>(entityType: keyof typeof JSON_FILES, defaultVal: T): T {
+function readJsonEntity<T>(entityType: JsonEntityType, defaultVal: T): T {
+  if (jsonEntityCache.has(entityType)) {
+    return jsonEntityCache.get(entityType) as T
+  }
   const filePath = join(DATA_DIR, JSON_FILES[entityType])
-  if (!existsSync(filePath)) return defaultVal
+  if (!existsSync(filePath)) {
+    jsonEntityCache.set(entityType, defaultVal)
+    return defaultVal
+  }
   try {
-    return JSON.parse(readFileSync(filePath, 'utf8'))
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'))
+    jsonEntityCache.set(entityType, parsed)
+    return parsed
   } catch (e) {
     console.error(`[DataStore] Failed to read ${entityType}.json:`, e)
     return defaultVal
   }
 }
 
-function writeJsonEntity(entityType: keyof typeof JSON_FILES, data: unknown): void {
+function writeJsonEntity(entityType: JsonEntityType, data: unknown): void {
   const filePath = join(DATA_DIR, JSON_FILES[entityType])
   mkdirSync(DATA_DIR, { recursive: true })
   const tmpPath = filePath + '.tmp'
   const jsonStr = JSON.stringify(data, null, 2)
   writeFileSync(tmpPath, jsonStr, 'utf8')
   renameSync(tmpPath, filePath)
+  jsonEntityCache.set(entityType, data)
+  invalidateDerivedEntityCache(entityType)
 }
 
 function fileSha256Hex(filePath: string): string | null {
@@ -369,9 +396,8 @@ function resolveChapterTextPath(bodyTextPath: string, dataDir: string): string |
 }
 
 function getFileGzipChapterRowsForBook(bookId: number): any[] {
-  return (readJsonEntity('chapters', []) as any[])
-    .filter((chapter) => Number(chapter.bookId) === bookId
-      && chapter.bodyTextStorage === 'file_gzip'
+  return getChapterRowsForBook(bookId)
+    .filter((chapter) => chapter.bodyTextStorage === 'file_gzip'
       && chapter.bodyTextPath)
     .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
 }
@@ -618,30 +644,38 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
 }
 
 function getBookChaptersJson(bookId: number) {
-  const chapters = (readJsonEntity('chapters', []) as any[])
-    .filter(chapter => Number(chapter.bookId) === bookId)
-    .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+  const startedAt = performance.now()
+  const result = getChapterRowsForBook(bookId).map(chapterRowToContent)
+  perfLog('library:getBookChapters', startedAt, `book=${bookId} chapters=${result.length}`)
+  return result
+}
 
-  return chapters.map(chapter => {
-    const rawStorage = String(chapter.bodyTextStorage || (chapter.bodyTextPath ? 'file_gzip' : 'inline'))
-    const storage = rawStorage === 'file_gzip' ? 'file_gzip' : 'inline'
-    const bodyTextPath = chapter.bodyTextPath ? String(chapter.bodyTextPath) : ''
-    const bodyText = storage === 'file_gzip' && bodyTextPath
-      ? readChapterTextGzip(bodyTextPath)
-      : String(chapter.bodyText || '')
-    const missing = bodyText === null || bodyText === ''
-    const readableText = missing ? EMPTY_CHAPTER_TEXT_PLACEHOLDER : bodyText
-    return {
-      id: Number(chapter.id),
-      title: String(chapter.title || ''),
-      order_index: Number(chapter.orderIndex || 0),
-      body: readableText ? textToHtml(readableText) : '',
-      body_text: readableText,
-      body_text_storage: storage,
-      body_text_missing: missing ? 1 : 0,
-      body_text_fallback: missing ? 'placeholder' : null,
-    }
-  })
+function getBookChapterListJson(bookId: number) {
+  const startedAt = performance.now()
+  const result = getChapterRowsForBook(bookId).map(chapterRowToMeta)
+  perfLog('library:getBookChapterList', startedAt, `book=${bookId} chapters=${result.length}`)
+  return result
+}
+
+function getChapterContentBatchJson(bookId: number, chapterIds: number[]) {
+  const startedAt = performance.now()
+  const requestedIds = Array.from(new Set(
+    (Array.isArray(chapterIds) ? chapterIds : [])
+      .map(id => Number(id))
+      .filter(Number.isFinite)
+  ))
+  if (requestedIds.length === 0) return []
+
+  const byId = new Map<number, any>()
+  for (const chapter of getChapterRowsForBook(bookId)) {
+    byId.set(Number(chapter.id), chapter)
+  }
+  const result = requestedIds
+    .map(id => byId.get(id))
+    .filter(Boolean)
+    .map(chapterRowToContent)
+  perfLog('library:getChapterContentBatch', startedAt, `book=${bookId} requested=${requestedIds.length} found=${result.length}`)
+  return result
 }
 
 function deleteBookJson(bookId: number): { success: boolean } {
@@ -656,6 +690,69 @@ function deleteBookJson(bookId: number): { success: boolean } {
     rmSync(join(app.getPath('userData'), 'books', safeAssetFileName(String(target.sourceFile))), { force: true })
   }
   return { success: true }
+}
+
+function getChaptersByBookIdMap(): Map<number, any[]> {
+  if (chaptersByBookIdCache) return chaptersByBookIdCache
+  const startedAt = performance.now()
+  const map = new Map<number, any[]>()
+  for (const chapter of readJsonEntity('chapters', []) as any[]) {
+    const bookId = Number(chapter.bookId)
+    if (!Number.isFinite(bookId)) continue
+    const list = map.get(bookId) || []
+    list.push(chapter)
+    map.set(bookId, list)
+  }
+  for (const list of Array.from(map.values())) {
+    list.sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+  }
+  chaptersByBookIdCache = map
+  perfLog('chapters:index', startedAt, `books=${map.size}`)
+  return map
+}
+
+function getChapterRowsForBook(bookId: number): any[] {
+  return getChaptersByBookIdMap().get(bookId) || []
+}
+
+function chapterRowTextStorage(chapter: any): 'file_gzip' | 'inline' {
+  const rawStorage = String(chapter.bodyTextStorage || (chapter.bodyTextPath ? 'file_gzip' : 'inline'))
+  return rawStorage === 'file_gzip' ? 'file_gzip' : 'inline'
+}
+
+function chapterRowToMeta(chapter: any) {
+  const storage = chapterRowTextStorage(chapter)
+  const bodyTextPath = chapter.bodyTextPath ? String(chapter.bodyTextPath) : ''
+  const inlineBody = String(chapter.bodyText || '')
+  const missing = storage === 'file_gzip'
+    ? (bodyTextPath ? 0 : 1)
+    : (inlineBody ? 0 : 1)
+
+  return {
+    id: Number(chapter.id),
+    title: String(chapter.title || ''),
+    order_index: Number(chapter.orderIndex || 0),
+    body_text_storage: storage,
+    body_text_missing: missing,
+    body_text_size: Number(chapter.bodyTextSize || inlineBody.length || 0),
+  }
+}
+
+function chapterRowToContent(chapter: any) {
+  const meta = chapterRowToMeta(chapter)
+  const bodyTextPath = chapter.bodyTextPath ? String(chapter.bodyTextPath) : ''
+  const bodyText = meta.body_text_storage === 'file_gzip' && bodyTextPath
+    ? readChapterTextGzip(bodyTextPath)
+    : String(chapter.bodyText || '')
+  const missing = bodyText === null || bodyText === ''
+  const readableText = missing ? EMPTY_CHAPTER_TEXT_PLACEHOLDER : bodyText
+  return {
+    ...meta,
+    body: readableText ? textToHtml(readableText) : '',
+    body_text: readableText,
+    body_text_missing: missing ? 1 : 0,
+    body_text_fallback: missing ? 'placeholder' : null,
+  }
 }
 
 // Requirement 1: Single instance lock
@@ -786,6 +883,8 @@ ipcMain.handle('app:quit', async () => app.quit())
 ipcMain.handle('library:importBook', async (_, filePath: string) => importBookJson(filePath))
 ipcMain.handle('library:deleteBook', async (_, bookId: number) => deleteBookJson(bookId))
 ipcMain.handle('library:getBookChapters', async (_, bookId: number) => getBookChaptersJson(bookId))
+ipcMain.handle('library:getBookChapterList', async (_, bookId: number) => getBookChapterListJson(bookId))
+ipcMain.handle('library:getChapterContentBatch', async (_, bookId: number, chapterIds: number[]) => getChapterContentBatchJson(bookId, chapterIds))
 ipcMain.handle('library:getSize', async () => getStorageSizeInfo())
 ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsWithFileGzipChapters())
 ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))
