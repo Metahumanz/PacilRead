@@ -93,6 +93,7 @@ const UI_SETTINGS_KEYS = [
   'reader_sliderMode',
   'reader_flipMode',
   'reader_flipSpeed',
+  'reader_simulationDoublePageTurnMode',
   'reader_pageMode',
   'reader_double_page_enabled',
   'reader_double_page_mode',
@@ -146,6 +147,7 @@ const THEME_SETTINGS_KEYS = [
   'bgImage',
   'reader_flipMode',
   'reader_flipSpeed',
+  'reader_simulationDoublePageTurnMode',
   'reader_pageMode',
   'reader_double_page_enabled',
   'reader_double_page_mode',
@@ -275,22 +277,31 @@ function sanitizeRemoteFileName(input: string): string {
 }
 
 async function readSettingsMap(): Promise<Record<string, string>> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
-  if (!store.dataLoaded.value) await store.loadAllData()
-  return { ...store.settingsMap.value }
+  const settings = await window.electronAPI.data.readEntity('settings')
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return {}
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(settings as Record<string, unknown>)) {
+    result[key] = String(value)
+  }
+  return result
 }
 
 async function saveSettingsMap(settings: Record<string, string>): Promise<void> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
-  await store.setSettings(settings)
+  const current = await readSettingsMap()
+  await writeSettingsMap({ ...current, ...settings })
 }
 
 async function replaceSettingsMap(settings: Record<string, string>): Promise<void> {
+  await writeSettingsMap(settings)
+}
+
+async function writeSettingsMap(settings: Record<string, string>): Promise<void> {
   const { useDataStore: getStore } = await import('./useDataStore')
   const store = getStore()
-  await store.saveSettingsMap(settings)
+  if (store.dataLoaded.value) {
+    store.settingsMap.value = { ...settings }
+  }
+  await window.electronAPI.data.writeEntity('settings', settings)
 }
 
 export function isLocalOnlySettingKey(key: string): boolean {
@@ -483,20 +494,55 @@ export async function ensureReadingStatsDeviceId(): Promise<string> {
 }
 
 export async function appendReadingStatsDuration(row: ReadingStatsRowPayload): Promise<void> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  await getStore().upsertReadingStatRow(row, 'append')
+  await upsertReadingStatsRow(row, 'append')
 }
 
 async function overwriteReadingStatsRow(row: ReadingStatsRowPayload): Promise<void> {
+  await upsertReadingStatsRow(row, 'overwrite')
+}
+
+async function upsertReadingStatsRow(row: ReadingStatsRowPayload, mode: 'append' | 'overwrite'): Promise<void> {
+  const rows = await readReadingStatsRows()
+  const existing = rows.find(
+    item => item.sourceDeviceId === row.sourceDeviceId
+      && item.date === row.date
+      && item.bookIdentity === row.bookIdentity
+  )
+  const now = Date.now()
+  if (existing) {
+    if (mode === 'append') {
+      existing.durationSeconds = Number(existing.durationSeconds || 0) + row.durationSeconds
+      existing.charCount = Number(existing.charCount || 0) + row.charCount
+    } else {
+      existing.durationSeconds = row.durationSeconds
+      existing.charCount = row.charCount
+    }
+    existing.bookTitle = row.bookTitle
+    existing.bookAuthor = row.bookAuthor
+    existing.updatedAt = Math.max(Number(existing.updatedAt || 0), row.updatedAt || now)
+  } else {
+    rows.push({ ...row, updatedAt: row.updatedAt || now })
+  }
+  await writeReadingStatsRows(rows)
+}
+
+async function readReadingStatsRows(): Promise<ReadingStatsRowPayload[]> {
+  const rows = await window.electronAPI.data.readEntity('readingStats')
+  return Array.isArray(rows) ? rows as ReadingStatsRowPayload[] : []
+}
+
+async function writeReadingStatsRows(rows: ReadingStatsRowPayload[]): Promise<void> {
   const { useDataStore: getStore } = await import('./useDataStore')
-  await getStore().upsertReadingStatRow(row, 'overwrite')
+  const store = getStore()
+  if (store.dataLoaded.value) {
+    store.readingStats.value = rows as any
+  }
+  await window.electronAPI.data.writeEntity('readingStats', rows)
 }
 
 export async function getAllLocalReadingStatsRows(): Promise<ReadingStatsRowPayload[]> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
-  if (!store.dataLoaded.value) await store.loadAllData()
-  return store.getReadingStatsRows()
+  const rows = await readReadingStatsRows()
+  return rows
     .map(row => ({
       date: row.date,
       sourceDeviceId: row.sourceDeviceId,
@@ -725,10 +771,8 @@ export async function fetchReadingStatsBookDetail(bookId: number): Promise<Readi
 }
 
 export async function hasReadingStatsHistory(): Promise<boolean> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
-  if (!store.dataLoaded.value) await store.loadAllData()
-  return store.readingStats.value.length > 0
+  const rows = await window.electronAPI.data.readEntity('readingStats')
+  return Array.isArray(rows) && rows.length > 0
 }
 
 function shouldIncludeSettingKey(
@@ -882,6 +926,7 @@ function buildRuntimeSettingsMap(settingsMap: Record<string, string>, settings: 
     bgImage: settings.bgImage.value,
     reader_flipMode: settings.flipMode.value,
     reader_flipSpeed: settings.flipSpeed.value,
+    reader_simulationDoublePageTurnMode: settings.simulationDoublePageTurnMode.value,
     reader_pageMode: settings.pageMode.value,
     reader_double_page_enabled: settings.pageMode.value === 'double' ? 'true' : 'false',
     reader_double_page_mode: settings.pageMode.value === 'double' ? 'force' : 'auto',

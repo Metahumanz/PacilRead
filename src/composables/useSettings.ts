@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 import { useDataStore } from './useDataStore'
-import type { FlipMode } from '../types/pagination'
+import type { FlipMode, SimulationDoublePageTurnMode } from '../types/pagination'
 
 /*
  * 设置系统架构说明（与 Android 端兼容性）
@@ -28,9 +28,46 @@ import type { FlipMode } from '../types/pagination'
  */
 
 // ---- Persistence helpers ----
+let settingsEntityCache: Record<string, string> | null = null
+
+const normalizeSettingsEntity = (input: unknown): Record<string, string> => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    result[key] = String(value)
+  }
+  return result
+}
+
+const syncLoadedDataStoreSettings = (settings: Record<string, string>) => {
+  const dataStore = useDataStore()
+  if (dataStore.dataLoaded.value) {
+    dataStore.settingsMap.value = { ...settings }
+  }
+}
+
+const loadSettingsEntity = async (force = false): Promise<Record<string, string>> => {
+  if (!settingsEntityCache || force) {
+    settingsEntityCache = normalizeSettingsEntity(await window.electronAPI.data.readEntity('settings'))
+    syncLoadedDataStoreSettings(settingsEntityCache)
+  }
+  return settingsEntityCache
+}
+
+const writeSettingsEntity = async (settings: Record<string, string>) => {
+  settingsEntityCache = { ...settings }
+  syncLoadedDataStoreSettings(settingsEntityCache)
+  await window.electronAPI.data.writeEntity('settings', settingsEntityCache)
+}
+
+const mergeSettingsEntity = async (entries: Record<string, string>) => {
+  const current = { ...(await loadSettingsEntity()) }
+  Object.assign(current, entries)
+  await writeSettingsEntity(current)
+}
+
 export const saveSetting = async (k: string, v: any) => {
-  const { setSetting } = useDataStore()
-  await setSetting(k, String(v))
+  await mergeSettingsEntity({ [k]: String(v) })
 }
 
 const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
@@ -80,6 +117,7 @@ const pageMode = ref<'single' | 'double'>('single')
 const doublePageStep = ref<1 | 2>(2)
 const flipMode = ref<FlipMode>('slide')
 const flipSpeed = ref<'fast' | 'medium' | 'slow'>('medium')
+const simulationDoublePageTurnMode = ref<SimulationDoublePageTurnMode>('outerPage')
 const pIndent = ref(2)
 const pSpacing = ref(0.8)
 
@@ -186,6 +224,10 @@ const normalizeFlipMode = (value: string | undefined): FlipMode => {
   return 'slide'
 }
 
+const normalizeSimulationDoublePageTurnMode = (value: string | undefined): SimulationDoublePageTurnMode => (
+  value === 'spread' ? 'spread' : 'outerPage'
+)
+
 function resetSettingsState() {
   fontSize.value = 20
   lineHeight.value = 1.8
@@ -205,6 +247,7 @@ function resetSettingsState() {
   doublePageStep.value = 2
   flipMode.value = 'slide'
   flipSpeed.value = 'medium'
+  simulationDoublePageTurnMode.value = 'outerPage'
   pIndent.value = 2
   pSpacing.value = 0.8
 
@@ -278,9 +321,7 @@ export function useSettings() {
   const loadAllSettings = async () => {
     try {
       resetSettingsState()
-      const dataStore = useDataStore()
-      if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-      const s = dataStore.settingsMap.value
+      const s = await loadSettingsEntity(true)
 
       // Load settings from settings map (v8 JSON format)
       const v = (key: string): string | undefined => s[key]
@@ -300,6 +341,9 @@ export function useSettings() {
         flipMode.value = normalizeFlipMode(v('reader_flipMode'))
       }
       if (v('reader_flipSpeed') !== undefined) flipSpeed.value = v('reader_flipSpeed')! as any || 'medium'
+      if (v('reader_simulationDoublePageTurnMode') !== undefined) {
+        simulationDoublePageTurnMode.value = normalizeSimulationDoublePageTurnMode(v('reader_simulationDoublePageTurnMode'))
+      }
       if (v('reader_autoPageSpeed') !== undefined) autoPageSpeed.value = parseInt(v('reader_autoPageSpeed')!) || 10
       if (v('reader_ttsEngine') !== undefined) ttsEngine.value = v('reader_ttsEngine')! as any || 'edge'
       if (v('reader_ttsVoice') !== undefined) ttsVoice.value = v('reader_ttsVoice')! || ''
@@ -392,7 +436,8 @@ export function useSettings() {
 
       // Load custom themes from themes.json (v8 format)
       try {
-        customThemes.value = dataStore.themes.value.map(t => {
+        const themeRows = await window.electronAPI.data.readEntity('themes')
+        customThemes.value = (Array.isArray(themeRows) ? themeRows : []).map((t: any) => {
           try { return { id: t.id, name: t.name, ...JSON.parse(t.configJson) } }
           catch { return null }
         }).filter(Boolean) as any[]
@@ -411,8 +456,7 @@ export function useSettings() {
   }
 
   const saveAllStyling = async () => {
-    const { setSettings } = useDataStore()
-    await setSettings({
+    await mergeSettingsEntity({
       reader_fontSize: String(fontSize.value),
       reader_lineHeight: String(lineHeight.value),
       reader_letterSpacing: String(letterSpacing.value),
@@ -426,6 +470,7 @@ export function useSettings() {
       reader_coverColor: coverColor.value,
       bgImage: bgImage.value,
       reader_flipMode: flipMode.value,
+      reader_simulationDoublePageTurnMode: simulationDoublePageTurnMode.value,
       reader_pageMode: pageMode.value,
       reader_double_page_enabled: pageMode.value === 'double' ? 'true' : 'false',
       reader_double_page_mode: pageMode.value === 'double' ? 'force' : 'auto',
@@ -450,8 +495,7 @@ export function useSettings() {
   }
 
   const saveTtsSettings = async () => {
-    const { setSettings } = useDataStore()
-    await setSettings({
+    await mergeSettingsEntity({
       reader_autoPageSpeed: String(autoPageSpeed.value),
       reader_ttsEngine: ttsEngine.value,
       reader_ttsVoice: ttsVoice.value,
@@ -467,7 +511,7 @@ export function useSettings() {
     fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginTop, marginBottom, marginY,
     fontFamily, fontColor, coverColor, bgImage, blurAmount,
     textAlign, alignBottom, pageMode, doublePageStep,
-    flipMode, flipSpeed,
+    flipMode, flipSpeed, simulationDoublePageTurnMode,
     pIndent, pSpacing,
     // Auto-page
     autoPageSpeed,

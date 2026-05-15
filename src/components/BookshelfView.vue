@@ -30,6 +30,11 @@ const importing = ref(false)
 
 const searchQuery = ref('')
 
+const invalidateDataStore = () => {
+  const dataStore = useDataStore()
+  dataStore.dataLoaded.value = false
+}
+
 const filteredBooks = computed(() => {
   if (!searchQuery.value) return books.value
   const q = searchQuery.value.toLowerCase()
@@ -40,24 +45,7 @@ const fetchBooks = async () => {
   const startedAt = perfNow()
   try {
     loading.value = true
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    books.value = dataStore.getBooksSorted().map(b => {
-      const currentChapterTitle = dataStore.getCurrentChapterTitle(b.id, b.progressIndex) || b.currentChapterTitle
-      return {
-        id: b.id,
-        title: b.title,
-        author: b.author,
-        coverFile: b.coverFile,
-        sourceFile: b.sourceFile,
-        progressIndex: b.progressIndex,
-        progressOffset: b.progressOffset,
-        lastReadAt: b.lastReadAt,
-        pinned: b.pinned,
-        currentChapterTitle,
-        chapterCount: b.chapterCount,
-      }
-    })
+    books.value = await window.electronAPI.library.getBookshelfBooks()
   } catch (error) {
     console.error('Failed to fetch books:', error)
   } finally {
@@ -73,10 +61,7 @@ const addBook = async () => {
     importing.value = true
     const result = await window.electronAPI.library.importBook(filePath)
     console.log(`Imported ${result.chapterCount} chapters`)
-    // Reload from JSON files after import
-    const dataStore = useDataStore()
-    dataStore.dataLoaded.value = false
-    await dataStore.loadAllData()
+    invalidateDataStore()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to add book:', error)
@@ -90,9 +75,7 @@ const deleteBook = async (bookId: number) => {
   if (!confirm('确定要删除这本书吗？')) return
   try {
     await window.electronAPI.library.deleteBook(bookId)
-    const dataStore = useDataStore()
-    dataStore.dataLoaded.value = false
-    await dataStore.loadAllData()
+    invalidateDataStore()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to delete book:', error)
@@ -105,8 +88,8 @@ const setCover = async (bookId: number) => {
   try {
     const result = await window.electronAPI.app.copyCover(filePath)
     if (!result.success) throw new Error(result.error || '复制封面失败')
-    const { updateBook } = useDataStore()
-    await updateBook(bookId, { coverFile: result.filename! })
+    await window.electronAPI.library.updateBook(bookId, { coverFile: result.filename! })
+    invalidateDataStore()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to set cover:', error)
@@ -116,8 +99,8 @@ const setCover = async (bookId: number) => {
 
 const removeCover = async (bookId: number) => {
   try {
-    const { updateBook } = useDataStore()
-    await updateBook(bookId, { coverFile: null })
+    await window.electronAPI.library.updateBook(bookId, { coverFile: null })
+    invalidateDataStore()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to remove cover:', error)
@@ -126,8 +109,8 @@ const removeCover = async (bookId: number) => {
 
 const togglePin = async (book: BookDisplay) => {
   try {
-    const { updateBook } = useDataStore()
-    await updateBook(book.id, { pinned: !book.pinned })
+    await window.electronAPI.library.updateBook(book.id, { pinned: !book.pinned })
+    invalidateDataStore()
     await fetchBooks()
   } catch (error) {
     console.error('Failed to toggle pin:', error)
