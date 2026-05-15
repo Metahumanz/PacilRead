@@ -19,6 +19,10 @@ export interface ElectronAPI {
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
     deleteBook: (bookId: number) => Promise<{ success: boolean }>
     getSize: () => Promise<{ sizeBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }>
+    getBookshelfBooks: () => Promise<BookSummary[]>
+    getBookSummary: (bookId: number) => Promise<BookSummary | null>
+    getMostRecentBook: () => Promise<BookSummary | null>
+    updateBook: (bookId: number, fields: Partial<BookSummary>) => Promise<BookSummary | null>
     getBookChapters: (bookId: number) => Promise<Array<{
       id: number
       title: string
@@ -85,6 +89,24 @@ export interface ElectronAPI {
     onMimoDone: (cb: () => void) => () => void
     onMimoError: (cb: (err: string) => void) => () => void
   }
+}
+
+export interface BookSummary {
+  id: number
+  title: string
+  author: string | null
+  bookType: string
+  readingStatsKey: string
+  progressIndex: number
+  progressOffset: number
+  lastReadAt: number
+  pinned: boolean
+  currentChapterTitle: string
+  chapterCount: number
+  coverFile: string | null
+  sourceFile: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 export interface ChapterMeta {
