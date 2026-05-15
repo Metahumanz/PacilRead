@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.0.2',
+    date: '2026-05-15',
+    changes: [
+      '优化桌面端覆盖翻页的揭页裁切细节，下一页方向下当前页左滑时，目标页从底层更稳定地露出',
+      '为覆盖翻页的目标页裁切边缘增加细微余量，减少高分屏、缩放比例或背景同步时可能出现的边缘白线',
+      '保持仿真、平移、滚动与无动画模式不变，仿真翻页暂时回到原有 CSS 实现',
+    ]
+  },
+  {
     version: '1.0.1',
     date: '2026-05-13',
     changes: [
