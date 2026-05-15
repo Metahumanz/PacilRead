@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import { useDataStore } from '../composables/useDataStore'
 import BookCover from './common/BookCover.vue'
+import { perfLog, perfNow } from '../utils/perf'
 
 interface BookDisplay {
   id: number
@@ -36,6 +37,7 @@ const filteredBooks = computed(() => {
 })
 
 const fetchBooks = async () => {
+  const startedAt = perfNow()
   try {
     loading.value = true
     const dataStore = useDataStore()
@@ -60,6 +62,7 @@ const fetchBooks = async () => {
     console.error('Failed to fetch books:', error)
   } finally {
     loading.value = false
+    perfLog('bookshelf:fetchBooks', startedAt, `books=${books.value.length}`)
   }
 }
 
