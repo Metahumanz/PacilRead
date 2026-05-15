@@ -14,6 +14,7 @@ export function useSync() {
     currentChapterIndex: number
     currentChapterTitle: string
     currentChapterBodyLength: number
+    currentChapterOffset?: number
     currentPage: number
     totalPages: number
     pendingWebdavPos: number
@@ -34,7 +35,9 @@ export function useSync() {
         const filename = `${safeName}_${safeAuthor}.json`
 
         const L = context.currentChapterBodyLength || 0
-        const charPos = context.totalPages > 0
+        const charPos = context.currentChapterOffset !== undefined
+          ? Math.max(0, Math.min(L, Math.floor(context.currentChapterOffset)))
+          : context.totalPages > 0
           ? Math.floor(L * (context.currentPage / context.totalPages))
           : 0
 

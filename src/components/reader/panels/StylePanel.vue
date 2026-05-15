@@ -8,7 +8,7 @@ const { recalc } = defineProps<{
 
 const settings = useSettings()
 const {
-  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginY,
+  fontSize, lineHeight, letterSpacing, fontWeight, marginX, marginTop, marginBottom,
   fontFamily, fontColor, coverColor, textAlign,
   pageMode, doublePageStep, blurAmount, chapterTitleDisplay,
   customThemes, systemFonts, saveAllStyling, pIndent, pSpacing
@@ -91,9 +91,15 @@ const updateStyling = async () => {
     </div>
 
     <div class="sr">
-      <label>上下边距</label>
-      <input type="range" min="0" max="150" step="1" v-model.number="marginY" @input="updateStyling" class="sl">
-      <input type="number" v-model.number="marginY" @change="updateStyling" class="sn"><span class="su">px</span>
+      <label>上边距</label>
+      <input type="range" min="0" max="150" step="1" v-model.number="marginTop" @input="updateStyling" class="sl">
+      <input type="number" v-model.number="marginTop" @change="updateStyling" class="sn"><span class="su">px</span>
+    </div>
+
+    <div class="sr">
+      <label>下边距</label>
+      <input type="range" min="0" max="150" step="1" v-model.number="marginBottom" @input="updateStyling" class="sl">
+      <input type="number" v-model.number="marginBottom" @change="updateStyling" class="sn"><span class="su">px</span>
     </div>
 
     <div class="sr">

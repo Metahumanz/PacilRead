@@ -14,8 +14,8 @@ export function useTTS(opts: {
   flipDurationMs: Ref<number>
   ttsMiMoApiKey: Ref<string>
   ttsMiMoVoice: Ref<string>
-  nextPage: () => void
-  slideToNextChapter: () => void
+  nextPage: () => boolean | void
+  slideToNextChapter: () => boolean | void
 }) {
   const ttsActive = ref(false)
   let isPlayingTts = false
@@ -266,7 +266,8 @@ export function useTTS(opts: {
   const playNextSentence = async () => {
     if (!isPlayingTts) return
     if (activeSentences.length === 0 || currentSentenceIndex >= activeSentences.length) {
-      opts.slideToNextChapter()
+      const turnedPage = opts.nextPage()
+      if (turnedPage === false) opts.slideToNextChapter()
       setTimeout(() => {
         buildSentences()
         playNextSentence()

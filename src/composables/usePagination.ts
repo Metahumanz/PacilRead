@@ -1,4 +1,4 @@
-import { computed, nextTick, ref, type CSSProperties, type Ref } from 'vue'
+import { computed, nextTick, ref, watch, type CSSProperties, type Ref } from 'vue'
 import type {
   FlipMode,
   PageSlice,
@@ -60,6 +60,8 @@ export function usePagination(opts: {
   saveProgress: () => void
   precomputedPages?: Ref<PageSlice[] | null>
   pageCacheHit?: Ref<boolean>
+  findPageForOffset?: (slices: PageSlice[] | null | undefined, offset: number) => number
+  getPageCountForChapter?: (chapterIndex: number) => number | null
   onBeforeChapterChange?: (newIndex: number) => void
 }) {
   const currentPage = ref(0)
@@ -153,36 +155,39 @@ export function usePagination(opts: {
       return
     }
 
-    if (!opts.contentRef.value) return
     const cw = opts.containerRef.value.clientWidth
     const ch = opts.containerRef.value.clientHeight
     if (cw <= 0) return
     containerWidth.value = cw
     if (ch > 0) containerHeight.value = ch
-    const widthPerPage = opts.pageMode.value === 'double' ? cw / 2 : cw
-    totalPages.value = Math.max(1, Math.ceil(opts.contentRef.value.scrollWidth / widthPerPage))
-    applyPendingWebdavPosition()
-    if (currentPage.value >= totalPages.value) currentPage.value = totalPages.value - 1
+    totalPages.value = 1
     calcPrevPages()
   }
 
   const applyPendingWebdavPosition = () => {
     if (pendingWebdavPos.value < 0) return
-    const ch = opts.chapters.value[opts.currentChapterIndex.value]
-    const len = ch?.body_text?.length || ch?.body?.length || 0
-    currentPage.value = len > 0
-      ? clamp(Math.floor((pendingWebdavPos.value / len) * totalPages.value), 0, totalPages.value - 1)
-      : 0
+    currentPage.value = clamp(
+      opts.findPageForOffset?.(opts.precomputedPages?.value, pendingWebdavPos.value) ?? 0,
+      0,
+      Math.max(0, totalPages.value - 1),
+    )
     pendingWebdavPos.value = -1
   }
 
   const calcPrevPages = () => {
-    if (!opts.prevContentRef.value || !opts.prevContainerRef.value) return
-    const cw = opts.prevContainerRef.value.clientWidth
-    if (cw <= 0) return
-    const widthPerPage = opts.pageMode.value === 'double' ? cw / 2 : cw
-    prevPageCount.value = Math.max(1, Math.ceil(opts.prevContentRef.value.scrollWidth / widthPerPage))
+    const previousIndex = opts.currentChapterIndex.value - 1
+    if (previousIndex < 0) {
+      prevPageCount.value = 1
+      return
+    }
+    prevPageCount.value = opts.getPageCountForChapter?.(previousIndex) ?? prevPageCount.value
   }
+
+  watch(
+    () => opts.precomputedPages?.value?.length ?? 0,
+    () => calculatePages(),
+    { flush: 'post' },
+  )
 
   const pageOffset = computed(() => `-${currentPage.value * pageWidth.value}px`)
 
@@ -596,6 +601,7 @@ export function usePagination(opts: {
 
     if (state.mode === 'cover') {
       const reveal = width * progress
+      const seamBleed = reveal > 0 ? 2 : 0
       if (direction < 0) {
         return {
           current: { ...baseLayer, zIndex: 2 },
@@ -620,7 +626,7 @@ export function usePagination(opts: {
         incoming: {
           ...baseLayer,
           zIndex: 2,
-          clipPath: clipInset(0, 0, 0, width - reveal),
+          clipPath: clipInset(0, 0, 0, width - reveal - seamBleed),
         },
         currentSnapshot: hidden,
         fold: hidden,

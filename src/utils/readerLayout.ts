@@ -3,7 +3,8 @@ export interface ReaderPageMetricsInput {
   containerHeight: number
   pageMode: string
   marginX: number
-  marginY: number
+  marginTop: number
+  marginBottom: number
   fontSize: number
   lineHeight: number
 }
@@ -16,7 +17,8 @@ export interface ReaderPageMetrics {
   availableHeight: number
   pageGridLineCount: number
   pageGridHeight: number
-  gridPaddingY: number
+  gridPaddingTop: number
+  gridPaddingBottom: number
 }
 
 const finiteNumber = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback
@@ -26,7 +28,8 @@ export function computeReaderPageMetrics(input: ReaderPageMetricsInput): ReaderP
   const containerWidth = Math.max(0, finiteNumber(input.containerWidth))
   const containerHeight = Math.max(0, finiteNumber(input.containerHeight))
   const requestedMarginX = Math.max(0, finiteNumber(input.marginX))
-  const requestedMarginY = Math.max(0, finiteNumber(input.marginY))
+  const requestedMarginTop = Math.max(0, finiteNumber(input.marginTop))
+  const requestedMarginBottom = Math.max(0, finiteNumber(input.marginBottom))
   const safeFontSize = Math.max(1, finiteNumber(input.fontSize, 20))
   const safeLineHeight = Math.max(0.1, finiteNumber(input.lineHeight, 1.8))
 
@@ -35,10 +38,9 @@ export function computeReaderPageMetrics(input: ReaderPageMetricsInput): ReaderP
   const effectiveMarginX = Math.min(requestedMarginX, maxMarginX)
   const contentColumnWidth = Math.max(1, pageWidth - effectiveMarginX * 2)
   const lineHeightPx = Math.max(1, safeFontSize * safeLineHeight)
-  const availableHeight = Math.max(0, containerHeight - requestedMarginY * 2)
-  const pageGridLineCount = Math.max(1, Math.floor(Math.max(availableHeight, lineHeightPx) / lineHeightPx))
+  const availableHeight = Math.max(0, containerHeight - requestedMarginTop - requestedMarginBottom)
+  const pageGridLineCount = Math.max(1, Math.floor(availableHeight / lineHeightPx))
   const pageGridHeight = Math.max(1, availableHeight)
-  const gridPaddingY = requestedMarginY
 
   return {
     pageWidth: roundPx(pageWidth),
@@ -48,6 +50,7 @@ export function computeReaderPageMetrics(input: ReaderPageMetricsInput): ReaderP
     availableHeight: roundPx(availableHeight),
     pageGridLineCount,
     pageGridHeight: roundPx(pageGridHeight),
-    gridPaddingY: roundPx(gridPaddingY),
+    gridPaddingTop: roundPx(requestedMarginTop),
+    gridPaddingBottom: roundPx(requestedMarginBottom),
   }
 }
