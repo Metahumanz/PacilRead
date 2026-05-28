@@ -503,12 +503,18 @@ const nextPageFlipPages = computed(() => {
   return getCachedChapterPages(currentChapterIndex.value + 1).slices
 })
 
+const pageFlipTurnMode = computed<'single' | 'outerPage' | 'spread'>(() => (
+  pageMode.value === 'single' ? 'single' : simulationDoublePageTurnMode.value
+))
 const pageFlipSimulationEnabled = computed(() => (
-  pageMode.value === 'double'
-  && flipMode.value === 'simulation'
-  && (simulationDoublePageTurnMode.value === 'outerPage' || simulationDoublePageTurnMode.value === 'spread')
+  flipMode.value === 'simulation'
+  && (
+    pageMode.value === 'single'
+    || (pageMode.value === 'double' && (simulationDoublePageTurnMode.value === 'outerPage' || simulationDoublePageTurnMode.value === 'spread'))
+  )
 ))
 const pageFlipBookRef = ref<InstanceType<typeof PageFlipOuterBook> | null>(null)
+const pageFlipBookReady = ref(false)
 let pageFlipClickSuppressedUntil = 0
 
 const scheduleOuterPageFlip = (
@@ -605,7 +611,7 @@ const trackedGoToChapter = (idx: number, keepMenu = false) => {
 
 const trackedSetCurrentPage = (page: number) => {
   recordReadingActivity()
-  currentPage.value = pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread'
+  currentPage.value = pageFlipSimulationEnabled.value && pageFlipTurnMode.value === 'spread'
     ? Math.floor(Math.max(0, page) / 2) * 2
     : page
 }
@@ -613,7 +619,7 @@ const trackedSetCurrentPage = (page: number) => {
 const handlePageFlip = (target: PagingTarget) => {
   recordReadingActivity()
   const safeChapterIndex = Math.max(0, Math.min(chapters.value.length - 1, target.chapterIndex))
-  const targetPageIndex = pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread'
+  const targetPageIndex = pageFlipSimulationEnabled.value && pageFlipTurnMode.value === 'spread'
     ? Math.floor(Math.max(0, target.pageIndex) / 2) * 2
     : target.pageIndex
   if (safeChapterIndex === currentChapterIndex.value) {
@@ -655,6 +661,10 @@ const handleReaderTap = (clientX: number, clientY: number) => {
 const handlePageFlipTap = (point: { clientX: number; clientY: number }) => {
   pageFlipClickSuppressedUntil = Date.now() + 120
   handleReaderTap(point.clientX, point.clientY)
+}
+
+const handlePageFlipReady = () => {
+  pageFlipBookReady.value = true
 }
 
 const getChapterOffset = () => {
@@ -799,7 +809,7 @@ const pageFlipBookKey = computed(() => [
   previousPageFlipPages.value.length,
   chapters.value[currentChapterIndex.value + 1]?.id ?? 'no-next',
   nextPageFlipPages.value.length,
-  simulationDoublePageTurnMode.value,
+  pageFlipTurnMode.value,
   doublePageStep.value,
   Math.round(readerPageMetrics.value.pageWidth),
   Math.round(readerPageHeight.value),
@@ -821,6 +831,10 @@ const pageFlipBookKey = computed(() => [
   readerPageBgTransform.value,
   readerPageBgScrim.value,
 ].join('|'))
+
+watch([pageFlipSimulationEnabled, pageFlipBookKey], () => {
+  pageFlipBookReady.value = false
+}, { flush: 'sync' })
 
 // HUD logic handled by useHUD
 const calculateHudProgress = (chapterIndex: number, pageIndex: number, pageCount: number) => {
@@ -869,7 +883,7 @@ const hudPropsFor = (chapterIndex: number, pageIndex: number, pageCount: number)
   }
 }
 
-const spreadHudEnabled = computed(() => pageFlipSimulationEnabled.value && simulationDoublePageTurnMode.value === 'spread')
+const spreadHudEnabled = computed(() => pageFlipSimulationEnabled.value && pageFlipTurnMode.value === 'spread')
 const spreadHudPage = (pageIndex: number) => Math.floor(Math.max(0, pageIndex) / 2)
 const spreadHudPageCount = (pageCount: number) => Math.max(1, Math.ceil(Math.max(1, pageCount) / 2))
 const currentHudPage = computed(() => spreadHudEnabled.value ? spreadHudPage(currentPage.value) : currentPage.value)
@@ -1100,8 +1114,8 @@ watch([
     })
   prewarmNearbyChapters()
 })
-watch([pageFlipSimulationEnabled, simulationDoublePageTurnMode, currentPage], () => {
-  if (!pageFlipSimulationEnabled.value || simulationDoublePageTurnMode.value !== 'spread') return
+watch([pageFlipSimulationEnabled, pageFlipTurnMode, currentPage], () => {
+  if (!pageFlipSimulationEnabled.value || pageFlipTurnMode.value !== 'spread') return
   const normalized = Math.floor(Math.max(0, currentPage.value) / 2) * 2
   if (currentPage.value !== normalized) currentPage.value = normalized
 })
@@ -1221,7 +1235,7 @@ onUnmounted(async () => {
           v-if="pageFlipSimulationEnabled"
           :key="pageFlipBookKey"
           ref="pageFlipBookRef"
-          :turn-mode="simulationDoublePageTurnMode"
+          :turn-mode="pageFlipTurnMode"
           :current-chapter-index="currentChapterIndex"
           :pages="currentPages"
           :prev-pages="previousPageFlipPages"
@@ -1250,9 +1264,10 @@ onUnmounted(async () => {
           @flip="handlePageFlip"
           @page-drag="handlePageFlipDrag"
           @page-tap="handlePageFlipTap"
+          @ready="handlePageFlipReady"
         />
 
-        <div class="page-layer page-current" :style="pageFlipSimulationEnabled ? { ...pagingVisuals.current, visibility: 'hidden', pointerEvents: 'none' } : pagingVisuals.current">
+        <div class="page-layer page-current" :style="pageFlipSimulationEnabled && pageFlipBookReady ? { ...pagingVisuals.current, visibility: 'hidden', pointerEvents: 'none' } : pagingVisuals.current">
           <div ref="containerRef" class="pg-ctr" :style="pageContainerStyle">
             <div
               ref="contentRef"

@@ -8,7 +8,7 @@ import { PageFlip } from '../../vendor/page-flip/page-flip.module.js'
 type HudProps = InstanceType<typeof ReaderHUD>['$props']
 
 const props = defineProps<{
-  turnMode: 'outerPage' | 'spread'
+  turnMode: 'single' | 'outerPage' | 'spread'
   currentChapterIndex: number
   pages: PageSlice[]
   prevPages: PageSlice[]
@@ -40,6 +40,7 @@ const emit = defineEmits<{
   flip: [target: PagingTarget]
   'page-drag': []
   'page-tap': [point: { clientX: number; clientY: number }]
+  ready: []
 }>()
 
 interface FlipSpreadItem {
@@ -64,11 +65,18 @@ let pageDragStarted = false
 let pendingFlipEmitFrame: number | null = null
 
 const DRAG_COMMIT_PROGRESS = 38
+const FLIP_MAX_STEPS = 96
+const FLIP_MIN_STEPS = 36
+const FLIP_PX_PER_STEP = 18
+const OUTER_FLIP_MIN_DURATION = 180
+const PHYSICAL_FLIP_MIN_DURATION = 220
+const singlePageMode = computed(() => props.turnMode === 'single')
 const wholeSpreadMode = computed(() => props.turnMode === 'spread')
+const physicalPageMode = computed(() => singlePageMode.value || wholeSpreadMode.value)
 const clampPageFor = (pages: PageSlice[], pageIndex: number) => Math.max(0, Math.min(Math.max(0, pages.length - 1), pageIndex))
 const logicalStep = computed(() => wholeSpreadMode.value ? 2 : props.doublePageStep === 2 ? 2 : 1)
 const flipPageWidth = computed(() => wholeSpreadMode.value ? props.pageWidth * 2 : props.pageWidth)
-const flipBookWidth = computed(() => wholeSpreadMode.value ? props.pageWidth * 2 : props.pageWidth * 2)
+const flipBookWidth = computed(() => physicalPageMode.value ? flipPageWidth.value : props.pageWidth * 2)
 
 const normalizeLogicalPageFor = (pages: PageSlice[], pageIndex: number) => {
   const safe = clampPageFor(pages, pageIndex)
@@ -133,17 +141,17 @@ const targetToFlipPage = (target: PagingTarget) => {
     spread.chapterIndex === target.chapterIndex
     && spread.pageIndex === normalizeLogicalPageFor(spread.pages, target.pageIndex)
   ))
-  if (spreadIndex >= 0) return wholeSpreadMode.value ? spreadIndex : spreadIndex * 2
+  if (spreadIndex >= 0) return physicalPageMode.value ? spreadIndex : spreadIndex * 2
 
   const currentIndex = flipSpreads.value.findIndex((spread) => (
     spread.chapterIndex === props.currentChapterIndex
     && spread.pageIndex === currentLogicalPage.value
   ))
-  return Math.max(0, wholeSpreadMode.value ? currentIndex : currentIndex * 2)
+  return Math.max(0, physicalPageMode.value ? currentIndex : currentIndex * 2)
 }
 
 const flipToTarget = (flipPageIndex: number): PagingTarget => {
-  const localSpread = wholeSpreadMode.value
+  const localSpread = physicalPageMode.value
     ? Math.max(0, flipPageIndex)
     : Math.floor(Math.max(0, flipPageIndex) / 2)
   const spread = flipSpreads.value[localSpread]
@@ -160,6 +168,15 @@ const flipToTarget = (flipPageIndex: number): PagingTarget => {
 }
 
 const flipPages = computed<FlipPageItem[]>(() => {
+  if (singlePageMode.value) {
+    return flipSpreads.value.map((spread) => ({
+      key: `${spread.key}-single`,
+      slice: spread.pages[spread.pageIndex] ?? null,
+      rightSlice: null,
+      side: 'spread' as const,
+    }))
+  }
+
   if (wholeSpreadMode.value) {
     return flipSpreads.value.map((spread) => ({
       key: `${spread.key}-spread`,
@@ -214,40 +231,120 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
 
   const controller = patched.getFlipController()
   if (!controller?.fold || !controller?.flip) return
+  const originalAnimateFlippingTo = controller.animateFlippingTo?.bind(controller)
+  const isForwardPoint = (point: { x: number }) => {
+    const blockWidth = patched.getUI?.()?.getDistElement?.()?.offsetWidth
+    const rectWidth = patched.getRender?.()?.getRect?.()?.width
+    const width = Math.max(1, blockWidth || rectWidth || 1)
+    return point.x >= width / 2
+  }
+  const middleZoneY = (point: { x: number }, rect: { height: number }) => (
+    isForwardPoint(point) ? rect.height - 1 : 1
+  )
+  const commitFinishY = (corner: string | undefined, bounds: { height: number }) => {
+    return corner === 'bottom' ? bounds.height : 0
+  }
+  const commitFinishX = (bounds: { pageWidth: number }) => (
+    -bounds.pageWidth * 1.12
+  )
+  const cancelFinishY = (corner: string | undefined, bounds: { height: number }) => (
+    corner === 'bottom' ? bounds.height : 0
+  )
 
-  if (wholeSpreadMode.value) {
+  if (originalAnimateFlippingTo && controller.render?.startAnimation && controller.do) {
+    controller.animateFlippingTo = function animateFlippingTo(
+      start: { x: number; y: number },
+      end: { x: number; y: number },
+      commit: boolean,
+      cleanup = true,
+    ) {
+      const dx = end.x - start.x
+      const dy = end.y - start.y
+      const distance = Math.max(Math.abs(dx), Math.abs(dy))
+      const steps = Math.max(
+        FLIP_MIN_STEPS,
+        Math.min(FLIP_MAX_STEPS, Math.ceil(distance / FLIP_PX_PER_STEP)),
+      )
+      const frames: Array<() => void> = []
+      for (let i = 0; i <= steps; i += 1) {
+        const point = {
+          x: start.x + (dx * i) / steps,
+          y: start.y + (dy * i) / steps,
+        }
+        frames.push(() => this.do(point))
+      }
+
+      const baseDuration = this.app?.getSettings?.().flippingTime ?? 300
+      const pageWidth = Math.max(1, this.getBoundsRect?.().pageWidth ?? distance)
+      const distanceRatio = Math.min(1, distance / pageWidth)
+      const minDuration = physicalPageMode.value ? PHYSICAL_FLIP_MIN_DURATION : OUTER_FLIP_MIN_DURATION
+      const duration = Math.max(
+        minDuration,
+        Math.round(baseDuration * (0.78 + distanceRatio * 0.22)),
+      )
+
+      this.render.startAnimation(frames, duration, () => {
+        if (!this.calc) return
+        if (commit) {
+          if (this.calc.getDirection?.() === 1) this.app?.turnToPrevPage?.()
+          else this.app?.turnToNextPage?.()
+        }
+        if (cleanup) {
+          this.render.setBottomPage?.(null)
+          this.render.setFlippingPage?.(null)
+          this.render.clearShadow?.()
+          this.setState?.('read')
+          this.reset?.()
+        }
+      })
+    }
+  }
+
+  if (physicalPageMode.value) {
     const collection = patched.getPageCollection?.()
-    const render = patched.getRender?.()
-    if (collection?.getFlippingPage && collection?.getBottomPage && render?.drawBottomPage) {
-      const originalGetFlippingPage = collection.getFlippingPage.bind(collection)
-      const originalGetBottomPage = collection.getBottomPage.bind(collection)
-      collection.getFlippingPage = function getFlippingPage(direction: number) {
-        if (render.getOrientation?.() === 'portrait' && direction === 1) {
-          const currentIndex = this.getCurrentPageIndex?.() ?? patched.getCurrentPageIndex?.()
-          const currentPage = Number.isFinite(currentIndex) ? this.getPage?.(currentIndex) : null
-          return currentPage?.newTemporaryCopy?.() ?? originalGetFlippingPage(direction)
-        }
-        return originalGetFlippingPage(direction)
-      }
-      collection.getBottomPage = function getBottomPage(direction: number) {
-        if (render.getOrientation?.() === 'portrait' && direction === 1) {
-          const currentIndex = this.getCurrentPageIndex?.() ?? patched.getCurrentPageIndex?.()
-          const prevIndex = Number.isFinite(currentIndex) ? currentIndex - 1 : -1
-          if (prevIndex >= 0) return this.getPage?.(prevIndex) ?? originalGetBottomPage(direction)
-        }
-        return originalGetBottomPage(direction)
-      }
+    const pages = collection?.getPages?.()
+    if (Array.isArray(pages)) {
+      for (const page of pages) {
+        if (!page?.newTemporaryCopy || page.__pacilBlankBackPatched) continue
+        const originalNewTemporaryCopy = page.newTemporaryCopy.bind(page)
+        page.newTemporaryCopy = function newTemporaryCopy() {
+          if (this.getDrawingDensity?.() === 'hard') return this
+          if (!this.temporaryCopy) {
+            const sourceElement = this.getElement?.() ?? this.element
+            const parentElement = sourceElement?.parentElement
+            const PageClass = this.constructor
+            if (!sourceElement || !parentElement || !PageClass || !this.render) {
+              const copy = originalNewTemporaryCopy()
+              const element = copy?.getElement?.()
+              element?.classList?.add('pageflip-blank-back')
+              element?.querySelectorAll?.('.pageflip-page-slot, .pageflip-spread-slot')
+                ?.forEach((slot: Element) => slot.remove())
+              return copy
+            }
 
-      const originalDrawBottomPage = render.drawBottomPage.bind(render)
-      render.drawBottomPage = function drawBottomPage() {
-        if (this.getOrientation?.() === 'portrait' && this.getDirection?.() === 1 && this.bottomPage) {
-          const density = this.flippingPage?.getDrawingDensity?.() ?? null
-          const bottomElement = this.bottomPage.getElement?.()
-          if (bottomElement) bottomElement.style.zIndex = String(this.getSettings().startZIndex + 3)
-          this.bottomPage.draw?.(density)
-          return
+            const blankElement = sourceElement.cloneNode(false) as HTMLElement
+            blankElement.classList.add('pageflip-blank-back')
+            blankElement.style.cssText = [
+              `background-color: ${props.paperColor}`,
+              `background-image: ${props.paperImage}`,
+              'background-size: cover',
+              'background-position: center',
+              `filter: ${props.bgFilter}`,
+              `transform: ${props.bgTransform}`,
+              'transform-origin: center',
+            ].join(';')
+            parentElement.appendChild(blankElement)
+            this.copiedElement = blankElement
+            this.temporaryCopy = new PageClass(
+              this.render,
+              blankElement,
+              this.getDrawingDensity?.() ?? this.getDensity?.() ?? 'soft',
+            )
+            this.temporaryCopy.load?.()
+          }
+          return this.getTemporaryCopy?.() ?? this.temporaryCopy
         }
-        return originalDrawBottomPage()
+        page.__pacilBlankBackPatched = true
       }
     }
   }
@@ -260,8 +357,9 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       pageDragStarted = true
       emit('page-drag')
     }
-    if (hasGrabStart && grabStartY > 0.33 && grabStartY < 0.66) {
-      nextPoint.y = 1
+    const rect = patched.getRender().getRect()
+    if (rect && hasGrabStart && grabStartY > 0.33 && grabStartY < 0.66) {
+      nextPoint.y = middleZoneY(point, rect)
     }
     return originalFold(nextPoint)
   }
@@ -279,7 +377,7 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       const relY = nextPoint.y / Math.max(1, rect.height)
       const zoneY = hasGrabStart ? grabStartY : relY
       if (zoneY > 0.33 && zoneY < 0.66) {
-        nextPoint.y = 1
+        nextPoint.y = middleZoneY(nextPoint, rect)
       } else if (zoneY <= 0.33) {
         nextPoint.y = rect.height * 0.15
       } else {
@@ -302,12 +400,12 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       const corner = controller.calc?.getCorner?.() ?? controller.getCalculation?.()?.getCorner?.()
       const inset = bounds.height / 10
       const startY = corner === 'bottom' ? bounds.height - inset : inset
-      const finishY = corner === 'bottom' ? bounds.height : 0
+      const finishY = commitFinishY(corner, bounds)
       controller.setState('flipping')
       controller.calc?.calc?.({ x: bounds.pageWidth - inset, y: startY })
       return controller.animateFlippingTo(
         { x: bounds.pageWidth - inset, y: startY },
-        { x: -bounds.pageWidth * 1.12, y: finishY },
+        { x: commitFinishX(bounds), y: finishY },
         true,
       )
     } catch (_) {
@@ -324,11 +422,11 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       const position = calc.getPosition()
       const bounds = controller.getBoundsRect()
       const progress = calc.getFlippingProgress?.() ?? Math.abs((position.x - bounds.pageWidth) / (2 * bounds.pageWidth) * 100)
-      const finishY = calc.getCorner?.() === 'bottom' ? bounds.height : 0
+      const corner = calc.getCorner?.()
       const shouldCommit = progress >= DRAG_COMMIT_PROGRESS
       return controller.animateFlippingTo(
         position,
-        { x: shouldCommit ? -bounds.pageWidth * 1.12 : bounds.pageWidth, y: finishY },
+        { x: shouldCommit ? commitFinishX(bounds) : bounds.pageWidth, y: shouldCommit ? commitFinishY(corner, bounds) : cancelFinishY(corner, bounds) },
         shouldCommit,
       )
     }
@@ -352,7 +450,7 @@ const initPageFlip = async () => {
 
   const pageWidth = Math.max(1, Math.round(flipPageWidth.value))
   const pageHeight = Math.max(1, Math.round(props.pageHeight))
-  const fixedSpread = wholeSpreadMode.value
+  const fixedSpread = physicalPageMode.value
   const pageFlipSettings = {
     width: pageWidth,
     height: pageHeight,
@@ -377,6 +475,7 @@ const initPageFlip = async () => {
 
   pageFlip.loadFromHTML(bookRef.value.querySelectorAll('.r-page'))
   patchDemoTouchBehavior(pageFlip)
+  requestAnimationFrame(() => emit('ready'))
   pageFlip.on<number>('flip', (event) => {
     if (suppressFlipEmit) return
     if (typeof event.data !== 'number') return
@@ -476,7 +575,7 @@ defineExpose({
 <template>
   <div
     class="pageflip-reader"
-    :class="{ 'pageflip-spread-reader': wholeSpreadMode }"
+    :class="{ 'pageflip-spread-reader': wholeSpreadMode, 'pageflip-single-reader': singlePageMode }"
     :style="rootStyle"
     @mousedown.capture="handleMouseDownCapture"
     @mouseup.capture="handleMouseUpCapture"
@@ -492,7 +591,7 @@ defineExpose({
       >
         <div class="pageflip-page-bg"></div>
         <div
-          v-if="!wholeSpreadMode"
+          v-if="!physicalPageMode"
           class="pageflip-binding"
           :class="item.side === 'left' ? 'pageflip-binding-left' : 'pageflip-binding-right'"
         ></div>
@@ -601,6 +700,24 @@ defineExpose({
   width: var(--reader-book-width) !important;
   height: var(--reader-page-height) !important;
   box-shadow: none;
+}
+
+.pageflip-single-reader .r-page {
+  width: var(--reader-book-width) !important;
+  height: var(--reader-page-height) !important;
+  box-shadow: none;
+}
+
+.pageflip-book :deep(.pageflip-blank-back .pageflip-page-slot),
+.pageflip-book :deep(.pageflip-blank-back .pageflip-spread-slot) {
+  display: none;
+}
+
+.pageflip-book :deep(.pageflip-blank-back) {
+  background-color: var(--reader-paper, #f7f2e6) !important;
+  background-image: var(--reader-paper-image, none) !important;
+  background-size: cover !important;
+  background-position: center !important;
 }
 
 .pageflip-page-bg {
