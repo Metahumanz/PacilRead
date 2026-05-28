@@ -218,12 +218,15 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
   if (!patched.startUserTouch || !patched.getFlipController) return
 
   let grabStartY = 0
+  let grabStartForward = true
   let hasGrabStart = false
   let dragEmitted = false
+  const isMiddleZone = (relY: number) => relY > 0.33 && relY < 0.66
   const originalStartUserTouch = patched.startUserTouch.bind(patched)
   patched.startUserTouch = function startUserTouch(point: { x: number; y: number }) {
     const rect = patched.getRender().getRect()
-    if (rect) grabStartY = point.y / Math.max(1, rect.height)
+    grabStartY = rect ? point.y / Math.max(1, rect.height) : 0
+    grabStartForward = isForwardPoint(point)
     hasGrabStart = true
     dragEmitted = false
     return originalStartUserTouch(point)
@@ -238,8 +241,8 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
     const width = Math.max(1, blockWidth || rectWidth || 1)
     return point.x >= width / 2
   }
-  const middleZoneY = (point: { x: number }, rect: { height: number }) => (
-    isForwardPoint(point) ? rect.height - 1 : 1
+  const middleZoneY = (forward: boolean, rect: { height: number }) => (
+    forward ? rect.height - 1 : 1
   )
   const commitFinishY = (corner: string | undefined, bounds: { height: number }) => {
     return corner === 'bottom' ? bounds.height : 0
@@ -284,8 +287,7 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       )
 
       this.render.startAnimation(frames, duration, () => {
-        if (!this.calc) return
-        if (commit) {
+        if (this.calc && commit) {
           if (this.calc.getDirection?.() === 1) this.app?.turnToPrevPage?.()
           else this.app?.turnToNextPage?.()
         }
@@ -358,8 +360,8 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       emit('page-drag')
     }
     const rect = patched.getRender().getRect()
-    if (rect && hasGrabStart && grabStartY > 0.33 && grabStartY < 0.66) {
-      nextPoint.y = middleZoneY(point, rect)
+    if (rect && hasGrabStart && isMiddleZone(grabStartY)) {
+      nextPoint.y = middleZoneY(grabStartForward, rect)
     }
     return originalFold(nextPoint)
   }
@@ -375,12 +377,11 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
     const rect = patched.getRender().getRect()
     if (rect) {
       const relY = nextPoint.y / Math.max(1, rect.height)
-      const zoneY = hasGrabStart ? grabStartY : relY
-      if (zoneY > 0.33 && zoneY < 0.66) {
-        nextPoint.y = middleZoneY(nextPoint, rect)
-      } else if (zoneY <= 0.33) {
+      if (isMiddleZone(relY)) {
+        nextPoint.y = middleZoneY(isForwardPoint(nextPoint), rect)
+      } else if (relY <= 0.33) {
         nextPoint.y = rect.height * 0.15
-      } else {
+      } else if (relY >= 0.66) {
         nextPoint.y = rect.height * 0.85
       }
     }

@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.1.3',
+    date: '2026-05-28',
+    changes: [
+      '修复仿真翻页从左中或右中起手拖拽时，拖到一半突然切换到角点斜向拖拽的问题',
+      '中线拖拽按起手所在侧固定卷页角点，右中保持右下卷页，左中保持左上卷页',
+      '保留中线拖拽的软纸卷页效果，并同步作用于单页、外侧单页和整张双页仿真模式',
+    ]
+  },
+  {
     version: '1.1.2',
     date: '2026-05-28',
     changes: [
