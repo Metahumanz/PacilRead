@@ -56,8 +56,10 @@ export interface ElectronAPI {
     toggleMaximize: () => Promise<void>
     close: () => Promise<void>
     getIsMaximized: () => Promise<boolean>
+    getDisplayRefreshRate: () => Promise<number>
     onMaximized: (cb: (val: boolean) => void) => void
     onFullScreen: (cb: (val: boolean) => void) => void
+    onDisplayRefreshRateChanged: (cb: (hz: number) => void) => () => void
   }
   font: {
     getSystemFonts: () => Promise<string[]>

@@ -41,11 +41,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     toggleMaximize: () => ipcRenderer.invoke('win:toggleMaximize'),
     close: () => ipcRenderer.invoke('win:close'),
     getIsMaximized: () => ipcRenderer.invoke('win:getIsMaximized'),
+    getDisplayRefreshRate: () => ipcRenderer.invoke('win:getDisplayRefreshRate'),
     onMaximized: (cb: (val: boolean) => void) => {
       ipcRenderer.on('win:isMaximized', (_, val) => cb(val))
     },
     onFullScreen: (cb: (val: boolean) => void) => {
       ipcRenderer.on('win:isFullScreen', (_, val) => cb(val))
+    },
+    onDisplayRefreshRateChanged: (cb: (hz: number) => void) => {
+      const listener = (_: unknown, hz: number) => cb(hz)
+      ipcRenderer.on('win:displayRefreshRateChanged', listener)
+      return () => ipcRenderer.removeListener('win:displayRefreshRateChanged', listener)
     }
   },
   font: {

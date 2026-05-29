@@ -10,6 +10,7 @@ import { useHUD } from '../composables/useHUD'
 import { useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
+import { useDisplayRefreshRate } from '../composables/useDisplayRefreshRate'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
@@ -118,6 +119,7 @@ const {
 } = settings
 
 const { rules, fetchRules, applyReplacements } = useRules()
+const { effectiveRefreshRate } = useDisplayRefreshRate()
 const { startHUD, stopHUD, formatHUD } = useHUD()
 const { uploadProgressToWebdav } = useSync()
 const { resolvedBucket } = useAppTheme()
@@ -1258,6 +1260,7 @@ onUnmounted(async () => {
           :bg-filter="readerPageBgFilter"
           :bg-transform="readerPageBgTransform"
           :bg-scrim="readerPageBgScrim"
+          :refresh-rate="effectiveRefreshRate"
           :justify="textAlign === 'justify'"
           :show-hud="!showMenu && hudFollowPage"
           :hud-props="currentHudProps"

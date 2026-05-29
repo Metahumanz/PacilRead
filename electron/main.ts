@@ -12,6 +12,9 @@ import { autoUpdater } from 'electron-updater'
 let mainWindow: BrowserWindow | null = null
 let mimoAbortController: AbortController | null = null
 
+const MIN_DISPLAY_REFRESH_RATE = 24
+const MAX_DISPLAY_REFRESH_RATE = 360
+const DEFAULT_DISPLAY_REFRESH_RATE = 60
 const CHAPTER_TEXT_DIR = 'chapter_text'
 const DATA_DIR = join(app.getPath('userData'), 'data')
 const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
@@ -132,6 +135,40 @@ function saveBounds(): void {
   } catch {}
 }
 
+let lastDisplayRefreshRate = 0
+
+function normalizeDisplayRefreshRate(value: unknown): number {
+  const hz = Number(value)
+  if (!Number.isFinite(hz) || hz < MIN_DISPLAY_REFRESH_RATE || hz > MAX_DISPLAY_REFRESH_RATE) {
+    return DEFAULT_DISPLAY_REFRESH_RATE
+  }
+  return Math.round(hz)
+}
+
+function getCurrentDisplayRefreshRate(): number {
+  try {
+    const display = mainWindow && !mainWindow.isDestroyed()
+      ? screen.getDisplayMatching(mainWindow.getBounds())
+      : screen.getPrimaryDisplay()
+    return normalizeDisplayRefreshRate(display.displayFrequency)
+  } catch {
+    return DEFAULT_DISPLAY_REFRESH_RATE
+  }
+}
+
+function notifyDisplayRefreshRate(force = false): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const hz = getCurrentDisplayRefreshRate()
+  if (!force && Math.abs(hz - lastDisplayRefreshRate) < 1) return
+  lastDisplayRefreshRate = hz
+  mainWindow.webContents.send('win:displayRefreshRateChanged', hz)
+}
+
+function saveBoundsAndNotifyDisplay(): void {
+  saveBounds()
+  notifyDisplayRefreshRate()
+}
+
 // ---- Migrate data from old EleWinReader installation ----
 function migrateOldData(): void {
   const newUserData = app.getPath('userData')
@@ -242,8 +279,11 @@ function createWindow(): void {
     }
   })
   // mainWindow.on('ready-to-show', () => mainWindow?.show())
-  mainWindow.on('resize', saveBounds)
-  mainWindow.on('move', saveBounds)
+  mainWindow.on('resize', saveBoundsAndNotifyDisplay)
+  mainWindow.on('move', saveBoundsAndNotifyDisplay)
+  mainWindow.on('close', saveBounds)
+  mainWindow.on('closed', () => { mainWindow = null })
+  mainWindow.webContents.on('did-finish-load', () => notifyDisplayRefreshRate(true))
   
   // Send window state to renderer for custom window controls
   mainWindow.on('maximize', () => mainWindow?.webContents.send('win:isMaximized', true))
@@ -874,6 +914,9 @@ if (!gotTheLock) {
 app.whenReady().then(async () => {
   migrateOldData()
   createWindow()
+  screen.on('display-added', () => notifyDisplayRefreshRate(true))
+  screen.on('display-removed', () => notifyDisplayRefreshRate(true))
+  screen.on('display-metrics-changed', () => notifyDisplayRefreshRate(true))
   try {
     initializeJsonStore()
     console.log('JSON data store initialized successfully')
@@ -954,6 +997,7 @@ ipcMain.handle('win:toggleMaximize', () => {
 })
 ipcMain.handle('win:close', () => mainWindow?.close())
 ipcMain.handle('win:getIsMaximized', () => mainWindow?.isMaximized() || false)
+ipcMain.handle('win:getDisplayRefreshRate', () => getCurrentDisplayRefreshRate())
 
 ipcMain.handle('font:getSystemFonts', async () => {
   if (process.platform !== 'win32') return []
