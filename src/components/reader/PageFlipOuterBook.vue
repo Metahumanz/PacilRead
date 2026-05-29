@@ -31,6 +31,7 @@ const props = defineProps<{
   bgFilter: string
   bgTransform: string
   bgScrim: string
+  refreshRate: number
   justify: boolean
   showHud: boolean
   hudProps: HudProps
@@ -65,9 +66,10 @@ let pageDragStarted = false
 let pendingFlipEmitFrame: number | null = null
 
 const DRAG_COMMIT_PROGRESS = 38
-const FLIP_MAX_STEPS = 96
+const FLIP_MAX_STEPS = 180
 const FLIP_MIN_STEPS = 36
-const FLIP_PX_PER_STEP = 18
+const FLIP_STEP_OVERSAMPLE = 1.15
+const DEFAULT_REFRESH_RATE = 60
 const OUTER_FLIP_MIN_DURATION = 180
 const PHYSICAL_FLIP_MIN_DURATION = 220
 const singlePageMode = computed(() => props.turnMode === 'single')
@@ -87,6 +89,14 @@ const lastLogicalPageFor = (pages: PageSlice[]) => {
   if (pages.length <= 0) return 0
   if (logicalStep.value === 1) return pages.length - 1
   return Math.max(0, Math.floor((pages.length - 1) / 2) * 2)
+}
+
+const animationStepCount = (duration: number) => {
+  const refreshRate = Number.isFinite(props.refreshRate) && props.refreshRate > 0
+    ? props.refreshRate
+    : DEFAULT_REFRESH_RATE
+  const displayFrames = Math.ceil((duration * refreshRate * FLIP_STEP_OVERSAMPLE) / 1000)
+  return Math.max(FLIP_MIN_STEPS, Math.min(FLIP_MAX_STEPS, displayFrames))
 }
 
 const logicalPagesFor = (pagesForChapter: PageSlice[]) => {
@@ -261,13 +271,18 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
       commit: boolean,
       cleanup = true,
     ) {
+      const baseDuration = this.app?.getSettings?.().flippingTime ?? 300
       const dx = end.x - start.x
       const dy = end.y - start.y
       const distance = Math.max(Math.abs(dx), Math.abs(dy))
-      const steps = Math.max(
-        FLIP_MIN_STEPS,
-        Math.min(FLIP_MAX_STEPS, Math.ceil(distance / FLIP_PX_PER_STEP)),
+      const pageWidth = Math.max(1, this.getBoundsRect?.().pageWidth ?? distance)
+      const distanceRatio = Math.min(1, distance / pageWidth)
+      const minDuration = physicalPageMode.value ? PHYSICAL_FLIP_MIN_DURATION : OUTER_FLIP_MIN_DURATION
+      const duration = Math.max(
+        minDuration,
+        Math.round(baseDuration * (0.78 + distanceRatio * 0.22)),
       )
+      const steps = animationStepCount(duration)
       const frames: Array<() => void> = []
       for (let i = 0; i <= steps; i += 1) {
         const point = {
@@ -276,15 +291,6 @@ const patchDemoTouchBehavior = (instance: PageFlip) => {
         }
         frames.push(() => this.do(point))
       }
-
-      const baseDuration = this.app?.getSettings?.().flippingTime ?? 300
-      const pageWidth = Math.max(1, this.getBoundsRect?.().pageWidth ?? distance)
-      const distanceRatio = Math.min(1, distance / pageWidth)
-      const minDuration = physicalPageMode.value ? PHYSICAL_FLIP_MIN_DURATION : OUTER_FLIP_MIN_DURATION
-      const duration = Math.max(
-        minDuration,
-        Math.round(baseDuration * (0.78 + distanceRatio * 0.22)),
-      )
 
       this.render.startAnimation(frames, duration, () => {
         if (this.calc && commit) {
