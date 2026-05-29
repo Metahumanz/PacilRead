@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.1.4',
+    date: '2026-05-29',
+    changes: [
+      '仿真翻页动画采样改为跟随当前屏幕刷新率和浏览器实际 rAF 帧率，高刷屏下卷页轨迹更连续',
+      '窗口移动到不同刷新率显示器后会重新获取当前显示器频率，改善多屏环境下的翻页流畅度',
+      '平移、覆盖、滚动和无动画翻页继续保留原有时间戳插值逻辑，不改变旧翻页效果的手感',
+    ]
+  },
+  {
     version: '1.1.3',
     date: '2026-05-28',
     changes: [
