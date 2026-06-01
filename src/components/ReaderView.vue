@@ -108,7 +108,6 @@ const {
   ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
   nextKeys, prevKeys, showKeyHints, isAlwaysOnTop,
   readingTimeTrackingEnabled, readingTimeStatsHidden,
-  webdavUrl, webdavDir, webdavUser, webdavPass, webdavSync,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight,
   hudFollowPage, hudTopMargin, hudBottomMargin,
@@ -121,7 +120,7 @@ const {
 const { rules, fetchRules, applyReplacements } = useRules()
 const { effectiveRefreshRate } = useDisplayRefreshRate()
 const { startHUD, stopHUD, formatHUD } = useHUD()
-const { uploadProgressToWebdav } = useSync()
+const { getApplicableProgressFromWebdav, uploadProgressToWebdav } = useSync()
 const { resolvedBucket } = useAppTheme()
 const readingTimeTracker = useReadingTimeTracker({
   enabled: readingTimeTrackingEnabled,
@@ -931,32 +930,19 @@ const toggleAutoPage = () => { if (autoPageActive.value) stopAutoPage(); else st
 watch(autoPageSpeed, () => { if (autoPageActive.value) startAutoPage() })
 
 // ---- WebDAV download ----
-const downloadProgressFromWebdav = async () => {
-  if (!webdavSync.value || !webdavUrl.value || !book.value) return
-  const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-  let author = book.value.author || '未知'; if (!author.trim()) author = '未知'
-  let safeName = book.value.title.replace(/[\\/:\"*?<>|]/g, '_')
-  let safeAuthor = author.replace(/[\\/:\"*?<>|]/g, '_')
-  const filename = `${safeName}_${safeAuthor}.json`
-  let baseURL = webdavUrl.value; if (webdavDir.value) baseURL += webdavDir.value
+const applyProgressFromWebdav = async () => {
+  if (!book.value) return
   try {
-    const res = await window.electronAPI.webdav.request({ url: baseURL + 'bookProgress/' + encodeURIComponent(filename), method: 'GET', headers: { 'Authorization': `Basic ${auth}` } })
-    if (res.status === 200 && res.data) {
-      const remote = JSON.parse(res.data)
-      const localTime = book.value.lastReadAt ? new Date(book.value.lastReadAt).getTime() : 0
-      const isLocalFresh = currentChapterIndex.value === 0 && currentPage.value === 0
-      if (remote.durChapterTime && (remote.durChapterTime > localTime + 5000 || isLocalFresh)) {
-        if (remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
-          pendingWebdavPos.value = remote.durChapterPos || 0
-          await prewarmChapterAt(remote.durChapterIndex, {
-            mode: 'partial',
-            targetOffset: pendingWebdavPos.value,
-            extraPagesAfterTarget: 2,
-          })
-          if (remote.durChapterIndex !== currentChapterIndex.value) goToChapter(remote.durChapterIndex, true)
-          else recalc()
-        }
-      }
+    const remote = await getApplicableProgressFromWebdav(book.value)
+    if (remote && remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
+      pendingWebdavPos.value = remote.durChapterPos
+      await prewarmChapterAt(remote.durChapterIndex, {
+        mode: 'partial',
+        targetOffset: pendingWebdavPos.value,
+        extraPagesAfterTarget: 2,
+      })
+      if (remote.durChapterIndex !== currentChapterIndex.value) goToChapter(remote.durChapterIndex, true)
+      else recalc()
     }
   } catch (e) { console.error('WebDAV download err:', e) }
 }
@@ -1143,7 +1129,7 @@ onMounted(async () => {
     currentPage.value = book.value.progressOffset || 0
   }
   if (!props.initialBookmark) {
-    await downloadProgressFromWebdav()
+    await applyProgressFromWebdav()
   }
   readerProgressReady = true
   await ensureChapterContent(currentChapterIndex.value)
