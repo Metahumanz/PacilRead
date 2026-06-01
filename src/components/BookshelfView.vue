@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import { useDataStore } from '../composables/useDataStore'
+import { BOOKSHELF_PROGRESS_PREFETCH_LIMIT, useSync } from '../composables/useSync'
 import BookCover from './common/BookCover.vue'
 import { perfLog, perfNow } from '../utils/perf'
 
@@ -23,12 +24,16 @@ const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
 
 const settings = useSettings()
 const { viewMode, bookshelfShowAddEntry, saveSetting } = settings
+const { canDownloadProgressFromWebdav, getApplicableProgressFromWebdav } = useSync()
 
 const books = ref<BookDisplay[]>([])
 const loading = ref(true)
 const importing = ref(false)
+const progressSyncStatus = ref('')
 
 const searchQuery = ref('')
+let progressPrefetchRun = 0
+let progressSyncStatusTimer: number | null = null
 
 const invalidateDataStore = () => {
   const dataStore = useDataStore()
@@ -41,17 +46,92 @@ const filteredBooks = computed(() => {
   return books.value.filter(b => b.title.toLowerCase().includes(q) || (b.author && b.author.toLowerCase().includes(q)))
 })
 
+const bookshelfStatusText = computed(() => (
+  progressSyncStatus.value || `共 ${filteredBooks.value.length} 本书籍`
+))
+
+const sortBooks = (items: BookDisplay[]) => [...items].sort((a, b) => {
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+  if (a.lastReadAt !== b.lastReadAt) return b.lastReadAt - a.lastReadAt
+  return a.title.localeCompare(b.title, 'zh-CN')
+})
+
+const clearProgressSyncStatusTimer = () => {
+  if (progressSyncStatusTimer !== null) {
+    window.clearTimeout(progressSyncStatusTimer)
+    progressSyncStatusTimer = null
+  }
+}
+
+const showProgressSyncFailure = () => {
+  progressSyncStatus.value = '云端进度同步失败，已展示本地进度'
+  clearProgressSyncStatusTimer()
+  progressSyncStatusTimer = window.setTimeout(() => {
+    progressSyncStatus.value = ''
+    progressSyncStatusTimer = null
+  }, 3000)
+}
+
+const prefetchBookshelfProgress = async () => {
+  const run = ++progressPrefetchRun
+  clearProgressSyncStatusTimer()
+  if (!canDownloadProgressFromWebdav() || books.value.length === 0) {
+    progressSyncStatus.value = ''
+    return
+  }
+
+  const candidates = books.value
+    .slice(0, BOOKSHELF_PROGRESS_PREFETCH_LIMIT)
+    .map(book => ({ ...book }))
+  let failures = 0
+
+  for (let index = 0; index < candidates.length; index++) {
+    if (run !== progressPrefetchRun) return
+    progressSyncStatus.value = `正在同步云端阅读进度 ${index + 1}/${candidates.length}...`
+    const book = candidates[index]
+
+    try {
+      const remote = await getApplicableProgressFromWebdav(book)
+      if (!remote || run !== progressPrefetchRun) continue
+
+      books.value = sortBooks(books.value.map(item => {
+        if (item.id !== book.id) return item
+        const maxProgressIndex = Math.max(0, item.chapterCount - 1)
+        return {
+          ...item,
+          progressIndex: Math.min(Math.max(remote.durChapterIndex, 0), maxProgressIndex),
+          lastReadAt: remote.durChapterTime,
+          currentChapterTitle: remote.durChapterTitle || item.currentChapterTitle,
+        }
+      }))
+    } catch (error) {
+      failures++
+      console.error('Failed to prefetch WebDAV progress:', error)
+    }
+  }
+
+  if (run !== progressPrefetchRun) return
+  if (failures > 0) {
+    showProgressSyncFailure()
+  } else {
+    progressSyncStatus.value = ''
+  }
+}
+
 const fetchBooks = async () => {
   const startedAt = perfNow()
+  let fetched = false
   try {
     loading.value = true
     books.value = await window.electronAPI.library.getBookshelfBooks()
+    fetched = true
   } catch (error) {
     console.error('Failed to fetch books:', error)
   } finally {
     loading.value = false
     perfLog('bookshelf:fetchBooks', startedAt, `books=${books.value.length}`)
   }
+  if (fetched) void prefetchBookshelfProgress()
 }
 
 const addBook = async () => {
@@ -131,6 +211,10 @@ const formatChapter = (book: BookDisplay) => {
 }
 
 onMounted(() => fetchBooks())
+onUnmounted(() => {
+  progressPrefetchRun++
+  clearProgressSyncStatusTimer()
+})
 </script>
 
 <template>
@@ -138,7 +222,7 @@ onMounted(() => fetchBooks())
     <div class="flex items-center justify-between mb-8 gap-4">
       <div>
         <h2 class="app-title text-[22px] font-semibold">我的书架</h2>
-        <p class="app-muted text-[13px] mt-1">共 {{ filteredBooks.length }} 本书籍</p>
+        <p class="app-muted text-[13px] mt-1">{{ bookshelfStatusText }}</p>
       </div>
 
       <!-- Action Area -->
