@@ -1,7 +1,5 @@
 import { useSettings } from './useSettings'
 
-export const BOOKSHELF_PROGRESS_PREFETCH_LIMIT = 6
-
 const PROGRESS_CACHE_TTL_MS = 5 * 60 * 1000
 const REMOTE_NEWER_GRACE_MS = 5000
 
