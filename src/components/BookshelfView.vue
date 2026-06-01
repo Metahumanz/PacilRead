@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import { useDataStore } from '../composables/useDataStore'
-import { BOOKSHELF_PROGRESS_PREFETCH_LIMIT, useSync } from '../composables/useSync'
+import { useSync } from '../composables/useSync'
 import BookCover from './common/BookCover.vue'
 import { perfLog, perfNow } from '../utils/perf'
 
@@ -23,7 +23,9 @@ interface BookDisplay {
 const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
 
 const settings = useSettings()
-const { viewMode, bookshelfShowAddEntry, saveSetting } = settings
+const {
+  viewMode, bookshelfShowAddEntry, bookshelfProgressPrefetchLimit, settingsLoaded, saveSetting
+} = settings
 const { canDownloadProgressFromWebdav, getApplicableProgressFromWebdav } = useSync()
 
 const books = ref<BookDisplay[]>([])
@@ -75,13 +77,13 @@ const showProgressSyncFailure = () => {
 const prefetchBookshelfProgress = async () => {
   const run = ++progressPrefetchRun
   clearProgressSyncStatusTimer()
-  if (!canDownloadProgressFromWebdav() || books.value.length === 0) {
+  if (!canDownloadProgressFromWebdav() || books.value.length === 0 || bookshelfProgressPrefetchLimit.value <= 0) {
     progressSyncStatus.value = ''
     return
   }
 
   const candidates = books.value
-    .slice(0, BOOKSHELF_PROGRESS_PREFETCH_LIMIT)
+    .slice(0, bookshelfProgressPrefetchLimit.value)
     .map(book => ({ ...book }))
   let failures = 0
 
@@ -211,6 +213,9 @@ const formatChapter = (book: BookDisplay) => {
 }
 
 onMounted(() => fetchBooks())
+watch(settingsLoaded, (loaded) => {
+  if (loaded && books.value.length > 0) void prefetchBookshelfProgress()
+})
 onUnmounted(() => {
   progressPrefetchRun++
   clearProgressSyncStatusTimer()

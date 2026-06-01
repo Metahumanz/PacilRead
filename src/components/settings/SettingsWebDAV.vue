@@ -31,7 +31,7 @@ const {
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
   webdavSyncThemes, webdavSyncBackgrounds, webdavSyncReadingStats,
   webdavLastSync, webdavLastLiteSync,
-  webdavDesktopSettingsDir
+  webdavDesktopSettingsDir, bookshelfProgressPrefetchLimit
 } = settings
 </script>
 
@@ -71,6 +71,22 @@ const {
                 </div>
               </div>
               <div class="grid grid-cols-2 gap-3">
+                <div class="col-span-2">
+                  <label class="block text-[11px] app-muted mb-1">打开书架时预取云端进度数量</label>
+                  <div class="flex items-center gap-2">
+                    <input
+                      v-model.number="bookshelfProgressPrefetchLimit"
+                      @change="saveWebdav"
+                      @blur="saveWebdav"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      class="app-input w-24 px-3 py-1.5 text-[12px]"
+                    />
+                    <span class="text-[11px] app-muted">本，默认 6；设为 0 可关闭书架预取</span>
+                  </div>
+                </div>
                 <div>
                   <label class="block text-[11px] app-muted mb-1">认证账户 (User)</label>
                   <input type="text" v-model="webdavUser" @change="saveWebdav" placeholder="example@email.com" class="app-input w-full px-3 py-1.5 text-[12px]" />

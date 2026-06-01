@@ -73,6 +73,16 @@ export const saveSetting = async (k: string, v: any) => {
 const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
 const DEFAULT_PREV_KEYS = ['ArrowLeft', 'PageUp']
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
+export const DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT = 6
+export const clampBookshelfProgressPrefetchLimit = (value: unknown) => {
+  if (value === '' || value === null || value === undefined) {
+    return DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT
+  }
+  const parsed = Number(value)
+  return Math.max(0, Math.min(100, Number.isFinite(parsed)
+    ? Math.floor(parsed)
+    : DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT))
+}
 const parseSettingInt = (value: string | undefined, fallback: number) => {
   if (value === undefined) return fallback
   const parsed = parseInt(value, 10)
@@ -163,6 +173,7 @@ const sliderMode = ref<'book' | 'chapter'>('book')
 const sidebarCollapsed = ref(false)
 const viewMode = ref<'grid' | 'list'>('grid')
 const bookshelfShowAddEntry = ref(true)
+const bookshelfProgressPrefetchLimit = ref(DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT)
 
 // Home navigation preferences are desktop-private WebDAV settings.
 const homeNavAutoSwitchEnabled = ref(true)
@@ -211,6 +222,7 @@ interface CustomTheme {
   fontWeight: number; marginX: number; marginTop?: number; marginBottom?: number; marginY?: number; pageMode: string; doublePageStep: number
 }
 const customThemes = ref<CustomTheme[]>([])
+const settingsLoaded = ref(false)
 
 // System fonts
 const systemFonts = ref<string[]>([])
@@ -280,6 +292,7 @@ function resetSettingsState() {
   sidebarCollapsed.value = false
   viewMode.value = 'grid'
   bookshelfShowAddEntry.value = true
+  bookshelfProgressPrefetchLimit.value = DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT
   homeNavAutoSwitchEnabled.value = true
   homeNavManualMode.value = 'sidebar'
   homeBottomNavStyle.value = 'compact'
@@ -319,6 +332,7 @@ function resetSettingsState() {
 // ---- Reader styling refs (shared across views) ----
 export function useSettings() {
   const loadAllSettings = async () => {
+    settingsLoaded.value = false
     try {
       resetSettingsState()
       const s = await loadSettingsEntity(true)
@@ -402,6 +416,9 @@ export function useSettings() {
       if (v('sidebarCollapsed') !== undefined) sidebarCollapsed.value = v('sidebarCollapsed')! === 'true'
       if (v('viewMode') !== undefined) viewMode.value = v('viewMode')! === 'list' ? 'list' : 'grid'
       if (v('bookshelf_show_add_entry') !== undefined) bookshelfShowAddEntry.value = v('bookshelf_show_add_entry')! !== 'false'
+      if (v('bookshelf_progress_prefetch_limit') !== undefined) {
+        bookshelfProgressPrefetchLimit.value = clampBookshelfProgressPrefetchLimit(v('bookshelf_progress_prefetch_limit'))
+      }
       if (v('home_nav_auto_switch_enabled') !== undefined) homeNavAutoSwitchEnabled.value = v('home_nav_auto_switch_enabled')! !== 'false'
       if (v('home_nav_manual_mode') !== undefined) homeNavManualMode.value = v('home_nav_manual_mode')! === 'bottom' ? 'bottom' : 'sidebar'
       if (v('home_bottom_nav_style') !== undefined) homeBottomNavStyle.value = v('home_bottom_nav_style')! || 'compact'
@@ -452,7 +469,11 @@ export function useSettings() {
         await saveSetting('webdavDesktopSettingsDir', webdavDesktopSettingsDir.value)
       }
       try { systemFonts.value = await window.electronAPI.font.getSystemFonts() } catch (_) { systemFonts.value = [] }
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      settingsLoaded.value = true
+    }
   }
 
   const saveAllStyling = async () => {
@@ -529,13 +550,13 @@ export function useSettings() {
     webdavSyncThemes, webdavSyncBackgrounds, webdavSyncReadingStats, webdavLastSync, webdavLastLiteSync,
     webdavDesktopSettingsDir,
     // Themes
-    customThemes, systemFonts,
+    customThemes, systemFonts, settingsLoaded,
     // HUD
     hudTopLeft, hudTopCenter, hudTopRight,
     hudBottomLeft, hudBottomCenter, hudBottomRight,
     hudFollowPage, hudTopMargin, hudBottomMargin,
     chapterTitleDisplay,
-    sliderMode, sidebarCollapsed, viewMode, bookshelfShowAddEntry,
+    sliderMode, sidebarCollapsed, viewMode, bookshelfShowAddEntry, bookshelfProgressPrefetchLimit,
     homeNavAutoSwitchEnabled, homeNavManualMode,
     homeBottomNavStyle, homeNavPortraitMode, homeNavLandscapeMode,
     homeSidebarPresentation, homeFixedSidebarStyle,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useSettings } from '../composables/useSettings'
+import { clampBookshelfProgressPrefetchLimit, useSettings } from '../composables/useSettings'
 import {
   fullBackupV8, fullRestoreV8, incrementalBackupV8, incrementalRestoreV8,
 } from '../composables/useV8Sync'
@@ -52,7 +52,7 @@ const {
   webdavSyncBookshelf, webdavSyncFiles, webdavSyncUISettings,
   webdavSyncThemes, webdavSyncBackgrounds, webdavLastSync, webdavLastLiteSync,
   autoOpenLastRead, silentUpdate, ttsMiMoApiKey,
-  webdavDesktopSettingsDir,
+  webdavDesktopSettingsDir, bookshelfProgressPrefetchLimit,
   webdavSyncReadingStats,
   readingTimeTrackingEnabled, readingTimeStatsHidden
 } = settings
@@ -112,6 +112,7 @@ const saveWebdav = async () => {
   if (dir && !dir.endsWith('/')) dir += '/'
   webdavDir.value = dir
   webdavDesktopSettingsDir.value = sanitizeWebdavDirectorySegment(webdavDesktopSettingsDir.value)
+  bookshelfProgressPrefetchLimit.value = clampBookshelfProgressPrefetchLimit(bookshelfProgressPrefetchLimit.value)
   await saveSetting('webdavUrl', url)
   await saveSetting('webdavDir', dir)
   await saveSetting('webdavUser', webdavUser.value.trim())
@@ -124,6 +125,7 @@ const saveWebdav = async () => {
   await saveSetting('webdavSyncBackgrounds', webdavSyncBackgrounds.value ? 'true' : 'false')
   await saveSetting('webdav_sync_reading_stats', webdavSyncReadingStats.value ? 'true' : 'false')
   await saveSetting('webdavDesktopSettingsDir', webdavDesktopSettingsDir.value)
+  await saveSetting('bookshelf_progress_prefetch_limit', String(bookshelfProgressPrefetchLimit.value))
 }
 
 const testWebdav = async () => {
