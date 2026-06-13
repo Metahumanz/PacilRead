@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['sql.js', 'epubjs', 'iconv-lite', 'jschardet', 'webdav', 'bufferutil', 'utf-8-validate', 'pdf-parse']
+              external: ['iconv-lite', 'jschardet', 'bufferutil', 'utf-8-validate', 'pdf-parse']
             }
           }
         }

@@ -29,7 +29,7 @@
 > **🛠️ 致二次开发的小伙伴们 (开发者指引)：**
 > 如果你想拉取源码自己魔改：
 > `git clone https://github.com/Metahumanz/PacilRead.git` -> `npm install` -> `npm run dev` 即可在本地跑起来。
-> 本项目主要技术栈为：`Vue 3` + `Vite` + `Electron` + `SQLite3` 高性能本地数据库。
+> 本项目主要技术栈为：`Vue 3` + `Vite` + `Electron` + 本地 JSON 实体存储。
 
 ## 📜 许可证
 

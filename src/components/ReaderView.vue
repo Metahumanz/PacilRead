@@ -11,6 +11,10 @@ import { useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
 import { useDisplayRefreshRate } from '../composables/useDisplayRefreshRate'
+import { useChapterContentCache } from '../composables/useChapterContentCache'
+import { useReaderPrewarm } from '../composables/useReaderPrewarm'
+import { useReaderProgress } from '../composables/useReaderProgress'
+import { usePageFlipScheduler } from '../composables/usePageFlipScheduler'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
@@ -29,32 +33,7 @@ import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 import PageSliceView from './reader/PageSliceView.vue'
 import PageFlipOuterBook from './reader/PageFlipOuterBook.vue'
 import type { PageSlice, PagingTarget } from '../types/pagination'
-
-interface Chapter {
-  id: number
-  title: string
-  body?: string
-  body_text?: string
-  order_index: number
-  body_text_storage?: string
-  body_text_missing?: number
-  body_text_fallback?: string | null
-  body_text_size?: number
-  body_text_loaded?: boolean
-}
-interface Book { id: number; title: string; author: string | null; bookType: string; progressIndex: number; progressOffset: number; lastReadAt: number; readingStatsKey: string }
-
-interface ChapterContentPayload {
-  id: number
-  title: string
-  order_index: number
-  body: string
-  body_text: string
-  body_text_storage: string
-  body_text_missing: number
-  body_text_fallback: string | null
-  body_text_size?: number
-}
+import type { ReaderBook, ReaderChapter } from '../types/entities'
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
 const emit = defineEmits<{
@@ -64,8 +43,8 @@ const emit = defineEmits<{
 }>()
 
 // ---- Core data ----
-const book = ref<Book | null>(null)
-const chapters = ref<Chapter[]>([])
+const book = ref<ReaderBook | null>(null)
+const chapters = ref<ReaderChapter[]>([])
 const currentChapterIndex = ref(0)
 const loading = ref(true)
 const showMenu = ref(false)
@@ -83,14 +62,7 @@ const selectedText = ref('')
 const bookmarkPanelVersion = ref(0)
 const bookmarkStatus = ref('')
 
-const CHAPTER_CONTENT_CACHE_MAX_ENTRIES = 12
-const CHAPTER_CONTENT_CACHE_MAX_BYTES = 32 * 1024 * 1024
-const chapterContentCache = new Map<number, ChapterContentPayload & { estimatedBytes: number }>()
-const pendingChapterContentLoads = new Map<number, Promise<Chapter | null>>()
-let chapterContentCacheBytes = 0
-let progressSaveTimer: number | null = null
 let lastFirstReadableLoggedBookId = -1
-let readerProgressReady = false
 
 // DOM refs
 const contentRef = ref<HTMLElement | null>(null)
@@ -165,7 +137,7 @@ const fetchChapters = async () => {
   const startedAt = perfNow()
   try {
     const r = await window.electronAPI.library.getBookChapterList(props.bookId)
-    chapters.value = r as Chapter[]
+    chapters.value = r as ReaderChapter[]
     if (chapters.value.length > 0) {
       currentChapterIndex.value = Math.min(Math.max(currentChapterIndex.value, 0), chapters.value.length - 1)
     } else {
@@ -175,129 +147,14 @@ const fetchChapters = async () => {
   finally { perfLog('reader:fetchChapterList', startedAt, `book=${props.bookId} chapters=${chapters.value.length}`) }
 }
 
-const estimateChapterPayloadBytes = (content: ChapterContentPayload) => (
-  content.body_text_size && content.body_text_size > 0
-    ? content.body_text_size
-    : (content.body_text?.length || 0) * 2 + (content.body?.length || 0) * 2
-)
-
-const clearChapterInlineContent = (chapterId: number) => {
-  const idx = chapters.value.findIndex((chapter) => chapter.id === chapterId)
-  if (idx < 0) return
-  const chapter = chapters.value[idx]
-  chapters.value[idx] = {
-    ...chapter,
-    body: '',
-    body_text: '',
-    body_text_loaded: false,
-  }
-}
-
-const pruneChapterContentCache = () => {
-  const protectedIds = new Set<number>()
-  for (const index of [currentChapterIndex.value - 1, currentChapterIndex.value, currentChapterIndex.value + 1]) {
-    const chapter = chapters.value[index]
-    if (chapter) protectedIds.add(chapter.id)
-  }
-
-  while (
-    chapterContentCache.size > CHAPTER_CONTENT_CACHE_MAX_ENTRIES
-    || chapterContentCacheBytes > CHAPTER_CONTENT_CACHE_MAX_BYTES
-  ) {
-    const victim = Array.from(chapterContentCache.keys()).find((id) => !protectedIds.has(id))
-    if (victim === undefined) break
-    const removed = chapterContentCache.get(victim)
-    if (removed) chapterContentCacheBytes -= removed.estimatedBytes
-    chapterContentCache.delete(victim)
-    clearChapterInlineContent(victim)
-  }
-}
-
-const mergeChapterContent = (content: ChapterContentPayload): Chapter | null => {
-  const idx = chapters.value.findIndex((chapter) => chapter.id === content.id)
-  if (idx < 0) return null
-  const estimatedBytes = estimateChapterPayloadBytes(content)
-  const previous = chapterContentCache.get(content.id)
-  if (previous) chapterContentCacheBytes -= previous.estimatedBytes
-  chapterContentCache.set(content.id, { ...content, estimatedBytes })
-  chapterContentCacheBytes += estimatedBytes
-
-  const chapter = {
-    ...chapters.value[idx],
-    ...content,
-    body_text_loaded: true,
-  }
-  chapters.value[idx] = chapter
-  pruneChapterContentCache()
-  return chapter
-}
-
-const ensureChapterContent = async (chapterIndex: number): Promise<Chapter | null> => {
-  const chapter = chapters.value[chapterIndex]
-  if (!chapter) return null
-  if (chapter.body_text_loaded && chapter.body_text !== undefined && chapter.body !== undefined) return chapter
-
-  const cached = chapterContentCache.get(chapter.id)
-  if (cached) return mergeChapterContent(cached)
-
-  const pending = pendingChapterContentLoads.get(chapter.id)
-  if (pending) return pending
-
-  const startedAt = perfNow()
-  const loadPromise = window.electronAPI.library
-    .getChapterContentBatch(props.bookId, [chapter.id])
-    .then((items) => {
-      const item = (items as ChapterContentPayload[])[0]
-      return item ? mergeChapterContent(item) : null
-    })
-    .catch((error) => {
-      console.error('Load chapter content failed:', error)
-      return null
-    })
-    .finally(() => {
-      pendingChapterContentLoads.delete(chapter.id)
-      perfLog('reader:loadChapterContent', startedAt, `chapter=${chapter.id}`)
-    })
-  pendingChapterContentLoads.set(chapter.id, loadPromise)
-  return loadPromise
-}
-
-const ensureChapterContents = async (chapterIndexes: number[]): Promise<void> => {
-  const unique = Array.from(new Set(chapterIndexes))
-    .map((index) => chapters.value[index])
-    .filter(Boolean)
-  const missing = unique.filter((chapter) => (
-    !chapter.body_text_loaded
-    && !chapterContentCache.has(chapter.id)
-    && !pendingChapterContentLoads.has(chapter.id)
-  ))
-  if (missing.length === 0) return
-
-  const startedAt = perfNow()
-  const ids = missing.map((chapter) => chapter.id)
-  const batchPromise = window.electronAPI.library
-    .getChapterContentBatch(props.bookId, ids)
-    .then((items) => {
-      for (const item of items as ChapterContentPayload[]) {
-        mergeChapterContent(item)
-      }
-    })
-    .catch((error) => {
-      console.error('Load chapter content batch failed:', error)
-    })
-    .finally(() => {
-      for (const id of ids) pendingChapterContentLoads.delete(id)
-      perfLog('reader:loadChapterContentBatch', startedAt, `count=${ids.length}`)
-    })
-
-  for (const chapter of missing) {
-    pendingChapterContentLoads.set(
-      chapter.id,
-      batchPromise.then(() => chapters.value.find((item) => item.id === chapter.id) || null),
-    )
-  }
-  await batchPromise
-}
+const {
+  ensureChapterContent,
+  ensureChapterContents,
+} = useChapterContentCache({
+  bookId: props.bookId,
+  chapters,
+  currentChapterIndex,
+})
 
 // Rules are now handled by useRules
 
@@ -314,48 +171,21 @@ const layoutMarginTop = computed(() => marginTop.value + hudReservedTop.value)
 const layoutMarginBottom = computed(() => marginBottom.value + hudReservedBottom.value)
 
 // ---- Progress ----
-const persistProgressNow = async () => {
-  if (progressSaveTimer) {
-    window.clearTimeout(progressSaveTimer)
-    progressSaveTimer = null
-  }
-  if (!book.value) return
-  if (!readerProgressReady) return
-  const startedAt = perfNow()
-  try {
-    await window.electronAPI.library.updateBook(props.bookId, {
-      progressIndex: currentChapterIndex.value,
-      progressOffset: pagination.currentPage.value,
-      lastReadAt: Date.now(),
-      currentChapterTitle: currentChapterData.value?.title || '',
-    })
-    
-    uploadProgressToWebdav({
-      bookId: props.bookId,
-      title: book.value.title,
-      author: book.value.author || '',
-      currentChapterIndex: currentChapterIndex.value,
-      currentChapterTitle: currentChapterData.value?.title || '',
-      currentChapterBodyLength: currentChapterData.value?.body_text?.length || 0,
-      currentChapterOffset: getChapterOffset(),
-      currentPage: pagination.currentPage.value,
-      totalPages: pagination.totalPages.value,
-      pendingWebdavPos: pagination.pendingWebdavPos.value
-    })
-  } catch (e) { console.error(e) }
-  finally { perfLog('reader:saveProgress', startedAt, `book=${props.bookId}`) }
-}
-
-const saveProgress = () => {
-  if (progressSaveTimer) window.clearTimeout(progressSaveTimer)
-  progressSaveTimer = window.setTimeout(() => {
-    persistProgressNow().catch((error) => console.error('Persist progress failed:', error))
-  }, 400)
-}
-
-const flushProgress = async () => {
-  await persistProgressNow()
-}
+const {
+  setProgressReady,
+  saveProgress,
+  flushProgress,
+} = useReaderProgress({
+  bookId: props.bookId,
+  book,
+  currentChapterIndex,
+  currentChapterData,
+  getCurrentPage: () => pagination.currentPage.value,
+  getTotalPages: () => pagination.totalPages.value,
+  getPendingWebdavPos: () => pagination.pendingWebdavPos.value,
+  getChapterOffset: () => getChapterOffset(),
+  uploadProgressToWebdav,
+})
 
 // ---- Reader Paginator (async prewarm + cache) ----
 const paginator = useReaderPaginator({
@@ -363,37 +193,17 @@ const paginator = useReaderPaginator({
   textAlign, chapterTitleDisplay, marginX, marginTop: layoutMarginTop, marginBottom: layoutMarginBottom, pageMode, pIndent, pSpacing,
 })
 
-const prewarmChapterAt = async (index: number, options: {
-  mode?: 'partial' | 'full'
-  targetPageIndex?: number
-  targetOffset?: number
-  extraPagesAfterTarget?: number
-} = {}) => {
-  const loaded = await ensureChapterContent(index)
-  if (!loaded) return null
-  const ch = chapters.value[index]
-  if (!ch) return Promise.resolve(null)
-  const snap = paginator.capturePaginationSnapshot(ch.id)
-  const body = applyReplacements(ch.body || '')
-  const startedAt = perfNow()
-  const result = await paginator.prewarmChapterText(
-    ch.id,
-    body,
-    ch.body_text || '',
-    ch.title,
-    snap,
-    options,
-  )
-  perfLog('reader:paginateChapter', startedAt, `chapter=${ch.id} complete=${result?.complete ? '1' : '0'} pages=${result?.slices.length || 0}`)
-  return result
-}
-
-const prewarmNearbyChapters = () => {
-  ensureChapterContents([currentChapterIndex.value - 1, currentChapterIndex.value + 1]).then(() => {
-    prewarmChapterAt(currentChapterIndex.value - 1)
-    prewarmChapterAt(currentChapterIndex.value + 1)
-  })
-}
+const {
+  prewarmChapterAt,
+  prewarmNearbyChapters,
+} = useReaderPrewarm({
+  chapters,
+  currentChapterIndex,
+  ensureChapterContent,
+  ensureChapterContents,
+  paginator,
+  applyReplacements,
+})
 
 const pagesResult = computed(() => {
   if (!currentChapterData.value) return null
@@ -517,28 +327,7 @@ const pageFlipSimulationEnabled = computed(() => (
 const pageFlipBookRef = ref<InstanceType<typeof PageFlipOuterBook> | null>(null)
 const pageFlipBookReady = ref(false)
 let pageFlipClickSuppressedUntil = 0
-
-const scheduleOuterPageFlip = (
-  direction: 1 | -1,
-  prepare: Promise<unknown>,
-  fallback?: () => boolean | void,
-) => {
-  prepare
-    .then(() => {
-      nextTick(() => {
-        requestAnimationFrame(() => {
-          const flipped = direction > 0
-            ? pageFlipBookRef.value?.flipNext()
-            : pageFlipBookRef.value?.flipPrev()
-          if (!flipped) fallback?.()
-        })
-      })
-    })
-    .catch((error) => {
-      console.error('Prepare outer page flip failed:', error)
-      fallback?.()
-    })
-}
+const { scheduleOuterPageFlip } = usePageFlipScheduler(pageFlipBookRef)
 
 const sliderMax = computed(() => sliderMode.value === 'book' ? Math.max(0, chapters.value.length - 1) : Math.max(0, totalPages.value - 1))
 const sliderValue = computed(() => sliderMode.value === 'book' ? currentChapterIndex.value : currentPage.value)
@@ -1131,7 +920,7 @@ onMounted(async () => {
   if (!props.initialBookmark) {
     await applyProgressFromWebdav()
   }
-  readerProgressReady = true
+  setProgressReady(true)
   await ensureChapterContent(currentChapterIndex.value)
   await prewarmChapterAt(currentChapterIndex.value, {
     mode: 'partial',
@@ -1357,7 +1146,7 @@ onUnmounted(async () => {
           <Transition name="sf"><SearchPanel v-if="showSearch" :book-id="props.bookId" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
-          <Transition name="sf"><RulesPanel v-if="showRules" :rules="(rules as any)" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
+          <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
           <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>

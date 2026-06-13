@@ -10,10 +10,6 @@ export interface ElectronAPI {
   data: {
     readEntity: (entityType: string) => Promise<any>
     writeEntity: (entityType: string, data: unknown) => Promise<void>
-    hashFile: (entityType: string) => Promise<{ sha256: string | null; size: number }>
-    getDataDir: () => Promise<string>
-    isMigrated: () => Promise<boolean>
-    writeAll: (entities: Record<string, unknown>) => Promise<void>
   }
   library: {
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
@@ -23,16 +19,6 @@ export interface ElectronAPI {
     getBookSummary: (bookId: number) => Promise<BookSummary | null>
     getMostRecentBook: () => Promise<BookSummary | null>
     updateBook: (bookId: number, fields: Partial<BookSummary>) => Promise<BookSummary | null>
-    getBookChapters: (bookId: number) => Promise<Array<{
-      id: number
-      title: string
-      order_index: number
-      body: string
-      body_text: string
-      body_text_storage: string
-      body_text_missing: number
-      body_text_fallback: string | null
-    }>>
     getBookChapterList: (bookId: number) => Promise<ChapterMeta[]>
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => Promise<ChapterContent[]>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
@@ -44,9 +30,6 @@ export interface ElectronAPI {
     openFile: () => Promise<string | null>
     openImage: () => Promise<string | null>
   }
-  shell: {
-    openPath: (path: string) => Promise<void>
-  }
   win: {
     setAspectRatio: (ratio: number) => Promise<void>
     setFullScreen: (isFull: boolean) => Promise<void>
@@ -57,8 +40,8 @@ export interface ElectronAPI {
     close: () => Promise<void>
     getIsMaximized: () => Promise<boolean>
     getDisplayRefreshRate: () => Promise<number>
-    onMaximized: (cb: (val: boolean) => void) => void
-    onFullScreen: (cb: (val: boolean) => void) => void
+    onMaximized: (cb: (val: boolean) => void) => () => void
+    onFullScreen: (cb: (val: boolean) => void) => () => void
     onDisplayRefreshRateChanged: (cb: (hz: number) => void) => () => void
   }
   font: {
@@ -69,7 +52,7 @@ export interface ElectronAPI {
     download: () => Promise<boolean>
     install: () => Promise<void>
     installSilent: () => Promise<void>
-    onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => void
+    onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => () => void
   }
   app: {
     getVersion: () => Promise<string>

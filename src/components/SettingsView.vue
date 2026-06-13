@@ -5,6 +5,8 @@ import {
   fullBackupV8, fullRestoreV8, incrementalBackupV8, incrementalRestoreV8,
 } from '../composables/useV8Sync'
 import { useDataStore } from '../composables/useDataStore'
+import { useRuleManager } from '../composables/useRuleManager'
+import { useUpdaterStatus } from '../composables/useUpdaterStatus'
 import {
   buildPacilReadBaseUrl,
   clearLocalReadingStats,
@@ -41,9 +43,6 @@ const emit = defineEmits<{
   (e: 'open-reading-stats'): void
 }>()
 
-interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
-interface Book { id: number; title: string }
-
 const settings = useSettings()
 const {
   loadAllSettings, saveSetting,
@@ -58,13 +57,10 @@ const {
 } = settings
 
 // Update related state
-const appVersion = ref('')
 const dataSize = ref('')
 const chapterTextSize = ref('')
 const jsonDataSize = ref('')
 const totalDataSize = ref('')
-const updateStatus = ref('')
-const updateDetail = ref('')
 
 const formatBytes = (bytes: number) => {
   if (!bytes || bytes <= 0) return '—'
@@ -80,9 +76,19 @@ const refreshStorageSize = async () => {
   jsonDataSize.value = formatBytes(sz.jsonDataBytes ?? 0)
   totalDataSize.value = formatBytes(sz.totalBytes ?? sz.sizeBytes)
 }
-const updateAvailable = ref(false)
-const updateReady = ref(false)
-const isDownloading = ref(false)
+const {
+  appVersion,
+  updateStatus,
+  updateDetail,
+  updateAvailable,
+  updateReady,
+  isDownloading,
+  initializeUpdaterStatus,
+  checkForUpdate,
+  downloadUpdate,
+  installNow,
+  toggleSilentUpdate,
+} = useUpdaterStatus(silentUpdate)
 
 // WebDAV related status
 const webdavTestResult = ref('')
@@ -95,9 +101,14 @@ const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, year
 const showReadingStatsDisableModal = ref(false)
 const readingStatsActionBusy = ref(false)
 
-// Rules related state
-const allRules = ref<ReplacementRule[]>([])
-const books = ref<Book[]>([])
+const {
+  allRules,
+  fetchAllRules,
+  fetchBooks,
+  getBookTitle,
+  deleteRule,
+  toggleRuleActive,
+} = useRuleManager()
 
 const setAspectRatio = async (ratio: number) => {
   await window.electronAPI.win.setAspectRatio(ratio)
@@ -194,78 +205,8 @@ const removePrevKey = (k: string) => {
   saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
 }
 
-const checkForUpdate = async () => {
-  updateStatus.value = '正在检查...'
-  updateDetail.value = ''
-  updateAvailable.value = false
-  updateReady.value = false
-  await window.electronAPI.updater.check()
-}
-
-const downloadUpdate = async () => {
-  updateStatus.value = '准备下载...'
-  updateAvailable.value = false
-  isDownloading.value = true
-  await window.electronAPI.updater.download()
-}
-
-const installNow = () => {
-  if (silentUpdate.value) window.electronAPI.updater.installSilent()
-  else window.electronAPI.updater.install()
-}
-
-const toggleSilentUpdate = async () => {
-  await saveSetting('silentUpdate', silentUpdate.value ? 'true' : 'false')
-}
-
 const saveMiMoKey = async () => {
   await saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value.trim())
-}
-
-const fetchAllRules = async () => {
-  try {
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    allRules.value = dataStore.getRules().map(rule => ({
-      id: rule.id,
-      pattern: rule.pattern,
-      replacement: rule.replacement,
-      scope: rule.scope,
-      book_id: rule.bookId,
-      is_regex: rule.regex ? 1 : 0,
-      active: rule.active ? 1 : 0,
-    }))
-  } catch (e) { console.error(e) }
-}
-
-const fetchBooks = async () => {
-  try {
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    books.value = dataStore.getBooksSorted()
-      .map(book => ({ id: book.id, title: book.title }))
-      .sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'))
-  } catch (e) { console.error(e) }
-}
-
-const getBookTitle = (bookId: number | null) => {
-  if (!bookId) return ''
-  const b = books.value.find(b => b.id === bookId)
-  return b ? b.title : `#${bookId}`
-}
-
-const deleteRule = async (id: number) => {
-  try {
-    await useDataStore().deleteRule(id)
-    await fetchAllRules()
-  } catch (e) { console.error(e) }
-}
-
-const toggleRuleActive = async (rule: ReplacementRule) => {
-  try {
-    await useDataStore().updateRule(rule.id, { active: !rule.active })
-    await fetchAllRules()
-  } catch (e) { console.error(e) }
 }
 
 const getCurrentPacilReadBaseUrl = () => buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
@@ -861,18 +802,8 @@ onMounted(async () => {
   await fetchAllRules()
   await fetchBooks()
   await refreshReadingStatsSummary()
-  try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
+  await initializeUpdaterStatus()
   try { await refreshStorageSize() } catch { dataSize.value = '—'; chapterTextSize.value = '—'; jsonDataSize.value = '—'; totalDataSize.value = '—' }
-  window.electronAPI.updater.onStatus((data) => {
-    switch (data.status) {
-      case 'checking': updateStatus.value = '🔍 正在检查...'; break
-      case 'available': updateStatus.value = `🎉 发现新版本 v${data.version}`; updateAvailable.value = true; isDownloading.value = false; break
-      case 'up-to-date': updateStatus.value = '✅ 已是最新版本'; break
-      case 'downloading': updateStatus.value = `⏬ 下载中 ${data.percent}%`; isDownloading.value = true; break
-      case 'downloaded': updateStatus.value = '✅ 下载完成'; updateReady.value = true; updateAvailable.value = false; isDownloading.value = false; break
-      case 'error': updateStatus.value = '❌ 更新失败'; updateDetail.value = data.message || ''; isDownloading.value = false; break
-    }
-  })
 })
 </script>
 

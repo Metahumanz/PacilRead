@@ -1,4 +1,8 @@
 import { useSettings } from './useSettings'
+import {
+  buildProgressBaseUrl,
+  buildProgressFileName,
+} from '../utils/webdav'
 
 const PROGRESS_CACHE_TTL_MS = 5 * 60 * 1000
 const REMOTE_NEWER_GRACE_MS = 5000
@@ -35,26 +39,6 @@ const progressDownloadCache = new Map<string, {
   result: CachedDownloadProgress
 }>()
 const progressDownloadInFlight = new Map<string, Promise<CachedDownloadProgress>>()
-
-function buildProgressBaseUrl(rawUrl: string, rawDir: string): string {
-  let baseUrl = rawUrl.trim()
-  if (baseUrl && !baseUrl.endsWith('/')) baseUrl += '/'
-
-  let dir = rawDir.trim().replace(/^\/+/, '')
-  if (dir && !dir.endsWith('/')) dir += '/'
-  return `${baseUrl}${dir}`
-}
-
-function sanitizeProgressFilePart(value: string, fallback: string): string {
-  return value.replace(/[\\/:\"*?<>|]/g, '_') || fallback
-}
-
-export function buildProgressFileName(book: ProgressBook): string {
-  const title = sanitizeProgressFilePart(book.title || 'Unknown', 'Unknown')
-  const rawAuthor = book.author?.trim() || '未知'
-  const author = sanitizeProgressFilePart(rawAuthor, '未知')
-  return `${title}_${author}.json`
-}
 
 function parseRemoteReadingProgress(raw: string): RemoteReadingProgress {
   const data = JSON.parse(raw) as Record<string, unknown>

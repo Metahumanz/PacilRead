@@ -6,6 +6,7 @@ import {
   uploadReadingStatsSnapshot,
 } from './useReadingStats'
 import { useSettings } from './useSettings'
+import { splitRangeByDate } from '../utils/readingStats'
 
 interface TrackableBook {
   title: string
@@ -24,37 +25,6 @@ export function useReadingTimeTracker(opts: {
   let lastActivityAt: number | null = null
   let checkpointTimer: number | null = null
   let uploadTimer: number | null = null
-
-  const splitRangeByDate = (startMs: number, endMs: number) => {
-    const segments: Array<{ date: string; seconds: number }> = []
-    let cursor = startMs
-
-    while (cursor < endMs) {
-      const currentDate = new Date(cursor)
-      const endOfDay = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth(),
-        currentDate.getDate() + 1,
-        0,
-        0,
-        0,
-        0
-      ).getTime()
-      const segmentEnd = Math.min(endMs, endOfDay)
-      const durationSeconds = Math.floor((segmentEnd - cursor) / 1000)
-      if (durationSeconds > 0) {
-        const month = String(currentDate.getMonth() + 1).padStart(2, '0')
-        const day = String(currentDate.getDate()).padStart(2, '0')
-        segments.push({
-          date: `${currentDate.getFullYear()}-${month}-${day}`,
-          seconds: durationSeconds,
-        })
-      }
-      cursor = segmentEnd
-    }
-
-    return segments
-  }
 
   const scheduleUpload = () => {
     if (!settings.webdavSync.value || !settings.webdavUrl.value) return

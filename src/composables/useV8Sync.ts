@@ -3,6 +3,8 @@ import { useDataStore } from './useDataStore'
 import {
   extractDesktopSettingsValues,
 } from './useReadingStats'
+import { createWebdavClient } from './useWebdavClient'
+import { buildPacilReadBaseUrl } from '../utils/webdav'
 
 // ---- v8 manifest types ----
 interface ManifestFileEntry {
@@ -75,10 +77,7 @@ function getWebdavContext() {
   const dir = s['webdavDir'] || ''
   const user = s['webdavUser'] || ''
   const pass = s['webdavPass'] || ''
-  // If user configured a subdirectory, use it as the namespace;
-  // otherwise default to "PacilRead" for bare-root setups.
-  const namespace = dir ? dir.replace(/\/+$/, '') : 'PacilRead'
-  const baseUrl = (url + namespace).replace(/\/+$/, '')
+  const baseUrl = buildPacilReadBaseUrl(url, dir).replace(/\/+$/, '')
   return {
     url,
     user,
@@ -88,39 +87,27 @@ function getWebdavContext() {
   }
 }
 
-function remoteUrl(path: string): string {
+function getWebdavClient(baseOverride?: string) {
   const ctx = getWebdavContext()
-  return `${ctx.baseUrl}/${path}`
+  return createWebdavClient({
+    url: ctx.url,
+    dir: '',
+    user: ctx.user,
+    pass: ctx.pass,
+    baseUrl: (baseOverride || ctx.baseUrl).replace(/\/+$/, ''),
+  })
+}
+
+function remoteUrl(path: string): string {
+  return getWebdavClient().remoteUrl(path)
 }
 
 async function webdavPut(path: string, body: string, contentType?: string): Promise<boolean> {
-  const ctx = getWebdavContext()
-  const headers: Record<string, string> = {
-    Authorization: `Basic ${ctx.auth}`,
-  }
-  if (contentType) headers['Content-Type'] = contentType
-  try {
-    const response = await window.electronAPI.webdav.request({
-      url: remoteUrl(path),
-      method: 'PUT',
-      headers,
-      body,
-    })
-    return !response.error && response.status ? response.status < 400 : false
-  } catch { return false }
+  return getWebdavClient().putText(path, body, contentType)
 }
 
 async function webdavGet(path: string): Promise<string | null> {
-  const ctx = getWebdavContext()
-  try {
-    const response = await window.electronAPI.webdav.request({
-      url: remoteUrl(path),
-      method: 'GET',
-      headers: { Authorization: `Basic ${ctx.auth}` },
-    })
-    if (response.status === 200 && response.data) return response.data
-    return null
-  } catch { return null }
+  return getWebdavClient().getText(path)
 }
 
 async function webdavGetJson<T>(path: string): Promise<T | null> {
@@ -130,15 +117,7 @@ async function webdavGetJson<T>(path: string): Promise<T | null> {
 }
 
 async function webdavDelete(path: string): Promise<boolean> {
-  const ctx = getWebdavContext()
-  try {
-    const response = await window.electronAPI.webdav.request({
-      url: remoteUrl(path),
-      method: 'DELETE',
-      headers: { Authorization: `Basic ${ctx.auth}` },
-    })
-    return !response.error
-  } catch { return false }
+  return getWebdavClient().delete(path)
 }
 
 async function cleanupLegacySettingsFiles(): Promise<void> {
@@ -147,15 +126,7 @@ async function cleanupLegacySettingsFiles(): Promise<void> {
 }
 
 async function webdavFileExists(path: string): Promise<boolean> {
-  const ctx = getWebdavContext()
-  try {
-    const response = await window.electronAPI.webdav.request({
-      url: remoteUrl(path),
-      method: 'HEAD',
-      headers: { Authorization: `Basic ${ctx.auth}` },
-    })
-    return response.status === 200
-  } catch { return false }
+  return getWebdavClient().exists(path)
 }
 
 // ---- Backward-compat helpers ----

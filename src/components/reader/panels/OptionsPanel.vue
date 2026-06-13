@@ -2,11 +2,10 @@
 import { ref, watch } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
 import type { FlipMode, SimulationDoublePageTurnMode } from '../../../types/pagination'
-
-interface Book { id: number; title: string; author: string | null }
+import type { ReaderBook } from '../../../types/entities'
 
 const props = defineProps<{
-  book: Book | null
+  book: Pick<ReaderBook, 'id' | 'title' | 'author'> | null
 }>()
 
 const emit = defineEmits<{

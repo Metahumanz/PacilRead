@@ -80,13 +80,6 @@ function writeJsonEntity(entityType: JsonEntityType, data: unknown): void {
   invalidateDerivedEntityCache(entityType)
 }
 
-function fileSha256Hex(filePath: string): string | null {
-  if (!existsSync(filePath)) return null
-  try {
-    return createHash('sha256').update(readFileSync(filePath)).digest('hex')
-  } catch { return null }
-}
-
 function fileSizeBytes(filePath: string): number {
   try { return statSync(filePath).size } catch { return 0 }
 }
@@ -683,13 +676,6 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
   }
 }
 
-function getBookChaptersJson(bookId: number) {
-  const startedAt = performance.now()
-  const result = getChapterRowsForBook(bookId).map(chapterRowToContent)
-  perfLog('library:getBookChapters', startedAt, `book=${bookId} chapters=${result.length}`)
-  return result
-}
-
 function getBookChapterListJson(bookId: number) {
   const startedAt = performance.now()
   const result = getChapterRowsForBook(bookId).map(chapterRowToMeta)
@@ -964,8 +950,6 @@ ipcMain.handle('dialog:openImage', async () => {
   return r.canceled ? null : r.filePaths[0]
 })
 
-ipcMain.handle('shell:openPath', async (_, path: string) => shell.openPath(path))
-
 ipcMain.handle('win:setAspectRatio', async (_, ratio: number) => {
   // We explicitly do not call setAspectRatio(ratio) to avoid locking the window.
   // We only resize it to match the ratio once upon user request.
@@ -1031,7 +1015,6 @@ ipcMain.handle('library:getBookshelfBooks', async () => getBookshelfBooksJson())
 ipcMain.handle('library:getBookSummary', async (_, bookId: number) => getBookSummaryJson(bookId))
 ipcMain.handle('library:getMostRecentBook', async () => getMostRecentBookJson())
 ipcMain.handle('library:updateBook', async (_, bookId: number, fields: Record<string, unknown>) => updateBookJson(bookId, fields))
-ipcMain.handle('library:getBookChapters', async (_, bookId: number) => getBookChaptersJson(bookId))
 ipcMain.handle('library:getBookChapterList', async (_, bookId: number) => getBookChapterListJson(bookId))
 ipcMain.handle('library:getChapterContentBatch', async (_, bookId: number, chapterIds: number[]) => getChapterContentBatchJson(bookId, chapterIds))
 ipcMain.handle('library:getSize', async () => getStorageSizeInfo())
@@ -1166,22 +1149,3 @@ ipcMain.handle('data:writeEntity', async (_, entityType: string, data: unknown) 
   writeJsonEntity(entityType as keyof typeof JSON_FILES, data)
 })
 
-ipcMain.handle('data:hashFile', async (_, entityType: string) => {
-  const filePath = join(DATA_DIR, JSON_FILES[entityType])
-  return { sha256: fileSha256Hex(filePath), size: fileSizeBytes(filePath) }
-})
-
-ipcMain.handle('data:getDataDir', async () => DATA_DIR)
-
-ipcMain.handle('data:isMigrated', async () => {
-  return existsSync(join(DATA_DIR, '.migrated'))
-})
-
-ipcMain.handle('data:writeAll', async (_, entities: Record<string, unknown>) => {
-  ensureDataDir()
-  for (const [entityType, data] of Object.entries(entities)) {
-    if (entityType in JSON_FILES) {
-      writeJsonEntity(entityType as keyof typeof JSON_FILES, data)
-    }
-  }
-})

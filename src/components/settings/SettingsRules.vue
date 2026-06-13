@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-
-interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
+import type { ReplacementRuleView } from '../../types/entities'
 
 const {
   rules,
@@ -9,10 +8,10 @@ const {
   deleteRule,
   toggleRuleActive
 } = defineProps<{
-  rules: ReplacementRule[]
+  rules: ReplacementRuleView[]
   getBookTitle: (id: number | null) => string
   deleteRule: (id: number) => void
-  toggleRuleActive: (rule: ReplacementRule) => void
+  toggleRuleActive: (rule: ReplacementRuleView) => void
 }>()
 
 const ruleFilter = ref<'all' | 'global' | 'book'>('all')
@@ -54,8 +53,8 @@ const filteredRules = () => {
             </div>
             <div class="flex items-center gap-2 flex-wrap">
               <span class="app-badge text-[10px] font-bold px-1.5 py-[1px]">{{ rule.scope === 'global' ? '全局模式' : '专属模式' }}</span>
-              <span v-if="rule.scope === 'book' && rule.book_id" class="text-[10px] app-muted max-w-[120px] truncate">#{{ getBookTitle(rule.book_id) }}</span>
-              <span v-if="rule.is_regex" class="app-badge text-[10px] uppercase font-bold px-1.5 py-[1px]">Regex</span>
+              <span v-if="rule.scope === 'book' && rule.bookId" class="text-[10px] app-muted max-w-[120px] truncate">#{{ getBookTitle(rule.bookId) }}</span>
+              <span v-if="rule.regex" class="app-badge text-[10px] uppercase font-bold px-1.5 py-[1px]">Regex</span>
             </div>
           </div>
           
