@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.1.6',
+    date: '2026-06-13',
+    changes: [
+      '修复窗口化阅读从双页切回单页后，仿真翻页仍按双页 2 页步长跳页的问题',
+      '单页仿真翻页现在固定按 1 页推进，不再受双页模式“翻页步长”历史设置影响',
+      '双页模式仍保留 1 页/2 页步长选项，整张双页仿真继续按双页 spread 推进',
+    ]
+  },
+  {
     version: '1.1.5',
     date: '2026-06-01',
     changes: [

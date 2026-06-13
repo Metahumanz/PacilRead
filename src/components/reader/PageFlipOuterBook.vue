@@ -76,7 +76,11 @@ const singlePageMode = computed(() => props.turnMode === 'single')
 const wholeSpreadMode = computed(() => props.turnMode === 'spread')
 const physicalPageMode = computed(() => singlePageMode.value || wholeSpreadMode.value)
 const clampPageFor = (pages: PageSlice[], pageIndex: number) => Math.max(0, Math.min(Math.max(0, pages.length - 1), pageIndex))
-const logicalStep = computed(() => wholeSpreadMode.value ? 2 : props.doublePageStep === 2 ? 2 : 1)
+const logicalStep = computed(() => {
+  if (singlePageMode.value) return 1
+  if (wholeSpreadMode.value) return 2
+  return props.doublePageStep === 2 ? 2 : 1
+})
 const flipPageWidth = computed(() => wholeSpreadMode.value ? props.pageWidth * 2 : props.pageWidth)
 const flipBookWidth = computed(() => physicalPageMode.value ? flipPageWidth.value : props.pageWidth * 2)
 
