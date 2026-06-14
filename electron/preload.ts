@@ -4,10 +4,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   data: {
     readEntity: (entityType: string) => ipcRenderer.invoke('data:readEntity', entityType),
     writeEntity: (entityType: string, data: unknown) => ipcRenderer.invoke('data:writeEntity', entityType, data),
-    hashFile: (entityType: string) => ipcRenderer.invoke('data:hashFile', entityType),
-    getDataDir: () => ipcRenderer.invoke('data:getDataDir'),
-    isMigrated: () => ipcRenderer.invoke('data:isMigrated'),
-    writeAll: (entities: Record<string, unknown>) => ipcRenderer.invoke('data:writeAll', entities),
   },
   library: {
     importBook: (filePath: string) => ipcRenderer.invoke('library:importBook', filePath),
@@ -17,7 +13,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBookSummary: (bookId: number) => ipcRenderer.invoke('library:getBookSummary', bookId),
     getMostRecentBook: () => ipcRenderer.invoke('library:getMostRecentBook'),
     updateBook: (bookId: number, fields: Record<string, unknown>) => ipcRenderer.invoke('library:updateBook', bookId, fields),
-    getBookChapters: (bookId: number) => ipcRenderer.invoke('library:getBookChapters', bookId),
     getBookChapterList: (bookId: number) => ipcRenderer.invoke('library:getBookChapterList', bookId),
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => ipcRenderer.invoke('library:getChapterContentBatch', bookId, chapterIds),
     getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('library:getBookIdsWithFileGzipChapters'),
@@ -27,10 +22,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),
-    openImage: () => ipcRenderer.invoke('dialog:openImage')
+    openImage: () => ipcRenderer.invoke('dialog:openImage'),
+    saveTextFile: (options: { defaultPath: string; content: string; filters?: Array<{ name: string; extensions: string[] }> }) => (
+      ipcRenderer.invoke('dialog:saveTextFile', options)
+    )
   },
-  shell: {
-    openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path)
+  snapshot: {
+    create: (reason?: string) => ipcRenderer.invoke('snapshot:create', reason),
+    list: () => ipcRenderer.invoke('snapshot:list'),
+    restore: (id: string) => ipcRenderer.invoke('snapshot:restore', id),
+    delete: (id: string) => ipcRenderer.invoke('snapshot:delete', id),
   },
   win: {
     setAspectRatio: (ratio: number) => ipcRenderer.invoke('win:setAspectRatio', ratio),
@@ -43,10 +44,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getIsMaximized: () => ipcRenderer.invoke('win:getIsMaximized'),
     getDisplayRefreshRate: () => ipcRenderer.invoke('win:getDisplayRefreshRate'),
     onMaximized: (cb: (val: boolean) => void) => {
-      ipcRenderer.on('win:isMaximized', (_, val) => cb(val))
+      const listener = (_: unknown, val: boolean) => cb(val)
+      ipcRenderer.on('win:isMaximized', listener)
+      return () => ipcRenderer.removeListener('win:isMaximized', listener)
     },
     onFullScreen: (cb: (val: boolean) => void) => {
-      ipcRenderer.on('win:isFullScreen', (_, val) => cb(val))
+      const listener = (_: unknown, val: boolean) => cb(val)
+      ipcRenderer.on('win:isFullScreen', listener)
+      return () => ipcRenderer.removeListener('win:isFullScreen', listener)
     },
     onDisplayRefreshRateChanged: (cb: (hz: number) => void) => {
       const listener = (_: unknown, hz: number) => cb(hz)
@@ -63,7 +68,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     install: () => ipcRenderer.invoke('updater:install'),
     installSilent: () => ipcRenderer.invoke('updater:install', true),
     onStatus: (cb: (data: any) => void) => {
-      ipcRenderer.on('updater:status', (_, data) => cb(data))
+      const listener = (_: unknown, data: any) => cb(data)
+      ipcRenderer.on('updater:status', listener)
+      return () => ipcRenderer.removeListener('updater:status', listener)
     }
   },
   app: {

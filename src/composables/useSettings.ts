@@ -2,6 +2,17 @@ import { computed, ref } from 'vue'
 import { MIMO_TTS_DEFAULT_VOICE, isMimoTtsVoiceId } from '../data/mimoTts'
 import { useDataStore } from './useDataStore'
 import type { FlipMode, SimulationDoublePageTurnMode } from '../types/pagination'
+import {
+  DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT,
+  clampBookshelfProgressPrefetchLimit,
+  clampGlassOpacity,
+  clampHudMargin,
+} from '../utils/settingsSchema'
+
+export {
+  DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT,
+  clampBookshelfProgressPrefetchLimit,
+}
 
 /*
  * 设置系统架构说明（与 Android 端兼容性）
@@ -73,22 +84,11 @@ export const saveSetting = async (k: string, v: any) => {
 const DEFAULT_NEXT_KEYS = ['ArrowRight', 'PageDown', ' ']
 const DEFAULT_PREV_KEYS = ['ArrowLeft', 'PageUp']
 const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
-export const DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT = 6
-export const clampBookshelfProgressPrefetchLimit = (value: unknown) => {
-  if (value === '' || value === null || value === undefined) {
-    return DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT
-  }
-  const parsed = Number(value)
-  return Math.max(0, Math.min(100, Number.isFinite(parsed)
-    ? Math.floor(parsed)
-    : DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT))
-}
 const parseSettingInt = (value: string | undefined, fallback: number) => {
   if (value === undefined) return fallback
   const parsed = parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : fallback
 }
-const clampHudMargin = (value: number) => Math.max(0, Math.min(32, Number.isFinite(value) ? value : 2))
 
 export type AppThemeMode = 'system' | 'light' | 'dark'
 export type AppLightStyleVariant = 'yaobai' | 'yunbai'
@@ -97,8 +97,6 @@ export type ResolvedAppStyle = AppLightStyleVariant | AppDarkStyleVariant
 export type ReaderAutoNightPolicy = 'preserve' | 'override'
 export type HomeNavMode = 'sidebar' | 'bottom' | 'drawer'
 export type HomeManualNavMode = 'sidebar' | 'bottom'
-
-const clampGlassOpacity = (value: number) => Math.max(20, Math.min(100, value))
 
 // ---- Singleton State ----
 const fontSize = ref(20)

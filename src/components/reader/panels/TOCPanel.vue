@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch } from 'vue'
-
-interface Chapter { id: number; title: string; order_index: number }
+import type { ReaderChapter } from '../../../types/entities'
 
 const props = defineProps<{
-  chapters: Chapter[]
+  chapters: Array<Pick<ReaderChapter, 'id' | 'title' | 'order_index'>>
   currentChapterIndex: number
 }>()
 

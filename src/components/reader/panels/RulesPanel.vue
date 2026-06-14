@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useDataStore } from '../../../composables/useDataStore'
-
-interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
+import type { ReplacementRuleView } from '../../../types/entities'
 
 const props = defineProps<{
-  rules: ReplacementRule[]
+  rules: ReplacementRuleView[]
   bookId: number
 }>()
 
@@ -44,11 +43,10 @@ const deleteRule = async (id: number) => {
   } catch (e) { console.error(e) }
 }
 
-const toggleRuleActive = async (rule: ReplacementRule) => {
+const toggleRuleActive = async (rule: ReplacementRuleView) => {
   try {
     const { updateRule } = useDataStore()
-    const newActive = rule.active ? false : true
-    await updateRule(rule.id, { active: newActive })
+    await updateRule(rule.id, { active: !rule.active })
     emit('refresh')
   } catch (e) { console.error(e) }
 }
@@ -79,7 +77,7 @@ const toggleRuleActive = async (rule: ReplacementRule) => {
         </div>
         <div class="rule-meta">
           <span class="rule-badge" :class="rule.scope">{{ rule.scope === 'global' ? '全局' : '本书' }}</span>
-          <span v-if="rule.is_regex" class="rule-badge regex">正则</span>
+          <span v-if="rule.regex" class="rule-badge regex">正则</span>
           <button @click="toggleRuleActive(rule)" class="rule-toggle">{{ rule.active ? '✓' : '○' }}</button>
           <button @click="deleteRule(rule.id)" class="rule-del">✕</button>
         </div>

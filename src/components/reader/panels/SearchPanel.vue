@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { perfLog, perfNow } from '../../../utils/perf'
+import type { ChapterContentPayload, ReaderChapter } from '../../../types/entities'
 
-interface Chapter { id: number; title: string; body?: string; body_text?: string; order_index: number }
-interface ChapterContent { id: number; body_text: string; body?: string }
 interface SearchResult { chapterIndex: number; matchIndex: number; chapterTitle: string; snippet: string }
 
 const props = defineProps<{
   bookId: number
-  chapters: Chapter[]
+  chapters: ReaderChapter[]
 }>()
 
 const emit = defineEmits<{
@@ -38,7 +37,7 @@ const doSearch = async () => {
         .filter((chapter) => !chapter.body_text && !chapter.body)
         .map((chapter) => chapter.id)
       const loaded = idsToLoad.length > 0
-        ? await window.electronAPI.library.getChapterContentBatch(props.bookId, idsToLoad) as ChapterContent[]
+        ? await window.electronAPI.library.getChapterContentBatch(props.bookId, idsToLoad) as ChapterContentPayload[]
         : []
       if (runId !== searchRunId) return
       const loadedById = new Map(loaded.map((chapter) => [chapter.id, chapter]))

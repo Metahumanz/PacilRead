@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import type { Rule } from './useDataStore'
+import { toReplacementRuleView, type ReplacementRuleView } from '../types/entities'
 
-export type ReplacementRule = Rule
+export type ReplacementRule = ReplacementRuleView
 
 export function useRules() {
   const rules = ref<ReplacementRule[]>([])
@@ -13,12 +14,7 @@ export function useRules() {
       rules.value = allRules
         .filter(r => r.scope === 'global' || (r.scope === 'book' && r.bookId === bookId))
         .sort((a, b) => a.id - b.id)
-        .map(r => ({
-          ...r,
-          book_id: r.bookId,
-          is_regex: r.regex ? 1 : 0,
-          active: r.active ? 1 : 0,
-        })) as any
+        .map(toReplacementRuleView)
     } catch (e) {
       console.error('Failed to fetch rules:', e)
     }
@@ -28,12 +24,10 @@ export function useRules() {
     if (!html) return html
     let result = html
     for (const rule of rules.value) {
-      const isActive = typeof rule.active === 'boolean' ? rule.active : rule.active === 1
-      const isRegex = typeof rule.regex === 'boolean' ? rule.regex : (rule as any).is_regex === 1
       const pattern = rule.pattern
-      if (!isActive) continue
+      if (!rule.active) continue
       try {
-        if (isRegex) {
+        if (rule.regex) {
           result = result.replace(new RegExp(pattern, 'g'), rule.replacement)
         } else {
           result = result.replace(

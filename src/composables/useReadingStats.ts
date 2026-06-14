@@ -1,4 +1,34 @@
 import { saveSetting, useSettings } from './useSettings'
+import {
+  DEFAULT_DESKTOP_SETTINGS_DIR,
+  buildBasicAuth,
+  buildPacilReadBaseUrl,
+  extractHrefValues,
+  fileUrlToLocalPath,
+  isLocalFileUrl,
+  localPathToFileUrl,
+  sanitizeRemoteFileName,
+  sanitizeWebdavDirectorySegment,
+} from '../utils/webdav'
+import { SETTING_KEYS_BY_SCOPE } from '../utils/settingsSchema'
+import {
+  buildAnnualReadingReport,
+  buildAnnualReportHtml,
+  buildReadingCalendar,
+  calculateLongestStreak,
+  calculateReadingSpeed,
+  estimateFinishTime,
+  type AnnualReadingReport,
+  type EstimatedFinish,
+  type ReadingCalendarDay,
+  type ReadingSpeedStats,
+} from '../utils/readingInsights'
+
+export {
+  buildPacilReadBaseUrl,
+  extractHrefValues,
+  sanitizeWebdavDirectorySegment,
+} from '../utils/webdav'
 
 export type ReadingStatsPeriod = 'today' | 'week' | 'year'
 
@@ -26,6 +56,13 @@ export interface ReadingStatsBookDetail {
   lastRead: string
   progressIndex: number
   readingStatsKey: string
+  speed: ReadingSpeedStats
+  estimate: EstimatedFinish
+}
+
+export interface ReadingCalendarSummary {
+  days: ReadingCalendarDay[]
+  longestStreak: number
 }
 
 interface ReadingStatsRowPayload {
@@ -71,8 +108,6 @@ const READING_STATS_SCHEMA_VERSION = 1
 const DESKTOP_SETTINGS_SCHEMA_VERSION = 1
 const DESKTOP_SETTINGS_FILE_NAME = 'desktop-settings.json'
 const READING_STATS_REMOTE_DIR = 'readingStats'
-const PACILREAD_ROOT_DIR = 'PacilRead'
-const DEFAULT_DESKTOP_SETTINGS_DIR = 'desktop-settings'
 const REMOTE_BG_PLACEHOLDER_PREFIX = '__PACILREAD_REMOTE_BG__:'
 const READING_STATS_IDLE_MS = 60_000
 
@@ -173,18 +208,9 @@ const THEME_SETTINGS_KEYS = [
   'reader_pSpacing',
 ]
 
-const LOCAL_ONLY_SETTING_KEYS = new Set([
-  'readingStatsDeviceId',
-  'reading_stats_device_id',
-  'webdavDesktopSettingsDir',
-])
+const LOCAL_ONLY_SETTING_KEYS = SETTING_KEYS_BY_SCOPE.localOnly
 
 export const readingStatsIdleMs = READING_STATS_IDLE_MS
-
-export function sanitizeWebdavDirectorySegment(value: string): string {
-  const sanitized = value.trim().replace(/[\\/]+/g, '').replace(/\.+$/g, '')
-  return sanitized || DEFAULT_DESKTOP_SETTINGS_DIR
-}
 
 export function formatDuration(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds))
@@ -206,26 +232,6 @@ function toDateString(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
-}
-
-function buildBasicAuth(user: string, pass: string): string {
-  return btoa(`${user}:${pass}`)
-}
-
-function buildWebdavBaseUrl(rawUrl: string, rawDir: string): string {
-  let baseUrl = rawUrl.trim()
-  if (baseUrl && !baseUrl.endsWith('/')) baseUrl += '/'
-  let dir = rawDir.trim()
-  if (dir.startsWith('/')) dir = dir.substring(1)
-  if (dir && !dir.endsWith('/')) dir += '/'
-  return `${baseUrl}${dir}`
-}
-
-export function buildPacilReadBaseUrl(rawUrl: string, rawDir: string): string {
-  let baseUrl = buildWebdavBaseUrl(rawUrl, rawDir)
-  if (!baseUrl.endsWith('/')) baseUrl += '/'
-  // If user configured a subdir, it serves as the namespace; otherwise default to PacilRead.
-  return rawDir.trim() ? baseUrl : `${baseUrl}${PACILREAD_ROOT_DIR}/`
 }
 
 function buildRemoteReadingStatsFileName(deviceId: string): string {
@@ -250,31 +256,6 @@ function getPeriodRange(period: ReadingStatsPeriod): { start: string; end: strin
 
   const startDate = new Date(now.getFullYear(), 0, 1)
   return { start: toDateString(startDate), end }
-}
-
-function isLocalFileUrl(value: string | undefined): boolean {
-  return typeof value === 'string' && value.startsWith('file:///')
-}
-
-function fileUrlToLocalPath(fileUrl: string): string | null {
-  try {
-    const url = new URL(fileUrl)
-    if (url.protocol !== 'file:') return null
-    let localPath = decodeURIComponent(url.pathname)
-    if (/^\/[A-Za-z]:/.test(localPath)) localPath = localPath.substring(1)
-    return localPath.replace(/\//g, '\\')
-  } catch (_) {
-    return null
-  }
-}
-
-function localPathToFileUrl(localPath: string): string {
-  return `file:///${localPath.replace(/\\/g, '/')}`
-}
-
-function sanitizeRemoteFileName(input: string): string {
-  const sanitized = input.replace(/[\\/:*?"<>|]+/g, '_').trim()
-  return sanitized || `bg-${Date.now()}`
 }
 
 async function readSettingsMap(): Promise<Record<string, string>> {
@@ -442,16 +423,6 @@ async function ensurePacilReadStructure(options: {
     pacilReadBaseUrl: baseUrl,
     desktopSettingsBaseUrl,
   }
-}
-
-export function extractHrefValues(xmlText: string): string[] {
-  const hrefs: string[] = []
-  const regex = /<[^>]*:?href[^>]*>([^<]+)<\/[^>]*:?href>/gi
-  let match: RegExpExecArray | null
-  while ((match = regex.exec(xmlText)) !== null) {
-    hrefs.push(match[1])
-  }
-  return hrefs
 }
 
 async function listRemoteFiles(dirUrl: string, auth: string): Promise<string[]> {
@@ -683,13 +654,17 @@ export async function deleteRemoteReadingStatsFiles(): Promise<void> {
 
 async function getBookIdentityById(bookId: number): Promise<string | null> {
   const { useDataStore: getStore } = await import('./useDataStore')
-  const book = getStore().getBook(bookId)
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  const book = store.getBook(bookId)
   return book?.readingStatsKey ?? null
 }
 
 async function queryReadingStatsTotal(start: string, end: string, bookIdentity?: string | null): Promise<number> {
   const { useDataStore: getStore } = await import('./useDataStore')
-  const allRows = getStore().getReadingStatsRows()
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  const allRows = store.getReadingStatsRows()
   let total = 0
   for (const row of allRows) {
     if (row.date < start || row.date > end) continue
@@ -716,6 +691,7 @@ export async function fetchReadingStatsBookRank(period: ReadingStatsPeriod): Pro
   const range = getPeriodRange(period)
   const { useDataStore: getStore } = await import('./useDataStore')
   const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
   const allStats = store.getReadingStatsRows()
   const allBooks = store.books.value
 
@@ -758,8 +734,11 @@ export async function fetchReadingStatsBookRank(period: ReadingStatsPeriod): Pro
 
 export async function fetchReadingStatsBookDetail(bookId: number): Promise<ReadingStatsBookDetail | null> {
   const { useDataStore: getStore } = await import('./useDataStore')
-  const b = getStore().getBook(bookId)
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  const b = store.getBook(bookId)
   if (!b) return null
+  const rows = store.getReadingStatsRows() as any[]
   return {
     id: b.id,
     title: b.title,
@@ -768,7 +747,49 @@ export async function fetchReadingStatsBookDetail(bookId: number): Promise<Readi
     lastRead: b.lastReadAt ? new Date(b.lastReadAt).toISOString() : '',
     progressIndex: b.progressIndex,
     readingStatsKey: b.readingStatsKey,
+    speed: calculateReadingSpeed(rows, { bookIdentity: b.readingStatsKey }),
+    estimate: estimateFinishTime({
+      book: b,
+      chapters: store.chapters.value,
+      rows,
+    }),
   }
+}
+
+export async function fetchReadingCalendar(bookId?: number | null): Promise<ReadingCalendarSummary> {
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  const bookIdentity = typeof bookId === 'number' ? store.getBook(bookId)?.readingStatsKey : null
+  const days = buildReadingCalendar(store.getReadingStatsRows() as any[], {
+    year: new Date().getFullYear(),
+    bookIdentity,
+  })
+  return {
+    days,
+    longestStreak: calculateLongestStreak(days),
+  }
+}
+
+export async function createAnnualReadingReport(year = new Date().getFullYear()): Promise<AnnualReadingReport> {
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  return buildAnnualReadingReport(store.getReadingStatsRows() as any[], store.books.value as any[], year)
+}
+
+export async function exportAnnualReadingReport(format: 'html' | 'json'): Promise<void> {
+  const report = await createAnnualReadingReport()
+  const content = format === 'json'
+    ? JSON.stringify(report, null, 2)
+    : buildAnnualReportHtml(report)
+  await window.electronAPI.dialog.saveTextFile({
+    defaultPath: `PacilRead-${report.year}-年度报告.${format}`,
+    content,
+    filters: format === 'json'
+      ? [{ name: 'JSON', extensions: ['json'] }]
+      : [{ name: 'HTML', extensions: ['html'] }],
+  })
 }
 
 export async function hasReadingStatsHistory(): Promise<boolean> {

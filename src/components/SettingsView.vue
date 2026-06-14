@@ -2,9 +2,15 @@
 import { ref, onMounted } from 'vue'
 import { clampBookshelfProgressPrefetchLimit, useSettings } from '../composables/useSettings'
 import {
-  fullBackupV8, fullRestoreV8, incrementalBackupV8, incrementalRestoreV8,
+  applySyncResolution,
+  fullBackupV8, fullRestoreV8, incrementalBackupV8,
+  previewSyncDiff,
+  type SyncDiffPreview,
+  type SyncResolutionMap,
 } from '../composables/useV8Sync'
 import { useDataStore } from '../composables/useDataStore'
+import { useRuleManager } from '../composables/useRuleManager'
+import { useUpdaterStatus } from '../composables/useUpdaterStatus'
 import {
   buildPacilReadBaseUrl,
   clearLocalReadingStats,
@@ -34,15 +40,13 @@ import SettingsWebDAV from './settings/SettingsWebDAV.vue'
 import SettingsTTS from './settings/SettingsTTS.vue'
 import SettingsRules from './settings/SettingsRules.vue'
 import SettingsAbout from './settings/SettingsAbout.vue'
+import SettingsSnapshots from './settings/SettingsSnapshots.vue'
 
 const emit = defineEmits<{
   (e: 'back'): void
   (e: 'refresh-settings'): void
   (e: 'open-reading-stats'): void
 }>()
-
-interface ReplacementRule { id: number; pattern: string; replacement: string; scope: string; book_id: number | null; is_regex: number; active: number }
-interface Book { id: number; title: string }
 
 const settings = useSettings()
 const {
@@ -58,13 +62,10 @@ const {
 } = settings
 
 // Update related state
-const appVersion = ref('')
 const dataSize = ref('')
 const chapterTextSize = ref('')
 const jsonDataSize = ref('')
 const totalDataSize = ref('')
-const updateStatus = ref('')
-const updateDetail = ref('')
 
 const formatBytes = (bytes: number) => {
   if (!bytes || bytes <= 0) return '—'
@@ -80,9 +81,19 @@ const refreshStorageSize = async () => {
   jsonDataSize.value = formatBytes(sz.jsonDataBytes ?? 0)
   totalDataSize.value = formatBytes(sz.totalBytes ?? sz.sizeBytes)
 }
-const updateAvailable = ref(false)
-const updateReady = ref(false)
-const isDownloading = ref(false)
+const {
+  appVersion,
+  updateStatus,
+  updateDetail,
+  updateAvailable,
+  updateReady,
+  isDownloading,
+  initializeUpdaterStatus,
+  checkForUpdate,
+  downloadUpdate,
+  installNow,
+  toggleSilentUpdate,
+} = useUpdaterStatus(silentUpdate)
 
 // WebDAV related status
 const webdavTestResult = ref('')
@@ -90,14 +101,23 @@ const webdavTesting = ref(false)
 const webdavSyncing = ref(false)
 const webdavSyncStatus = ref('')
 const readingStatsLoading = ref(false)
+const syncDiffPreview = ref<SyncDiffPreview | null>(null)
+const syncDiffResolution = ref<SyncResolutionMap>({})
+const syncDiffLoading = ref(false)
+const syncDiffApplying = ref(false)
 const readingStatsHasHistory = ref(false)
 const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, year: 0 })
 const showReadingStatsDisableModal = ref(false)
 const readingStatsActionBusy = ref(false)
 
-// Rules related state
-const allRules = ref<ReplacementRule[]>([])
-const books = ref<Book[]>([])
+const {
+  allRules,
+  fetchAllRules,
+  fetchBooks,
+  getBookTitle,
+  deleteRule,
+  toggleRuleActive,
+} = useRuleManager()
 
 const setAspectRatio = async (ratio: number) => {
   await window.electronAPI.win.setAspectRatio(ratio)
@@ -194,78 +214,8 @@ const removePrevKey = (k: string) => {
   saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
 }
 
-const checkForUpdate = async () => {
-  updateStatus.value = '正在检查...'
-  updateDetail.value = ''
-  updateAvailable.value = false
-  updateReady.value = false
-  await window.electronAPI.updater.check()
-}
-
-const downloadUpdate = async () => {
-  updateStatus.value = '准备下载...'
-  updateAvailable.value = false
-  isDownloading.value = true
-  await window.electronAPI.updater.download()
-}
-
-const installNow = () => {
-  if (silentUpdate.value) window.electronAPI.updater.installSilent()
-  else window.electronAPI.updater.install()
-}
-
-const toggleSilentUpdate = async () => {
-  await saveSetting('silentUpdate', silentUpdate.value ? 'true' : 'false')
-}
-
 const saveMiMoKey = async () => {
   await saveSetting('reader_ttsMiMoApiKey', ttsMiMoApiKey.value.trim())
-}
-
-const fetchAllRules = async () => {
-  try {
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    allRules.value = dataStore.getRules().map(rule => ({
-      id: rule.id,
-      pattern: rule.pattern,
-      replacement: rule.replacement,
-      scope: rule.scope,
-      book_id: rule.bookId,
-      is_regex: rule.regex ? 1 : 0,
-      active: rule.active ? 1 : 0,
-    }))
-  } catch (e) { console.error(e) }
-}
-
-const fetchBooks = async () => {
-  try {
-    const dataStore = useDataStore()
-    if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-    books.value = dataStore.getBooksSorted()
-      .map(book => ({ id: book.id, title: book.title }))
-      .sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'))
-  } catch (e) { console.error(e) }
-}
-
-const getBookTitle = (bookId: number | null) => {
-  if (!bookId) return ''
-  const b = books.value.find(b => b.id === bookId)
-  return b ? b.title : `#${bookId}`
-}
-
-const deleteRule = async (id: number) => {
-  try {
-    await useDataStore().deleteRule(id)
-    await fetchAllRules()
-  } catch (e) { console.error(e) }
-}
-
-const toggleRuleActive = async (rule: ReplacementRule) => {
-  try {
-    await useDataStore().updateRule(rule.id, { active: !rule.active })
-    await fetchAllRules()
-  } catch (e) { console.error(e) }
 }
 
 const getCurrentPacilReadBaseUrl = () => buildPacilReadBaseUrl(webdavUrl.value, webdavDir.value)
@@ -689,6 +639,71 @@ const reloadRestoredState = async () => {
   emit('refresh-settings')
 }
 
+const defaultSyncResolution = (status: string): SyncResolutionMap[string] => {
+  if (status === 'remote') return 'remote'
+  if (status === 'local') return 'local'
+  return 'merge'
+}
+
+const openSyncDiffPreview = async () => {
+  if (!webdavUrl.value) return
+  try {
+    await saveWebdav()
+    syncDiffLoading.value = true
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '正在生成 WebDAV 差异预览...'
+    const result = await previewSyncDiff()
+    if (!result.success || !result.preview) {
+      throw new Error(result.error || '无法生成差异预览')
+    }
+    syncDiffPreview.value = result.preview
+    const nextResolution: SyncResolutionMap = {}
+    for (const item of result.preview.items) {
+      if (item.status === 'unchanged') continue
+      nextResolution[item.id] = defaultSyncResolution(item.status)
+    }
+    syncDiffResolution.value = nextResolution
+    webdavSyncStatus.value = `发现 ${result.preview.summary.conflict} 个冲突，${result.preview.summary.remote} 个远端新增，${result.preview.summary.local} 个本地独有`
+  } catch (e: any) {
+    webdavSyncStatus.value = '差异预览失败: ' + (e.message || '网络错误')
+  } finally {
+    syncDiffLoading.value = false
+    webdavSyncing.value = false
+  }
+}
+
+const closeSyncDiffPreview = () => {
+  syncDiffPreview.value = null
+  syncDiffResolution.value = {}
+}
+
+const setSyncDiffResolution = (id: string, choice: 'local' | 'remote' | 'merge') => {
+  syncDiffResolution.value = { ...syncDiffResolution.value, [id]: choice }
+}
+
+const applySyncDiffPreview = async () => {
+  if (!syncDiffPreview.value) return
+  try {
+    syncDiffApplying.value = true
+    webdavSyncing.value = true
+    const result = await applySyncResolution(syncDiffResolution.value, (msg) => {
+      webdavSyncStatus.value = msg
+    })
+    if (!result.success) {
+      throw new Error(result.error || '应用差异失败')
+    }
+    await reloadRestoredState()
+    webdavSyncStatus.value = `差异已应用，更新 ${result.appliedFiles.length} 个同步文件`
+    closeSyncDiffPreview()
+    alert('WebDAV 差异已按选择应用，并已创建本地恢复点。')
+  } catch (e: any) {
+    webdavSyncStatus.value = '应用差异失败: ' + (e.message || '网络错误')
+  } finally {
+    syncDiffApplying.value = false
+    webdavSyncing.value = false
+  }
+}
+
 const fullRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动。')) return
   try {
@@ -807,53 +822,7 @@ const incrementalBackup = async () => {
 }
 
 const incrementalRestore = async () => {
-  if (!webdavUrl.value || !confirm('确定要从云端增量恢复吗？这将覆盖您的书架列表与设置，但不会删除现有的本地缓存章节。')) return
-  try {
-    await saveWebdav()
-    webdavSyncing.value = true
-    const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
-    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
-
-    webdavSyncStatus.value = '恢复 v8 JSON 增量数据...'
-    const v8Result = await incrementalRestoreV8((msg) => { webdavSyncStatus.value = msg })
-    if (!v8Result.success) {
-      webdavSyncStatus.value = 'v8 增量数据不可用，尝试恢复桌面设置...'
-    }
-
-    await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    if (v8Result.success) {
-      webdavSyncStatus.value = '补齐缺失章节正文...'
-      chapterTextRestore = await downloadChapterTextZips(auth)
-    }
-
-    webdavSyncStatus.value = '应用桌面设置...'
-    const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
-    const desktopSettingsStatus = await applyLegacyDesktopSettingsFallback(
-      desktopSettingsRestore,
-      v8Result.desktopSettingsFallback
-    )
-    await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    if (!v8Result.success && !desktopSettingsRestore.applied) {
-      throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的 JSON 增量备份')
-    }
-
-    if (webdavSyncReadingStats.value) {
-      webdavSyncStatus.value = '合并阅读统计...'
-      await mergeRemoteReadingStats()
-    }
-    await reloadRestoredState()
-
-    const msg = v8Result.success
-      ? (v8Result.mergedFiles.length > 0
-          ? `v8 增量恢复成功，合并了 ${v8Result.mergedFiles.length} 个文件，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`
-          : `v8 增量恢复完成，数据已是最新，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`)
-      : `未找到 v8 增量数据，但${desktopSettingsStatus}。`
-    alert(msg)
-    webdavSyncStatus.value = '增量恢复成功'
-  } catch (e: any) {
-    webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
-  } finally { webdavSyncing.value = false }
+  await openSyncDiffPreview()
 }
 
 onMounted(async () => {
@@ -861,18 +830,8 @@ onMounted(async () => {
   await fetchAllRules()
   await fetchBooks()
   await refreshReadingStatsSummary()
-  try { appVersion.value = await window.electronAPI.app.getVersion() } catch (_) { appVersion.value = '?.?.?' }
+  await initializeUpdaterStatus()
   try { await refreshStorageSize() } catch { dataSize.value = '—'; chapterTextSize.value = '—'; jsonDataSize.value = '—'; totalDataSize.value = '—' }
-  window.electronAPI.updater.onStatus((data) => {
-    switch (data.status) {
-      case 'checking': updateStatus.value = '🔍 正在检查...'; break
-      case 'available': updateStatus.value = `🎉 发现新版本 v${data.version}`; updateAvailable.value = true; isDownloading.value = false; break
-      case 'up-to-date': updateStatus.value = '✅ 已是最新版本'; break
-      case 'downloading': updateStatus.value = `⏬ 下载中 ${data.percent}%`; isDownloading.value = true; break
-      case 'downloaded': updateStatus.value = '✅ 下载完成'; updateReady.value = true; updateAvailable.value = false; isDownloading.value = false; break
-      case 'error': updateStatus.value = '❌ 更新失败'; updateDetail.value = data.message || ''; isDownloading.value = false; break
-    }
-  })
 })
 </script>
 
@@ -907,6 +866,8 @@ onMounted(async () => {
       :onOpenStats="openReadingStats"
     />
 
+    <SettingsSnapshots />
+
     <SettingsWebDAV 
       :saveWebdav="saveWebdav"
       :testWebdav="testWebdav"
@@ -914,6 +875,14 @@ onMounted(async () => {
       :fullRestore="fullRestore"
       :incrementalBackup="incrementalBackup"
       :incrementalRestore="incrementalRestore"
+      :syncDiffPreview="syncDiffPreview"
+      :syncDiffResolution="syncDiffResolution"
+      :syncDiffLoading="syncDiffLoading"
+      :syncDiffApplying="syncDiffApplying"
+      :openSyncDiffPreview="openSyncDiffPreview"
+      :applySyncDiffPreview="applySyncDiffPreview"
+      :closeSyncDiffPreview="closeSyncDiffPreview"
+      :setSyncDiffResolution="setSyncDiffResolution"
       :webdavTesting="webdavTesting"
       :webdavSyncing="webdavSyncing"
       :webdavSyncStatus="webdavSyncStatus"

@@ -1,6 +1,6 @@
 {
   "name": "pacil-read",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "author": "Metahumanz",
   "description": "A modern desktop reader application built with Electron and Vue",
   "main": "dist-electron/main.js",
@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "test": "npm run test:logic",
+    "test:logic": "node scripts/logic-tests.mjs",
     "build": "rimraf release dist dist-electron && vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
     "clean": "taskkill /F /IM PacilRead.exe /T /FI \"STATUS eq RUNNING\" 2>NUL & rimraf release dist dist-electron",

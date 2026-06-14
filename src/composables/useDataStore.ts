@@ -1,4 +1,5 @@
 import { ref, toRaw } from 'vue'
+import { normalizeBookMetadata, type ReadingStatus } from '../utils/bookMetadata'
 
 // ---- v8 JSON schema types ----
 
@@ -8,6 +9,10 @@ export interface Book {
   author: string | null
   bookType: string
   readingStatsKey: string
+  tags: string[]
+  series: string
+  seriesIndex?: number
+  readingStatus: ReadingStatus
   progressIndex: number
   progressOffset: number
   lastReadAt: number
@@ -89,6 +94,11 @@ const readingStats = ref<ReadingStatsRow[]>([])
 const settingsMap = ref<Record<string, string>>({})
 const dataLoaded = ref(false)
 
+function normalizeBooksEntity(items: unknown): Book[] {
+  if (!Array.isArray(items)) return []
+  return items.map(item => normalizeBookMetadata(item as Book))
+}
+
 // ---- ID counter ----
 function computeNextId<T extends { id: number }>(items: T[]): number {
   if (items.length === 0) return 1
@@ -125,7 +135,7 @@ async function loadAllData(): Promise<void> {
       window.electronAPI.data.readEntity('readingStats'),
       window.electronAPI.data.readEntity('settings'),
     ])
-    books.value = b as Book[]
+    books.value = normalizeBooksEntity(b)
     chapters.value = c as Chapter[]
     rules.value = r as Rule[]
     themes.value = t as Theme[]
@@ -153,14 +163,14 @@ function getBooksSorted(): Book[] {
 }
 
 async function addBook(book: Book): Promise<void> {
-  books.value.push(book)
+  books.value.push(normalizeBookMetadata(book))
   await persistBooks()
 }
 
 async function updateBook(id: number, fields: Partial<Book>): Promise<void> {
   const idx = books.value.findIndex(b => b.id === id)
   if (idx === -1) return
-  books.value[idx] = { ...books.value[idx], ...fields, updatedAt: Date.now() }
+  books.value[idx] = normalizeBookMetadata({ ...books.value[idx], ...fields, updatedAt: Date.now() })
   await persistBooks()
 }
 
@@ -402,7 +412,7 @@ async function replaceAllEntities(entities: {
   readingStats?: ReadingStatsRow[]
   settings?: Record<string, string>
 }): Promise<void> {
-  if (entities.books) books.value = entities.books
+  if (entities.books) books.value = normalizeBooksEntity(entities.books)
   if (entities.chapters) chapters.value = entities.chapters
   if (entities.rules) rules.value = entities.rules
   if (entities.themes) themes.value = entities.themes

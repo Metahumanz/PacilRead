@@ -10,10 +10,6 @@ export interface ElectronAPI {
   data: {
     readEntity: (entityType: string) => Promise<any>
     writeEntity: (entityType: string, data: unknown) => Promise<void>
-    hashFile: (entityType: string) => Promise<{ sha256: string | null; size: number }>
-    getDataDir: () => Promise<string>
-    isMigrated: () => Promise<boolean>
-    writeAll: (entities: Record<string, unknown>) => Promise<void>
   }
   library: {
     importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
@@ -23,16 +19,6 @@ export interface ElectronAPI {
     getBookSummary: (bookId: number) => Promise<BookSummary | null>
     getMostRecentBook: () => Promise<BookSummary | null>
     updateBook: (bookId: number, fields: Partial<BookSummary>) => Promise<BookSummary | null>
-    getBookChapters: (bookId: number) => Promise<Array<{
-      id: number
-      title: string
-      order_index: number
-      body: string
-      body_text: string
-      body_text_storage: string
-      body_text_missing: number
-      body_text_fallback: string | null
-    }>>
     getBookChapterList: (bookId: number) => Promise<ChapterMeta[]>
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => Promise<ChapterContent[]>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
@@ -43,9 +29,17 @@ export interface ElectronAPI {
   dialog: {
     openFile: () => Promise<string | null>
     openImage: () => Promise<string | null>
+    saveTextFile: (options: {
+      defaultPath: string
+      content: string
+      filters?: Array<{ name: string; extensions: string[] }>
+    }) => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>
   }
-  shell: {
-    openPath: (path: string) => Promise<void>
+  snapshot: {
+    create: (reason?: string) => Promise<SnapshotManifest>
+    list: () => Promise<SnapshotManifest[]>
+    restore: (id: string) => Promise<SnapshotManifest>
+    delete: (id: string) => Promise<{ success: boolean }>
   }
   win: {
     setAspectRatio: (ratio: number) => Promise<void>
@@ -57,8 +51,8 @@ export interface ElectronAPI {
     close: () => Promise<void>
     getIsMaximized: () => Promise<boolean>
     getDisplayRefreshRate: () => Promise<number>
-    onMaximized: (cb: (val: boolean) => void) => void
-    onFullScreen: (cb: (val: boolean) => void) => void
+    onMaximized: (cb: (val: boolean) => void) => () => void
+    onFullScreen: (cb: (val: boolean) => void) => () => void
     onDisplayRefreshRateChanged: (cb: (hz: number) => void) => () => void
   }
   font: {
@@ -69,7 +63,7 @@ export interface ElectronAPI {
     download: () => Promise<boolean>
     install: () => Promise<void>
     installSilent: () => Promise<void>
-    onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => void
+    onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => () => void
   }
   app: {
     getVersion: () => Promise<string>
@@ -99,6 +93,10 @@ export interface BookSummary {
   author: string | null
   bookType: string
   readingStatsKey: string
+  tags: string[]
+  series: string
+  seriesIndex?: number
+  readingStatus: 'unread' | 'reading' | 'finished'
   progressIndex: number
   progressOffset: number
   lastReadAt: number
@@ -109,6 +107,16 @@ export interface BookSummary {
   sourceFile: string | null
   createdAt: number
   updatedAt: number
+}
+
+export interface SnapshotManifest {
+  id: string
+  reason: string
+  createdAt: number
+  schemaVersion: number
+  entityCounts: Record<string, number>
+  chapterTextFiles: number
+  sizeBytes: number
 }
 
 export interface ChapterMeta {

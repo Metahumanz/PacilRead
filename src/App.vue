@@ -42,6 +42,8 @@ const showQuitConfirm = ref(false)
 const isWindowMaximized = ref(false)
 const windowWidth = ref(typeof window === 'undefined' ? 1200 : window.innerWidth)
 const windowHeight = ref(typeof window === 'undefined' ? 800 : window.innerHeight)
+let offWindowMaximized: (() => void) | null = null
+let offWindowFullScreen: (() => void) | null = null
 
 const updateWindowSize = () => {
   windowWidth.value = window.innerWidth
@@ -263,10 +265,10 @@ onMounted(async () => {
   // Sync window maximized state
   try {
     isWindowMaximized.value = await window.electronAPI.win.getIsMaximized()
-    window.electronAPI.win.onMaximized((val: boolean) => {
+    offWindowMaximized = window.electronAPI.win.onMaximized((val: boolean) => {
       isWindowMaximized.value = val
     })
-    window.electronAPI.win.onFullScreen((val: boolean) => {
+    offWindowFullScreen = window.electronAPI.win.onFullScreen((val: boolean) => {
       isImmersive.value = val
     })
   } catch {}
@@ -277,6 +279,10 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateWindowSize)
   window.removeEventListener('touchstart', handleTouchStart)
   window.removeEventListener('touchend', handleTouchEnd)
+  offWindowMaximized?.()
+  offWindowFullScreen?.()
+  offWindowMaximized = null
+  offWindowFullScreen = null
 })
 
 watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {

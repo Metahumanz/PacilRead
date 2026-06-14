@@ -8,13 +8,6 @@
     "dist/**/*",
     "dist-electron/**/*"
   ],
-  "extraResources": [
-    {
-      "from": "node_modules/sql.js/dist/",
-      "to": "sql.js",
-      "filter": ["sql-wasm.wasm"]
-    }
-  ],
   "publish": {
     "provider": "github",
     "owner": "Metahumanz",

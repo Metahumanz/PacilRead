@@ -6,6 +6,7 @@ import {
   uploadReadingStatsSnapshot,
 } from './useReadingStats'
 import { useSettings } from './useSettings'
+import { splitRangeByDate } from '../utils/readingStats'
 
 interface TrackableBook {
   title: string
@@ -16,6 +17,8 @@ interface TrackableBook {
 export function useReadingTimeTracker(opts: {
   enabled: Ref<boolean>
   book: Ref<TrackableBook | null>
+  getVisibleCharCount?: () => number
+  getReadingPositionKey?: () => string
 }) {
   const settings = useSettings()
   const isTracking = ref(false)
@@ -24,36 +27,15 @@ export function useReadingTimeTracker(opts: {
   let lastActivityAt: number | null = null
   let checkpointTimer: number | null = null
   let uploadTimer: number | null = null
+  let pendingCharCount = 0
+  let lastPositionKey: string | null = null
 
-  const splitRangeByDate = (startMs: number, endMs: number) => {
-    const segments: Array<{ date: string; seconds: number }> = []
-    let cursor = startMs
-
-    while (cursor < endMs) {
-      const currentDate = new Date(cursor)
-      const endOfDay = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth(),
-        currentDate.getDate() + 1,
-        0,
-        0,
-        0,
-        0
-      ).getTime()
-      const segmentEnd = Math.min(endMs, endOfDay)
-      const durationSeconds = Math.floor((segmentEnd - cursor) / 1000)
-      if (durationSeconds > 0) {
-        const month = String(currentDate.getMonth() + 1).padStart(2, '0')
-        const day = String(currentDate.getDate()).padStart(2, '0')
-        segments.push({
-          date: `${currentDate.getFullYear()}-${month}-${day}`,
-          seconds: durationSeconds,
-        })
-      }
-      cursor = segmentEnd
-    }
-
-    return segments
+  const recordVisibleChars = () => {
+    const positionKey = opts.getReadingPositionKey?.() || ''
+    if (positionKey && positionKey === lastPositionKey) return
+    const charCount = Math.max(0, Math.floor(opts.getVisibleCharCount?.() || 0))
+    if (charCount > 0) pendingCharCount += charCount
+    lastPositionKey = positionKey || lastPositionKey
   }
 
   const scheduleUpload = () => {
@@ -76,7 +58,13 @@ export function useReadingTimeTracker(opts: {
 
     const deviceId = await ensureReadingStatsDeviceId()
     const rows = splitRangeByDate(activeWindowStartAt, effectiveEnd)
+    const totalSeconds = rows.reduce((sum, row) => sum + row.seconds, 0)
+    let remainingChars = pendingCharCount
     for (const row of rows) {
+      const rowChars = totalSeconds > 0
+        ? Math.min(remainingChars, Math.round(pendingCharCount * (row.seconds / totalSeconds)))
+        : 0
+      remainingChars -= rowChars
       await appendReadingStatsDuration({
         date: row.date,
         sourceDeviceId: deviceId,
@@ -84,15 +72,17 @@ export function useReadingTimeTracker(opts: {
         bookTitle: book.title || '未命名',
         bookAuthor: book.author || '',
         durationSeconds: row.seconds,
-        charCount: 0,
+        charCount: row === rows[rows.length - 1] ? rowChars + remainingChars : rowChars,
         updatedAt: Date.now(),
       })
     }
+    pendingCharCount = 0
 
     if (persistUntil >= lastActivityAt + readingStatsIdleMs) {
       activeWindowStartAt = null
       lastActivityAt = null
       isTracking.value = false
+      lastPositionKey = null
     } else {
       activeWindowStartAt = effectiveEnd
     }
@@ -116,6 +106,7 @@ export function useReadingTimeTracker(opts: {
       activeWindowStartAt = now
       lastActivityAt = now
       isTracking.value = true
+      recordVisibleChars()
       return
     }
 
@@ -126,6 +117,7 @@ export function useReadingTimeTracker(opts: {
 
     lastActivityAt = now
     isTracking.value = true
+    recordVisibleChars()
   }
 
   const start = async () => {
@@ -136,6 +128,7 @@ export function useReadingTimeTracker(opts: {
     activeWindowStartAt = now
     lastActivityAt = now
     isTracking.value = true
+    recordVisibleChars()
     checkpointTimer = window.setInterval(() => {
       flush().catch((error) => {
         console.error('Reading stats checkpoint flush failed:', error)

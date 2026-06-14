@@ -1,9 +1,8 @@
 <script setup lang="ts">
-interface Book { id: number; title: string; author: string | null }
-interface Chapter { id: number; title: string }
+import type { ReaderBook, ReaderChapter } from '../../types/entities'
 
 defineProps<{
-  book: Book | null
+  book: Pick<ReaderBook, 'id' | 'title' | 'author'> | null
   canOpenStats: boolean
   isAlwaysOnTop: boolean
   isImmersive: boolean
@@ -18,7 +17,7 @@ defineProps<{
   showBookmarks: boolean
   showReaderOptions: boolean
   currentChapterIndex: number
-  chapters: Chapter[]
+  chapters: Array<Pick<ReaderChapter, 'id' | 'title'>>
   currentPage: number
   totalPages: number
   sliderMax: number
