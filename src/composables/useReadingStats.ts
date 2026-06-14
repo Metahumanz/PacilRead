@@ -1,4 +1,7 @@
+import { createApp, h, nextTick } from 'vue'
+import { toPng } from 'html-to-image'
 import { saveSetting, useSettings } from './useSettings'
+import AnnualReportImageCard from '../components/reports/AnnualReportImageCard.vue'
 import {
   DEFAULT_DESKTOP_SETTINGS_DIR,
   buildBasicAuth,
@@ -31,6 +34,8 @@ export {
 } from '../utils/webdav'
 
 export type ReadingStatsPeriod = 'today' | 'week' | 'year'
+export type AnnualReportImageTemplate = 'magazine' | 'wrapped'
+export type AnnualReportImageTheme = 'light' | 'dark'
 
 export interface ReadingStatsOverview {
   today: number
@@ -790,6 +795,78 @@ export async function exportAnnualReadingReport(format: 'html' | 'json'): Promis
       ? [{ name: 'JSON', extensions: ['json'] }]
       : [{ name: 'HTML', extensions: ['html'] }],
   })
+}
+
+async function waitForReportImageRender(): Promise<void> {
+  await nextTick()
+  try {
+    await document.fonts?.ready
+  } catch (_) {}
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+export async function exportAnnualReadingReportImage(options: {
+  template: AnnualReportImageTemplate
+  theme: AnnualReportImageTheme
+  year?: number
+}): Promise<void> {
+  const report = await createAnnualReadingReport(options.year)
+  if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+    throw new Error('今年还没有足够的阅读统计')
+  }
+  if (typeof document === 'undefined') {
+    throw new Error('当前环境不支持图片导出')
+  }
+
+  const stage = document.createElement('div')
+  stage.className = 'report-export-stage'
+  Object.assign(stage.style, {
+    position: 'fixed',
+    left: '-99999px',
+    top: '0',
+    width: '1080px',
+    height: '1920px',
+    overflow: 'hidden',
+    pointerEvents: 'none',
+    zIndex: '-1',
+  })
+  document.body.appendChild(stage)
+
+  const app = createApp({
+    render: () => h(AnnualReportImageCard, {
+      report,
+      template: options.template,
+      theme: options.theme,
+    }),
+  })
+
+  try {
+    app.mount(stage)
+    await waitForReportImageRender()
+    const node = stage.querySelector<HTMLElement>('[data-report-image-root]')
+    if (!node) throw new Error('年度报告图片渲染失败')
+
+    const dataUrl = await toPng(node, {
+      width: 1080,
+      height: 1920,
+      pixelRatio: 1,
+      cacheBust: true,
+    })
+
+    const result = await window.electronAPI.dialog.saveBinaryFile({
+      defaultPath: `PacilRead-${report.year}-年度报告-${options.template}-${options.theme}.png`,
+      dataUrl,
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    })
+    if (!result.success && !result.canceled) {
+      throw new Error('图片保存失败')
+    }
+  } finally {
+    app.unmount()
+    stage.remove()
+  }
 }
 
 export async function hasReadingStatsHistory(): Promise<boolean> {
