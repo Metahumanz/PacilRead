@@ -8,11 +8,15 @@ import {
   formatDuration,
   mergeRemoteReadingStats,
   exportAnnualReadingReport,
+  exportAnnualReadingReportImage,
+  type AnnualReportImageTemplate,
+  type AnnualReportImageTheme,
   type ReadingCalendarSummary,
   type ReadingStatsBookDetail,
   type ReadingStatsBookRankItem,
   type ReadingStatsPeriod,
 } from '../composables/useReadingStats'
+import { useAppTheme } from '../composables/useAppTheme'
 import BookCover from './common/BookCover.vue'
 
 const props = defineProps<{
@@ -32,6 +36,10 @@ const bookDetail = ref<ReadingStatsBookDetail | null>(null)
 const ranking = ref<ReadingStatsBookRankItem[]>([])
 const calendar = ref<ReadingCalendarSummary>({ days: [], longestStreak: 0 })
 const exporting = ref(false)
+const showImageExportDialog = ref(false)
+const selectedImageTemplate = ref<AnnualReportImageTemplate>('magazine')
+const selectedImageTheme = ref<AnnualReportImageTheme>('light')
+const { resolvedBucket } = useAppTheme()
 
 const headerTitle = computed(() => {
   if (bookDetail.value) return '单书阅读统计'
@@ -115,6 +123,28 @@ const exportReport = async (format: 'html' | 'json') => {
   }
 }
 
+const openImageExportDialog = () => {
+  selectedImageTemplate.value = 'magazine'
+  selectedImageTheme.value = resolvedBucket.value === 'dark' ? 'dark' : 'light'
+  showImageExportDialog.value = true
+}
+
+const exportReportImage = async () => {
+  exporting.value = true
+  try {
+    await exportAnnualReadingReportImage({
+      template: selectedImageTemplate.value,
+      theme: selectedImageTheme.value,
+    })
+    showImageExportDialog.value = false
+  } catch (error) {
+    console.error('Export annual report image failed:', error)
+    window.alert(error instanceof Error ? error.message : '导出图片失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 watch(() => props.bookId, () => {
   loadData().catch((error) => console.error('Load reading stats failed:', error))
 })
@@ -168,6 +198,14 @@ onMounted(async () => {
           导出 JSON
         </button>
         <button
+          v-if="!props.bookId"
+          @click="openImageExportDialog"
+          :disabled="exporting"
+          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
+        >
+          导出图片
+        </button>
+        <button
           @click="syncAndReload"
           :disabled="syncing"
           class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
@@ -176,6 +214,95 @@ onMounted(async () => {
         </button>
       </div>
     </div>
+
+    <Transition name="fade">
+      <div
+        v-if="showImageExportDialog"
+        class="fixed inset-0 app-modal-backdrop z-[220] flex items-center justify-center p-6"
+        @click.self="showImageExportDialog = false"
+      >
+        <div class="app-card app-card-strong w-full max-w-lg p-6">
+          <div class="flex items-start justify-between gap-4 mb-6">
+            <div>
+              <h3 class="app-title text-[18px] font-semibold">导出年度报告图片</h3>
+            </div>
+            <button
+              type="button"
+              class="app-icon-button w-9 h-9 flex items-center justify-center text-[18px]"
+              :disabled="exporting"
+              @click="showImageExportDialog = false"
+            >
+              x
+            </button>
+          </div>
+
+          <div class="space-y-5">
+            <section>
+              <div class="app-section-label text-[12px] mb-2">模板</div>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  class="app-button p-3 text-left"
+                  :class="{ 'app-button-primary': selectedImageTemplate === 'magazine' }"
+                  @click="selectedImageTemplate = 'magazine'"
+                >
+                  <div class="text-[13px] font-semibold">阅读杂志感</div>
+                </button>
+                <button
+                  type="button"
+                  class="app-button p-3 text-left"
+                  :class="{ 'app-button-primary': selectedImageTemplate === 'wrapped' }"
+                  @click="selectedImageTemplate = 'wrapped'"
+                >
+                  <div class="text-[13px] font-semibold">Wrapped 风格</div>
+                </button>
+              </div>
+            </section>
+
+            <section>
+              <div class="app-section-label text-[12px] mb-2">主题</div>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  class="app-button p-3 text-left"
+                  :class="{ 'app-button-primary': selectedImageTheme === 'light' }"
+                  @click="selectedImageTheme = 'light'"
+                >
+                  <div class="text-[13px] font-semibold">浅色</div>
+                </button>
+                <button
+                  type="button"
+                  class="app-button p-3 text-left"
+                  :class="{ 'app-button-primary': selectedImageTheme === 'dark' }"
+                  @click="selectedImageTheme = 'dark'"
+                >
+                  <div class="text-[13px] font-semibold">深色</div>
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div class="flex gap-3 mt-7">
+            <button
+              type="button"
+              class="app-button flex-1 py-2.5 text-[13px] disabled:opacity-50"
+              :disabled="exporting"
+              @click="showImageExportDialog = false"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="app-button app-button-primary flex-1 py-2.5 text-[13px] disabled:opacity-50"
+              :disabled="exporting"
+              @click="exportReportImage"
+            >
+              {{ exporting ? '导出中...' : '保存 PNG' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <div v-if="bookDetail" class="app-card mb-8 p-5">
       <div class="flex items-center gap-4">
