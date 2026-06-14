@@ -34,6 +34,11 @@ export interface ElectronAPI {
       content: string
       filters?: Array<{ name: string; extensions: string[] }>
     }) => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>
+    saveBinaryFile: (options: {
+      defaultPath: string
+      dataUrl: string
+      filters?: Array<{ name: string; extensions: string[] }>
+    }) => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>
   }
   snapshot: {
     create: (reason?: string) => Promise<SnapshotManifest>

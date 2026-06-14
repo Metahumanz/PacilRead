@@ -1152,6 +1152,26 @@ ipcMain.handle('dialog:saveTextFile', async (_, options: {
   return { success: true, filePath: r.filePath }
 })
 
+ipcMain.handle('dialog:saveBinaryFile', async (_, options: {
+  defaultPath: string
+  dataUrl: string
+  filters?: Electron.FileFilter[]
+}) => {
+  const r = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: options.defaultPath,
+    filters: options.filters || [{ name: 'All Files', extensions: ['*'] }],
+  })
+  if (r.canceled || !r.filePath) return { success: false, canceled: true }
+
+  const prefix = 'data:image/png;base64,'
+  if (!options.dataUrl.startsWith(prefix)) {
+    throw new Error('无效的 PNG 图片数据')
+  }
+  const base64 = options.dataUrl.slice(prefix.length)
+  writeFileSync(r.filePath, Buffer.from(base64, 'base64'))
+  return { success: true, filePath: r.filePath }
+})
+
 ipcMain.handle('win:setAspectRatio', async (_, ratio: number) => {
   // We explicitly do not call setAspectRatio(ratio) to avoid locking the window.
   // We only resize it to match the ratio once upon user request.
