@@ -5,6 +5,13 @@ import {
 } from './useReadingStats'
 import { createWebdavClient } from './useWebdavClient'
 import { buildPacilReadBaseUrl } from '../utils/webdav'
+import { normalizeBookMetadata } from '../utils/bookMetadata'
+import {
+  applySyncDiffResolution,
+  buildSyncDiffPreview,
+  type SyncDiffPreview,
+  type SyncResolutionMap,
+} from '../utils/syncDiff'
 
 // ---- v8 manifest types ----
 interface ManifestFileEntry {
@@ -31,7 +38,7 @@ type SyncEntityPayloads = Record<EntityType, any>
 function buildSyncEntities(dataStore = useDataStore()): SyncEntityPayloads {
   const entities = dataStore.getAllEntities()
   return {
-    books: entities.books,
+    books: entities.books.map(book => normalizeBookMetadata(book)),
     chapters: entities.chapters,
     rules: entities.rules,
     themes: entities.themes,
@@ -127,6 +134,69 @@ async function cleanupLegacySettingsFiles(): Promise<void> {
 
 async function webdavFileExists(path: string): Promise<boolean> {
   return getWebdavClient().exists(path)
+}
+
+export type {
+  SyncDiffPreview,
+  SyncResolutionMap,
+}
+
+export async function previewSyncDiff(): Promise<{
+  success: boolean
+  preview?: SyncDiffPreview
+  error?: string
+}> {
+  try {
+    const dataStore = useDataStore()
+    const localEntities = buildSyncEntities(dataStore)
+    const remoteEntities = await downloadRemoteSyncEntities()
+    return {
+      success: true,
+      preview: buildSyncDiffPreview(localEntities as any, remoteEntities as any),
+    }
+  } catch (e) {
+    return { success: false, error: String(e) }
+  }
+}
+
+export async function applySyncResolution(
+  resolutions: SyncResolutionMap,
+  onProgress?: (message: string) => void,
+): Promise<{ success: boolean; appliedFiles: string[]; error?: string }> {
+  try {
+    const dataStore = useDataStore()
+    onProgress?.('正在创建本地恢复点...')
+    await window.electronAPI.snapshot.create('WebDAV 差异应用前自动快照')
+
+    onProgress?.('正在下载远端差异数据...')
+    const localEntities = buildSyncEntities(dataStore)
+    const remoteEntities = await downloadRemoteSyncEntities()
+    const merged = applySyncDiffResolution(localEntities as any, remoteEntities as any, resolutions)
+
+    onProgress?.('正在应用选择结果...')
+    await dataStore.replaceAllEntities(merged)
+    dataStore.dataLoaded.value = true
+
+    onProgress?.('正在同步选择结果到云端...')
+    const manifest = await generateManifest(merged)
+    const appliedFiles: string[] = []
+    for (const entity of ENTITY_TYPES) {
+      const jsonStr = entityJson(merged, entity)
+      await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+      appliedFiles.push(`${entity}.json`)
+    }
+    await uploadManifest(manifest, 'sync')
+    appliedFiles.push('manifest.json')
+
+    onProgress?.('正在同步封面文件...')
+    await downloadCovers(merged.books, onProgress)
+    const uploadedCovers = await uploadCovers(merged.books, onProgress)
+    uploadedCovers.forEach(fileName => appliedFiles.push(`covers/${fileName}`))
+
+    return { success: true, appliedFiles }
+  } catch (e) {
+    return { success: false, appliedFiles: [], error: String(e) }
+  }
 }
 
 // ---- Backward-compat helpers ----
@@ -269,6 +339,24 @@ async function uploadManifest(manifest: Manifest, dir: 'database' | 'sync'): Pro
 
 async function downloadManifest(dir: 'database' | 'sync'): Promise<Manifest | null> {
   return webdavGetJson<Manifest>(`${dir}/manifest.json`)
+}
+
+async function downloadRemoteSyncEntities(): Promise<Partial<SyncEntityPayloads>> {
+  const remoteManifest = await downloadManifest('sync')
+  if (!remoteManifest) throw new Error('远程没有增量同步数据')
+
+  const entities: Partial<SyncEntityPayloads> = {}
+  for (const entity of ENTITY_TYPES) {
+    const fileName = `${entity}.json`
+    if (!remoteManifest.files[fileName]) continue
+    const remoteData = await webdavGetJson<any[]>(`sync/${fileName}`)
+    if (Array.isArray(remoteData)) {
+      ;(entities as any)[entity] = entity === 'books'
+        ? remoteData.map(book => normalizeBookMetadata(book))
+        : remoteData
+    }
+  }
+  return entities
 }
 
 function findChangedFiles(local: Manifest, remote: Manifest): string[] {
@@ -556,6 +644,9 @@ export async function fullRestoreV8(
     await collectLegacySettings('database/settings.json')
     await collectLegacySettings('sync/settings.json')
 
+    onProgress?.('正在创建本地恢复点...')
+    await window.electronAPI.snapshot.create('WebDAV 全量恢复前自动快照')
+
     onProgress?.('正在应用数据...')
     await dataStore.replaceAllEntities(entities as any)
     dataStore.dataLoaded.value = true
@@ -662,6 +753,9 @@ export async function incrementalRestoreV8(
     if (!remoteManifest) {
       return { success: false, mergedFiles: [], error: '远程没有增量同步数据' }
     }
+
+    onProgress?.('正在创建本地恢复点...')
+    await window.electronAPI.snapshot.create('WebDAV 增量恢复前自动快照')
 
     // Download and merge each entity file
     for (const [fileName] of Object.entries(remoteManifest.files)) {

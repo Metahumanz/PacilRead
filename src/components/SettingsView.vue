@@ -2,7 +2,11 @@
 import { ref, onMounted } from 'vue'
 import { clampBookshelfProgressPrefetchLimit, useSettings } from '../composables/useSettings'
 import {
-  fullBackupV8, fullRestoreV8, incrementalBackupV8, incrementalRestoreV8,
+  applySyncResolution,
+  fullBackupV8, fullRestoreV8, incrementalBackupV8,
+  previewSyncDiff,
+  type SyncDiffPreview,
+  type SyncResolutionMap,
 } from '../composables/useV8Sync'
 import { useDataStore } from '../composables/useDataStore'
 import { useRuleManager } from '../composables/useRuleManager'
@@ -36,6 +40,7 @@ import SettingsWebDAV from './settings/SettingsWebDAV.vue'
 import SettingsTTS from './settings/SettingsTTS.vue'
 import SettingsRules from './settings/SettingsRules.vue'
 import SettingsAbout from './settings/SettingsAbout.vue'
+import SettingsSnapshots from './settings/SettingsSnapshots.vue'
 
 const emit = defineEmits<{
   (e: 'back'): void
@@ -96,6 +101,10 @@ const webdavTesting = ref(false)
 const webdavSyncing = ref(false)
 const webdavSyncStatus = ref('')
 const readingStatsLoading = ref(false)
+const syncDiffPreview = ref<SyncDiffPreview | null>(null)
+const syncDiffResolution = ref<SyncResolutionMap>({})
+const syncDiffLoading = ref(false)
+const syncDiffApplying = ref(false)
 const readingStatsHasHistory = ref(false)
 const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, year: 0 })
 const showReadingStatsDisableModal = ref(false)
@@ -630,6 +639,71 @@ const reloadRestoredState = async () => {
   emit('refresh-settings')
 }
 
+const defaultSyncResolution = (status: string): SyncResolutionMap[string] => {
+  if (status === 'remote') return 'remote'
+  if (status === 'local') return 'local'
+  return 'merge'
+}
+
+const openSyncDiffPreview = async () => {
+  if (!webdavUrl.value) return
+  try {
+    await saveWebdav()
+    syncDiffLoading.value = true
+    webdavSyncing.value = true
+    webdavSyncStatus.value = '正在生成 WebDAV 差异预览...'
+    const result = await previewSyncDiff()
+    if (!result.success || !result.preview) {
+      throw new Error(result.error || '无法生成差异预览')
+    }
+    syncDiffPreview.value = result.preview
+    const nextResolution: SyncResolutionMap = {}
+    for (const item of result.preview.items) {
+      if (item.status === 'unchanged') continue
+      nextResolution[item.id] = defaultSyncResolution(item.status)
+    }
+    syncDiffResolution.value = nextResolution
+    webdavSyncStatus.value = `发现 ${result.preview.summary.conflict} 个冲突，${result.preview.summary.remote} 个远端新增，${result.preview.summary.local} 个本地独有`
+  } catch (e: any) {
+    webdavSyncStatus.value = '差异预览失败: ' + (e.message || '网络错误')
+  } finally {
+    syncDiffLoading.value = false
+    webdavSyncing.value = false
+  }
+}
+
+const closeSyncDiffPreview = () => {
+  syncDiffPreview.value = null
+  syncDiffResolution.value = {}
+}
+
+const setSyncDiffResolution = (id: string, choice: 'local' | 'remote' | 'merge') => {
+  syncDiffResolution.value = { ...syncDiffResolution.value, [id]: choice }
+}
+
+const applySyncDiffPreview = async () => {
+  if (!syncDiffPreview.value) return
+  try {
+    syncDiffApplying.value = true
+    webdavSyncing.value = true
+    const result = await applySyncResolution(syncDiffResolution.value, (msg) => {
+      webdavSyncStatus.value = msg
+    })
+    if (!result.success) {
+      throw new Error(result.error || '应用差异失败')
+    }
+    await reloadRestoredState()
+    webdavSyncStatus.value = `差异已应用，更新 ${result.appliedFiles.length} 个同步文件`
+    closeSyncDiffPreview()
+    alert('WebDAV 差异已按选择应用，并已创建本地恢复点。')
+  } catch (e: any) {
+    webdavSyncStatus.value = '应用差异失败: ' + (e.message || '网络错误')
+  } finally {
+    syncDiffApplying.value = false
+    webdavSyncing.value = false
+  }
+}
+
 const fullRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动。')) return
   try {
@@ -748,53 +822,7 @@ const incrementalBackup = async () => {
 }
 
 const incrementalRestore = async () => {
-  if (!webdavUrl.value || !confirm('确定要从云端增量恢复吗？这将覆盖您的书架列表与设置，但不会删除现有的本地缓存章节。')) return
-  try {
-    await saveWebdav()
-    webdavSyncing.value = true
-    const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
-    const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
-
-    webdavSyncStatus.value = '恢复 v8 JSON 增量数据...'
-    const v8Result = await incrementalRestoreV8((msg) => { webdavSyncStatus.value = msg })
-    if (!v8Result.success) {
-      webdavSyncStatus.value = 'v8 增量数据不可用，尝试恢复桌面设置...'
-    }
-
-    await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    if (v8Result.success) {
-      webdavSyncStatus.value = '补齐缺失章节正文...'
-      chapterTextRestore = await downloadChapterTextZips(auth)
-    }
-
-    webdavSyncStatus.value = '应用桌面设置...'
-    const desktopSettingsRestore = await restoreDesktopSettingsSnapshot()
-    const desktopSettingsStatus = await applyLegacyDesktopSettingsFallback(
-      desktopSettingsRestore,
-      v8Result.desktopSettingsFallback
-    )
-    await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    if (!v8Result.success && !desktopSettingsRestore.applied) {
-      throw new Error(v8Result.error || desktopSettingsRestore.message || '云端没有可用的 JSON 增量备份')
-    }
-
-    if (webdavSyncReadingStats.value) {
-      webdavSyncStatus.value = '合并阅读统计...'
-      await mergeRemoteReadingStats()
-    }
-    await reloadRestoredState()
-
-    const msg = v8Result.success
-      ? (v8Result.mergedFiles.length > 0
-          ? `v8 增量恢复成功，合并了 ${v8Result.mergedFiles.length} 个文件，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`
-          : `v8 增量恢复完成，数据已是最新，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`)
-      : `未找到 v8 增量数据，但${desktopSettingsStatus}。`
-    alert(msg)
-    webdavSyncStatus.value = '增量恢复成功'
-  } catch (e: any) {
-    webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
-  } finally { webdavSyncing.value = false }
+  await openSyncDiffPreview()
 }
 
 onMounted(async () => {
@@ -838,6 +866,8 @@ onMounted(async () => {
       :onOpenStats="openReadingStats"
     />
 
+    <SettingsSnapshots />
+
     <SettingsWebDAV 
       :saveWebdav="saveWebdav"
       :testWebdav="testWebdav"
@@ -845,6 +875,14 @@ onMounted(async () => {
       :fullRestore="fullRestore"
       :incrementalBackup="incrementalBackup"
       :incrementalRestore="incrementalRestore"
+      :syncDiffPreview="syncDiffPreview"
+      :syncDiffResolution="syncDiffResolution"
+      :syncDiffLoading="syncDiffLoading"
+      :syncDiffApplying="syncDiffApplying"
+      :openSyncDiffPreview="openSyncDiffPreview"
+      :applySyncDiffPreview="applySyncDiffPreview"
+      :closeSyncDiffPreview="closeSyncDiffPreview"
+      :setSyncDiffResolution="setSyncDiffResolution"
       :webdavTesting="webdavTesting"
       :webdavSyncing="webdavSyncing"
       :webdavSyncStatus="webdavSyncStatus"
