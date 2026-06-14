@@ -29,6 +29,17 @@ export interface ElectronAPI {
   dialog: {
     openFile: () => Promise<string | null>
     openImage: () => Promise<string | null>
+    saveTextFile: (options: {
+      defaultPath: string
+      content: string
+      filters?: Array<{ name: string; extensions: string[] }>
+    }) => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>
+  }
+  snapshot: {
+    create: (reason?: string) => Promise<SnapshotManifest>
+    list: () => Promise<SnapshotManifest[]>
+    restore: (id: string) => Promise<SnapshotManifest>
+    delete: (id: string) => Promise<{ success: boolean }>
   }
   win: {
     setAspectRatio: (ratio: number) => Promise<void>
@@ -82,6 +93,10 @@ export interface BookSummary {
   author: string | null
   bookType: string
   readingStatsKey: string
+  tags: string[]
+  series: string
+  seriesIndex?: number
+  readingStatus: 'unread' | 'reading' | 'finished'
   progressIndex: number
   progressOffset: number
   lastReadAt: number
@@ -92,6 +107,16 @@ export interface BookSummary {
   sourceFile: string | null
   createdAt: number
   updatedAt: number
+}
+
+export interface SnapshotManifest {
+  id: string
+  reason: string
+  createdAt: number
+  schemaVersion: number
+  entityCounts: Record<string, number>
+  chapterTextFiles: number
+  sizeBytes: number
 }
 
 export interface ChapterMeta {

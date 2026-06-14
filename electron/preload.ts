@@ -22,7 +22,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),
-    openImage: () => ipcRenderer.invoke('dialog:openImage')
+    openImage: () => ipcRenderer.invoke('dialog:openImage'),
+    saveTextFile: (options: { defaultPath: string; content: string; filters?: Array<{ name: string; extensions: string[] }> }) => (
+      ipcRenderer.invoke('dialog:saveTextFile', options)
+    )
+  },
+  snapshot: {
+    create: (reason?: string) => ipcRenderer.invoke('snapshot:create', reason),
+    list: () => ipcRenderer.invoke('snapshot:list'),
+    restore: (id: string) => ipcRenderer.invoke('snapshot:restore', id),
+    delete: (id: string) => ipcRenderer.invoke('snapshot:delete', id),
   },
   win: {
     setAspectRatio: (ratio: number) => ipcRenderer.invoke('win:setAspectRatio', ratio),

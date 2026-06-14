@@ -8,6 +8,7 @@ import AdmZip from 'adm-zip'
 import { parseTxt, parseEpub, parsePdf, type Chapter } from './parsers'
 import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
+import { normalizeBookMetadata, normalizeBookPatch } from '../src/utils/bookMetadata'
 
 let mainWindow: BrowserWindow | null = null
 let mimoAbortController: AbortController | null = null
@@ -17,6 +18,7 @@ const MAX_DISPLAY_REFRESH_RATE = 360
 const DEFAULT_DISPLAY_REFRESH_RATE = 60
 const CHAPTER_TEXT_DIR = 'chapter_text'
 const DATA_DIR = join(app.getPath('userData'), 'data')
+const SNAPSHOT_DIR = join(app.getPath('userData'), 'snapshots')
 const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
 
 const JSON_FILES: Record<string, string> = {
@@ -30,6 +32,24 @@ const JSON_FILES: Record<string, string> = {
 }
 
 type JsonEntityType = keyof typeof JSON_FILES
+
+interface SnapshotManifest {
+  id: string
+  reason: string
+  createdAt: number
+  schemaVersion: number
+  entityCounts: Record<string, number>
+  chapterTextFiles: number
+  sizeBytes: number
+}
+
+interface SnapshotBundle {
+  schemaVersion: number
+  createdAt: number
+  reason: string
+  entities: Record<string, unknown>
+  chapterTextFiles: Array<{ path: string; dataBase64: string }>
+}
 
 const jsonEntityCache = new Map<JsonEntityType, unknown>()
 let chaptersByBookIdCache: Map<number, any[]> | null = null
@@ -551,6 +571,154 @@ function getStorageSizeInfo(): { sizeBytes: number; chapterTextBytes: number; js
   }
 }
 
+function getSnapshotPaths(id: string): { bundlePath: string; manifestPath: string } {
+  const safeId = String(id || '').replace(/[^A-Za-z0-9_-]/g, '')
+  return {
+    bundlePath: join(SNAPSHOT_DIR, `${safeId}.json.gz`),
+    manifestPath: join(SNAPSHOT_DIR, `${safeId}.manifest.json`),
+  }
+}
+
+function collectChapterTextSnapshotFiles(): Array<{ path: string; dataBase64: string }> {
+  const root = getChapterTextRoot()
+  const files: Array<{ path: string; dataBase64: string }> = []
+  if (!existsSync(root)) return files
+
+  const walk = (dir: string, prefix = '') => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+      const absolutePath = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(absolutePath, relativePath)
+      } else if (entry.isFile() && normalizeChapterTextStoragePath(relativePath)) {
+        files.push({
+          path: relativePath,
+          dataBase64: readFileSync(absolutePath).toString('base64'),
+        })
+      }
+    }
+  }
+  walk(root)
+  return files
+}
+
+function writeChapterTextSnapshotFiles(files: Array<{ path: string; dataBase64: string }>): void {
+  const root = getChapterTextRoot()
+  rmSync(root, { recursive: true, force: true })
+  mkdirSync(root, { recursive: true })
+
+  for (const file of files) {
+    const relativePath = normalizeChapterTextStoragePath(file.path)
+    if (!relativePath) continue
+    const absolutePath = join(root, ...relativePath.split('/'))
+    mkdirSync(dirname(absolutePath), { recursive: true })
+    writeFileSync(absolutePath, Buffer.from(file.dataBase64, 'base64'))
+  }
+}
+
+function countEntityRows(value: unknown): number {
+  if (Array.isArray(value)) return value.length
+  if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length
+  return 0
+}
+
+function createLocalSnapshot(reason = '手动创建'): SnapshotManifest {
+  ensureDataDir()
+  mkdirSync(SNAPSHOT_DIR, { recursive: true })
+  const createdAt = Date.now()
+  const id = `${createdAt}-${createHash('sha1').update(`${reason}:${createdAt}`).digest('hex').slice(0, 8)}`
+  const entities: Record<string, unknown> = {}
+  const entityCounts: Record<string, number> = {}
+
+  for (const entityType of Object.keys(JSON_FILES) as JsonEntityType[]) {
+    const defaultValue = entityType === 'settings' ? {} : []
+    const value = readJsonEntity(entityType, defaultValue)
+    entities[entityType] = value
+    entityCounts[entityType] = countEntityRows(value)
+  }
+
+  const chapterTextFiles = collectChapterTextSnapshotFiles()
+  const bundle: SnapshotBundle = {
+    schemaVersion: 1,
+    createdAt,
+    reason,
+    entities,
+    chapterTextFiles,
+  }
+  const { bundlePath, manifestPath } = getSnapshotPaths(id)
+  writeFileSync(bundlePath, gzipSync(Buffer.from(JSON.stringify(bundle), 'utf8')))
+
+  const manifest: SnapshotManifest = {
+    id,
+    reason,
+    createdAt,
+    schemaVersion: 1,
+    entityCounts,
+    chapterTextFiles: chapterTextFiles.length,
+    sizeBytes: fileSizeBytes(bundlePath),
+  }
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+  return manifest
+}
+
+function listLocalSnapshots(): SnapshotManifest[] {
+  mkdirSync(SNAPSHOT_DIR, { recursive: true })
+  const snapshots: SnapshotManifest[] = []
+  for (const entry of readdirSync(SNAPSHOT_DIR, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.manifest.json')) continue
+    try {
+      const manifest = JSON.parse(readFileSync(join(SNAPSHOT_DIR, entry.name), 'utf8')) as SnapshotManifest
+      const { bundlePath } = getSnapshotPaths(manifest.id)
+      manifest.sizeBytes = fileSizeBytes(bundlePath)
+      snapshots.push(manifest)
+    } catch {}
+  }
+  return snapshots.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+function restoreLocalSnapshot(id: string): SnapshotManifest {
+  const { bundlePath } = getSnapshotPaths(id)
+  if (!existsSync(bundlePath)) throw new Error('恢复点文件不存在')
+  createLocalSnapshot('恢复前自动快照')
+
+  const bundle = JSON.parse(gunzipSync(readFileSync(bundlePath)).toString('utf8')) as SnapshotBundle
+  if (!bundle || bundle.schemaVersion !== 1 || !bundle.entities) {
+    throw new Error('恢复点格式不兼容')
+  }
+
+  for (const entityType of Object.keys(JSON_FILES) as JsonEntityType[]) {
+    const defaultValue = entityType === 'settings' ? {} : []
+    writeJsonEntity(entityType, bundle.entities[entityType] ?? defaultValue)
+  }
+  writeChapterTextSnapshotFiles(Array.isArray(bundle.chapterTextFiles) ? bundle.chapterTextFiles : [])
+  chaptersByBookIdCache = null
+  return getSnapshotManifest(id)
+}
+
+function getSnapshotManifest(id: string): SnapshotManifest {
+  const { manifestPath, bundlePath } = getSnapshotPaths(id)
+  if (!existsSync(manifestPath)) throw new Error('恢复点清单不存在')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SnapshotManifest
+  manifest.sizeBytes = fileSizeBytes(bundlePath)
+  return manifest
+}
+
+function deleteLocalSnapshot(id: string): { success: boolean } {
+  const { bundlePath, manifestPath } = getSnapshotPaths(id)
+  rmSync(bundlePath, { force: true })
+  rmSync(manifestPath, { force: true })
+  return { success: true }
+}
+
+function createDailyStartupSnapshot(): void {
+  const today = new Date().toISOString().slice(0, 10)
+  const existsToday = listLocalSnapshots().some((snapshot) => (
+    snapshot.reason === '每日自动快照'
+    && new Date(snapshot.createdAt).toISOString().slice(0, 10) === today
+  ))
+  if (!existsToday) createLocalSnapshot('每日自动快照')
+}
+
 function initializeJsonStore(): void {
   ensureDataDir()
   for (const [entityType, fileName] of Object.entries(JSON_FILES)) {
@@ -567,6 +735,12 @@ function initializeJsonStore(): void {
       toSchemaVersion: 8,
       storage: 'json',
     }, null, 2), 'utf8')
+  }
+
+  const books = readJsonEntity('books', []) as any[]
+  const normalizedBooks = books.map(book => normalizeBookMetadata(book))
+  if (JSON.stringify(books) !== JSON.stringify(normalizedBooks)) {
+    writeJsonEntity('books', normalizedBooks)
   }
 }
 
@@ -652,6 +826,9 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
       author,
       bookType: detectBookType(filePath),
       readingStatsKey,
+      tags: [],
+      series: '',
+      readingStatus: 'unread',
       progressIndex: 0,
       progressOffset: 0,
       lastReadAt: now,
@@ -705,6 +882,7 @@ function getChapterContentBatchJson(bookId: number, chapterIds: number[]) {
 }
 
 function bookRowToSummary(book: any) {
+  const normalizedBook = normalizeBookMetadata(book || {})
   const bookId = Number(book.id)
   const chapterCount = Number(book.chapterCount || 0)
   const progressIndex = Math.max(0, Math.min(Number(book.progressIndex || 0), Math.max(0, chapterCount - 1)))
@@ -715,6 +893,10 @@ function bookRowToSummary(book: any) {
     author: book.author === undefined || book.author === null ? null : String(book.author),
     bookType: String(book.bookType || 'text'),
     readingStatsKey: String(book.readingStatsKey || ''),
+    tags: normalizedBook.tags,
+    series: normalizedBook.series,
+    seriesIndex: normalizedBook.seriesIndex,
+    readingStatus: normalizedBook.readingStatus,
     progressIndex,
     progressOffset: Number(book.progressOffset || 0),
     lastReadAt: Number(book.lastReadAt || 0),
@@ -787,18 +969,22 @@ function updateBookJson(bookId: number, fields: Record<string, unknown>) {
     'currentChapterTitle',
     'bookType',
     'readingStatsKey',
+    'tags',
+    'series',
+    'seriesIndex',
+    'readingStatus',
   ])
   const books = readJsonEntity('books', []) as any[]
   const idx = books.findIndex(book => Number(book.id) === Number(bookId))
   if (idx < 0) return null
 
   const next = { ...books[idx] }
-  for (const [key, value] of Object.entries(fields || {})) {
+  for (const [key, value] of Object.entries(normalizeBookPatch(fields || {}))) {
     if (!allowedFields.has(key)) continue
     next[key] = value
   }
   next.updatedAt = Date.now()
-  books[idx] = next
+  books[idx] = normalizeBookMetadata(next)
   writeJsonEntity('books', books)
   const result = bookRowToSummary(next)
   perfLog('library:updateBook', startedAt, `book=${bookId}`)
@@ -806,6 +992,7 @@ function updateBookJson(bookId: number, fields: Record<string, unknown>) {
 }
 
 function deleteBookJson(bookId: number): { success: boolean } {
+  createLocalSnapshot('删除书籍前自动快照')
   const books = readJsonEntity('books', []) as any[]
   const target = books.find(book => Number(book.id) === bookId)
   writeJsonEntity('books', books.filter(book => Number(book.id) !== bookId))
@@ -905,6 +1092,7 @@ app.whenReady().then(async () => {
   screen.on('display-metrics-changed', () => notifyDisplayRefreshRate(true))
   try {
     initializeJsonStore()
+    createDailyStartupSnapshot()
     console.log('JSON data store initialized successfully')
   } catch (error) {
     console.error('JSON data store init failed:', String(error))
@@ -948,6 +1136,20 @@ ipcMain.handle('dialog:openFile', async () => {
 ipcMain.handle('dialog:openImage', async () => {
   const r = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'] }] })
   return r.canceled ? null : r.filePaths[0]
+})
+
+ipcMain.handle('dialog:saveTextFile', async (_, options: {
+  defaultPath: string
+  content: string
+  filters?: Electron.FileFilter[]
+}) => {
+  const r = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: options.defaultPath,
+    filters: options.filters || [{ name: 'Text', extensions: ['txt'] }],
+  })
+  if (r.canceled || !r.filePath) return { success: false, canceled: true }
+  writeFileSync(r.filePath, options.content, 'utf8')
+  return { success: true, filePath: r.filePath }
 })
 
 ipcMain.handle('win:setAspectRatio', async (_, ratio: number) => {
@@ -1022,6 +1224,11 @@ ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsW
 ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))
 ipcMain.handle('library:createBookChapterTextZip', async (_, bookId: number) => createBookChapterTextZip(bookId))
 ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string) => extractBookChapterTextZip(zipPath))
+
+ipcMain.handle('snapshot:create', async (_, reason?: string) => createLocalSnapshot(reason || '手动创建'))
+ipcMain.handle('snapshot:list', async () => listLocalSnapshots())
+ipcMain.handle('snapshot:restore', async (_, id: string) => restoreLocalSnapshot(id))
+ipcMain.handle('snapshot:delete', async (_, id: string) => deleteLocalSnapshot(id))
 
 ipcMain.handle('webdav:uploadFile', async (_, localPath: string, remoteUrl: string, auth: string) => {
   try {
