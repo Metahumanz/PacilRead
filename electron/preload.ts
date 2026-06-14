@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openImage: () => ipcRenderer.invoke('dialog:openImage'),
     saveTextFile: (options: { defaultPath: string; content: string; filters?: Array<{ name: string; extensions: string[] }> }) => (
       ipcRenderer.invoke('dialog:saveTextFile', options)
+    ),
+    saveBinaryFile: (options: { defaultPath: string; dataUrl: string; filters?: Array<{ name: string; extensions: string[] }> }) => (
+      ipcRenderer.invoke('dialog:saveBinaryFile', options)
     )
   },
   snapshot: {

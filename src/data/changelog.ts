@@ -7,6 +7,17 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.2.1',
+    date: '2026-06-14',
+    changes: [
+      '年度报告新增 PNG 图片导出，支持阅读杂志感与 Wrapped 风格两套模板',
+      '图片导出支持浅色和深色主题，默认跟随当前应用明暗模式，导出尺寸固定为 1080 x 1920',
+      '统计页新增导出图片弹窗，可在保存前选择模板和主题，单书统计页保持不显示年度图片导出',
+      '桌面端补充 PNG 二进制保存 IPC，导出完成后直接通过系统保存对话框落盘',
+      '补充年度报告标签、系列、月度趋势和空数据逻辑测试，保持 HTML/JSON/PNG 使用同一统计口径',
+    ]
+  },
+  {
     version: '1.2.0',
     date: '2026-06-14',
     changes: [

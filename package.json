@@ -1,6 +1,6 @@
 {
   "name": "pacil-read",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Metahumanz",
   "description": "A modern desktop reader application built with Electron and Vue",
   "main": "dist-electron/main.js",
@@ -23,6 +23,7 @@
     "@electron-toolkit/utils": "^3.0.0",
     "adm-zip": "^0.5.16",
     "electron-updater": "^6.8.3",
+    "html-to-image": "^1.11.13",
     "iconv-lite": "^0.6.3",
     "jschardet": "^3.1.4",
     "pdf-parse": "^2.4.5",

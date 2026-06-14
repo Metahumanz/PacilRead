@@ -132,6 +132,32 @@ const eta = readingInsights.estimateFinishTime({
 assert.equal(eta.remainingChars, 2000)
 assert.equal(eta.remainingSeconds, 364)
 
+const annualRows = [
+  { date: '2026-01-10', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 3600, charCount: 10000, updatedAt: 1 },
+  { date: '2026-02-12', bookIdentity: 'b', bookTitle: 'B', bookAuthor: 'BB', durationSeconds: 1800, charCount: 5000, updatedAt: 2 },
+  { date: '2025-12-31', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 7200, charCount: 20000, updatedAt: 3 },
+]
+const annualBooks = [
+  { id: 1, title: 'A', author: 'AA', readingStatsKey: 'a', progressIndex: 0, progressOffset: 0, chapterCount: 1, lastReadAt: 1, tags: ['科幻', '长篇'], series: '银河', readingStatus: 'finished' },
+  { id: 2, title: 'B', author: 'BB', readingStatsKey: 'b', progressIndex: 0, progressOffset: 0, chapterCount: 1, lastReadAt: 2, tags: ['科幻'], series: '城市', readingStatus: 'reading' },
+]
+const annualReport = readingInsights.buildAnnualReadingReport(annualRows, annualBooks, 2026)
+assert.equal(annualReport.totalSeconds, 5400)
+assert.equal(annualReport.totalChars, 15000)
+assert.equal(annualReport.readingDays, 2)
+assert.equal(annualReport.finishedBooks, 1)
+assert.equal(annualReport.monthly[0].totalSeconds, 3600)
+assert.equal(annualReport.monthly[1].totalSeconds, 1800)
+assert.equal(annualReport.monthly[11].totalSeconds, 0)
+assert.deepEqual(plain(annualReport.topTags[0]), { name: '科幻', totalSeconds: 5400 })
+assert.deepEqual(plain(annualReport.topSeries[0]), { name: '银河', totalSeconds: 3600 })
+const emptyAnnualReport = readingInsights.buildAnnualReadingReport([], [], 2026)
+assert.equal(emptyAnnualReport.totalSeconds, 0)
+assert.equal(emptyAnnualReport.totalChars, 0)
+assert.equal(emptyAnnualReport.topBooks.length, 0)
+assert.equal(emptyAnnualReport.monthly.length, 12)
+assert.equal(emptyAnnualReport.monthly.every(month => month.totalSeconds === 0), true)
+
 const pagination = loadTsModule('src/utils/pagination.ts')
 const slices = [
   { startChar: 0, endChar: 10, bodyEndInSlice: 10 },
