@@ -71,6 +71,67 @@ assert.deepEqual(plain(splitRows), [
   { date: '2026-01-02', seconds: 45 },
 ])
 
+const bookMetadata = loadTsModule('src/utils/bookMetadata.ts')
+assert.deepEqual(
+  plain(bookMetadata.normalizeBookMetadata({ title: 'A', tags: '科幻, 科幻，长篇' })),
+  { title: 'A', tags: ['科幻', '长篇'], series: '', readingStatus: 'unread' },
+)
+assert.equal(bookMetadata.normalizeBookMetadata({ progressIndex: 1 }).readingStatus, 'reading')
+assert.equal(bookMetadata.shouldAutoMarkFinished({
+  status: 'reading',
+  chapterCount: 2,
+  progressIndex: 1,
+  progressOffset: 4,
+  totalPages: 5,
+}), true)
+
+const syncDiff = loadTsModule('src/utils/syncDiff.ts')
+const diffPreview = syncDiff.buildSyncDiffPreview({
+  books: [
+    { id: 1, title: 'Local', author: 'A', readingStatsKey: 'book-a', updatedAt: 2 },
+    { id: 2, title: 'Only Local', readingStatsKey: 'book-local', updatedAt: 1 },
+  ],
+  chapters: [], rules: [], themes: [], bookmarks: [], readingStats: [],
+}, {
+  books: [
+    { id: 9, title: 'Remote', author: 'A', readingStatsKey: 'book-a', updatedAt: 3 },
+    { id: 3, title: 'Only Remote', readingStatsKey: 'book-remote', updatedAt: 1 },
+  ],
+  chapters: [], rules: [], themes: [], bookmarks: [], readingStats: [],
+})
+assert.equal(diffPreview.summary.conflict, 1)
+assert.equal(diffPreview.summary.local, 1)
+assert.equal(diffPreview.summary.remote, 1)
+const resolvedDiff = syncDiff.applySyncDiffResolution({
+  books: [{ id: 1, title: 'Local', readingStatsKey: 'book-a', updatedAt: 2 }],
+  chapters: [], rules: [], themes: [], bookmarks: [], readingStats: [],
+}, {
+  books: [{ id: 9, title: 'Remote', readingStatsKey: 'book-a', updatedAt: 3 }],
+  chapters: [], rules: [], themes: [], bookmarks: [], readingStats: [],
+}, { 'books:book-a': 'remote' })
+assert.equal(resolvedDiff.books[0].title, 'Remote')
+
+const readingInsights = loadTsModule('src/utils/readingInsights.ts')
+const insightRows = [
+  { date: '2026-01-01', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 600, charCount: 3000, updatedAt: 1 },
+  { date: '2026-01-02', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 600, charCount: 3600, updatedAt: 2 },
+  { date: '2026-01-04', bookIdentity: 'b', bookTitle: 'B', bookAuthor: 'BB', durationSeconds: 300, charCount: 900, updatedAt: 3 },
+]
+assert.equal(readingInsights.calculateLongestStreak(readingInsights.buildReadingCalendar(insightRows, { year: 2026 })), 2)
+assert.equal(Math.round(readingInsights.calculateReadingSpeed(insightRows, { bookIdentity: 'a', days: 365 }).charsPerMinute), 330)
+const eta = readingInsights.estimateFinishTime({
+  book: { id: 1, title: 'A', author: 'AA', readingStatsKey: 'a', progressIndex: 1, progressOffset: 0, chapterCount: 3, lastReadAt: 1 },
+  chapters: [
+    { bookId: 1, orderIndex: 0, bodyTextSize: 1000 },
+    { bookId: 1, orderIndex: 1, bodyTextSize: 1000 },
+    { bookId: 1, orderIndex: 2, bodyTextSize: 1000 },
+  ],
+  rows: insightRows,
+  days: 365,
+})
+assert.equal(eta.remainingChars, 2000)
+assert.equal(eta.remainingSeconds, 364)
+
 const pagination = loadTsModule('src/utils/pagination.ts')
 const slices = [
   { startChar: 0, endChar: 10, bodyEndInSlice: 10 },
