@@ -7,6 +7,19 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.2.0',
+    date: '2026-06-14',
+    changes: [
+      '新增本地恢复点：支持手动创建、列表查看、恢复、删除，并在每日启动、WebDAV 恢复前等关键操作前自动快照',
+      'WebDAV 恢复新增差异预览和冲突可视化，按 books、chapters、rules、themes、bookmarks、readingStats 分类展示本地/远端变化',
+      '扩展书籍元数据兼容层，补齐标签、系列、系列序号和未读/在读/读完状态，旧数据会按阅读进度自动迁移默认状态',
+      '阅读页会在打开书籍和读到末尾时自动维护阅读状态，并记录有效阅读字符数用于后续速度统计',
+      '阅读统计新增连续阅读日历、单书阅读速度、预计读完时间，以及年度报告 HTML/JSON 导出',
+      '设置页补充恢复点管理入口，同步冲突应用前会先创建本地快照，降低误覆盖风险',
+      '同步设置页版本演进日志与应用版本号，发布信息更新为 v1.2.0',
+    ]
+  },
+  {
     version: '1.1.6',
     date: '2026-06-13',
     changes: [
