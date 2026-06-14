@@ -1,5 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { ReaderBook, ReaderChapter } from '../types/entities'
+import { shouldAutoMarkFinished, shouldAutoMarkReading } from '../utils/bookMetadata'
 import { perfLog, perfNow } from '../utils/perf'
 
 interface WebdavProgressPayload {
@@ -42,12 +43,28 @@ export function useReaderProgress(opts: {
     if (!progressReady) return
     const startedAt = perfNow()
     try {
+      const currentPage = opts.getCurrentPage()
+      const totalPages = opts.getTotalPages()
+      const nextReadingStatus = shouldAutoMarkFinished({
+        status: opts.book.value.readingStatus,
+        chapterCount: opts.book.value.chapterCount,
+        progressIndex: opts.currentChapterIndex.value,
+        progressOffset: currentPage,
+        totalPages,
+      })
+        ? 'finished'
+        : shouldAutoMarkReading(opts.book.value.readingStatus)
+          ? 'reading'
+          : opts.book.value.readingStatus
+
       await window.electronAPI.library.updateBook(opts.bookId, {
         progressIndex: opts.currentChapterIndex.value,
-        progressOffset: opts.getCurrentPage(),
+        progressOffset: currentPage,
         lastReadAt: Date.now(),
         currentChapterTitle: opts.currentChapterData.value?.title || '',
+        readingStatus: nextReadingStatus,
       })
+      opts.book.value.readingStatus = nextReadingStatus
 
       await opts.uploadProgressToWebdav({
         bookId: opts.bookId,
@@ -57,8 +74,8 @@ export function useReaderProgress(opts: {
         currentChapterTitle: opts.currentChapterData.value?.title || '',
         currentChapterBodyLength: opts.currentChapterData.value?.body_text?.length || 0,
         currentChapterOffset: opts.getChapterOffset(),
-        currentPage: opts.getCurrentPage(),
-        totalPages: opts.getTotalPages(),
+        currentPage,
+        totalPages,
         pendingWebdavPos: opts.getPendingWebdavPos(),
       })
     } catch (e) { console.error(e) }

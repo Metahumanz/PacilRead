@@ -17,6 +17,8 @@ interface TrackableBook {
 export function useReadingTimeTracker(opts: {
   enabled: Ref<boolean>
   book: Ref<TrackableBook | null>
+  getVisibleCharCount?: () => number
+  getReadingPositionKey?: () => string
 }) {
   const settings = useSettings()
   const isTracking = ref(false)
@@ -25,6 +27,16 @@ export function useReadingTimeTracker(opts: {
   let lastActivityAt: number | null = null
   let checkpointTimer: number | null = null
   let uploadTimer: number | null = null
+  let pendingCharCount = 0
+  let lastPositionKey: string | null = null
+
+  const recordVisibleChars = () => {
+    const positionKey = opts.getReadingPositionKey?.() || ''
+    if (positionKey && positionKey === lastPositionKey) return
+    const charCount = Math.max(0, Math.floor(opts.getVisibleCharCount?.() || 0))
+    if (charCount > 0) pendingCharCount += charCount
+    lastPositionKey = positionKey || lastPositionKey
+  }
 
   const scheduleUpload = () => {
     if (!settings.webdavSync.value || !settings.webdavUrl.value) return
@@ -46,7 +58,13 @@ export function useReadingTimeTracker(opts: {
 
     const deviceId = await ensureReadingStatsDeviceId()
     const rows = splitRangeByDate(activeWindowStartAt, effectiveEnd)
+    const totalSeconds = rows.reduce((sum, row) => sum + row.seconds, 0)
+    let remainingChars = pendingCharCount
     for (const row of rows) {
+      const rowChars = totalSeconds > 0
+        ? Math.min(remainingChars, Math.round(pendingCharCount * (row.seconds / totalSeconds)))
+        : 0
+      remainingChars -= rowChars
       await appendReadingStatsDuration({
         date: row.date,
         sourceDeviceId: deviceId,
@@ -54,15 +72,17 @@ export function useReadingTimeTracker(opts: {
         bookTitle: book.title || '未命名',
         bookAuthor: book.author || '',
         durationSeconds: row.seconds,
-        charCount: 0,
+        charCount: row === rows[rows.length - 1] ? rowChars + remainingChars : rowChars,
         updatedAt: Date.now(),
       })
     }
+    pendingCharCount = 0
 
     if (persistUntil >= lastActivityAt + readingStatsIdleMs) {
       activeWindowStartAt = null
       lastActivityAt = null
       isTracking.value = false
+      lastPositionKey = null
     } else {
       activeWindowStartAt = effectiveEnd
     }
@@ -86,6 +106,7 @@ export function useReadingTimeTracker(opts: {
       activeWindowStartAt = now
       lastActivityAt = now
       isTracking.value = true
+      recordVisibleChars()
       return
     }
 
@@ -96,6 +117,7 @@ export function useReadingTimeTracker(opts: {
 
     lastActivityAt = now
     isTracking.value = true
+    recordVisibleChars()
   }
 
   const start = async () => {
@@ -106,6 +128,7 @@ export function useReadingTimeTracker(opts: {
     activeWindowStartAt = now
     lastActivityAt = now
     isTracking.value = true
+    recordVisibleChars()
     checkpointTimer = window.setInterval(() => {
       flush().catch((error) => {
         console.error('Reading stats checkpoint flush failed:', error)

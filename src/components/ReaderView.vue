@@ -104,6 +104,12 @@ const readingTimeTracker = useReadingTimeTracker({
       reading_stats_key: book.value.readingStatsKey,
     }
   }),
+  getVisibleCharCount: () => {
+    const left = currentSlice.value?.charCount || 0
+    const right = currentRightSlice.value?.charCount || 0
+    return left + right
+  },
+  getReadingPositionKey: () => `${currentChapterIndex.value}:${currentPage.value}:${pageMode.value}`,
 })
 
 const toggleAlwaysOnTop = () => {
@@ -123,10 +129,15 @@ const fetchBook = async () => {
         title: b.title,
         author: b.author,
         bookType: b.bookType,
+        tags: b.tags || [],
+        series: b.series || '',
+        seriesIndex: b.seriesIndex,
+        readingStatus: b.readingStatus || 'unread',
         progressIndex: b.progressIndex,
         progressOffset: b.progressOffset,
         lastReadAt: b.lastReadAt,
         readingStatsKey: b.readingStatsKey,
+        chapterCount: b.chapterCount,
       }
       currentChapterIndex.value = b.progressIndex || 0
     }

@@ -1,4 +1,5 @@
 import type { Book, Chapter, Rule } from '../composables/useDataStore'
+import type { ReadingStatus } from '../utils/bookMetadata'
 
 export type LibraryBook = Book
 export type LibraryChapter = Chapter
@@ -9,10 +10,15 @@ export interface ReaderBook {
   title: string
   author: string | null
   bookType: string
+  tags: string[]
+  series: string
+  seriesIndex?: number
+  readingStatus: ReadingStatus
   progressIndex: number
   progressOffset: number
   lastReadAt: number
   readingStatsKey: string
+  chapterCount: number
 }
 
 export interface ReaderChapter {
