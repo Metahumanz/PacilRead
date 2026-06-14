@@ -269,7 +269,7 @@ onUnmounted(() => {
 
     <!-- GRID VIEW -->
     <div v-if="!loading && filteredBooks.length > 0 && viewMode === 'grid'" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8 pb-10">
-      <div v-for="(book, index) in filteredBooks" :key="book.id" class="relative group cursor-pointer bookshelf-card flex flex-col" 
+      <div v-for="(book, index) in filteredBooks" :key="book.id" class="relative group cursor-pointer bookshelf-card flex flex-col"
            :style="{ animationDelay: `${index * 30}ms` }" @click="emit('open-book', book.id)">
         <div class="app-card app-card-hover aspect-[3/4.2] overflow-hidden relative"
              :class="{'ring-2 ring-[var(--app-accent)]': book.pinned}">
@@ -319,7 +319,7 @@ onUnmounted(() => {
 
     <!-- LIST VIEW -->
     <div v-if="!loading && filteredBooks.length > 0 && viewMode === 'list'" class="flex flex-col gap-2 pb-10">
-      <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id" 
+      <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id"
            class="bookshelf-list-row app-card app-card-hover group p-2 cursor-pointer bookshelf-card"
            :style="{ animationDelay: `${index * 20}ms` }" @click="emit('open-book', book.id)">
         <div class="bookshelf-list-cover w-12 h-16 rounded-[var(--app-radius-button)] overflow-hidden shadow relative" :class="{'ring-1 ring-[var(--app-accent)]': book.pinned}">
