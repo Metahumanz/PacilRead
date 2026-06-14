@@ -3,9 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   fetchReadingStatsBookDetail,
   fetchReadingStatsBookRank,
+  fetchReadingCalendar,
   fetchReadingStatsOverview,
   formatDuration,
   mergeRemoteReadingStats,
+  exportAnnualReadingReport,
+  type ReadingCalendarSummary,
   type ReadingStatsBookDetail,
   type ReadingStatsBookRankItem,
   type ReadingStatsPeriod,
@@ -27,6 +30,8 @@ const selectedPeriod = ref<ReadingStatsPeriod>('week')
 const overview = ref({ today: 0, week: 0, year: 0 })
 const bookDetail = ref<ReadingStatsBookDetail | null>(null)
 const ranking = ref<ReadingStatsBookRankItem[]>([])
+const calendar = ref<ReadingCalendarSummary>({ days: [], longestStreak: 0 })
+const exporting = ref(false)
 
 const headerTitle = computed(() => {
   if (bookDetail.value) return '单书阅读统计'
@@ -42,6 +47,7 @@ const loadData = async () => {
   loading.value = true
   try {
     overview.value = await fetchReadingStatsOverview(props.bookId)
+    calendar.value = await fetchReadingCalendar(props.bookId)
     if (props.bookId) {
       bookDetail.value = await fetchReadingStatsBookDetail(props.bookId)
       ranking.value = []
@@ -61,6 +67,51 @@ const syncAndReload = async () => {
     await loadData()
   } finally {
     syncing.value = false
+  }
+}
+
+const toDateString = (date: Date) => {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+const calendarCells = computed(() => {
+  const byDate = new Map(calendar.value.days.map(day => [day.date, day]))
+  const cells: Array<{ date: string; durationSeconds: number; charCount: number }> = []
+  const today = new Date()
+  for (let i = 89; i >= 0; i--) {
+    const date = new Date(today)
+    date.setDate(today.getDate() - i)
+    const key = toDateString(date)
+    const day = byDate.get(key)
+    cells.push(day || { date: key, durationSeconds: 0, charCount: 0 })
+  }
+  return cells
+})
+
+const calendarIntensity = (seconds: number) => {
+  if (seconds <= 0) return 0
+  if (seconds < 10 * 60) return 1
+  if (seconds < 30 * 60) return 2
+  if (seconds < 60 * 60) return 3
+  return 4
+}
+
+const formatSpeed = (value: number) => `${Math.round(value)} 字/分钟`
+
+const formatEstimate = (seconds: number | null) => {
+  if (seconds === null) return '暂无足够数据'
+  if (seconds <= 0) return '已读完'
+  return formatDuration(seconds)
+}
+
+const exportReport = async (format: 'html' | 'json') => {
+  exporting.value = true
+  try {
+    await exportAnnualReadingReport(format)
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -99,13 +150,31 @@ onMounted(async () => {
         <p class="app-muted text-[13px]">{{ headerDescription }}</p>
       </div>
 
-      <button
-        @click="syncAndReload"
-        :disabled="syncing"
-        class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
-      >
-        {{ syncing ? '同步中...' : '同步云端统计' }}
-      </button>
+      <div class="flex flex-wrap justify-end gap-2">
+        <button
+          v-if="!props.bookId"
+          @click="exportReport('html')"
+          :disabled="exporting"
+          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
+        >
+          导出 HTML
+        </button>
+        <button
+          v-if="!props.bookId"
+          @click="exportReport('json')"
+          :disabled="exporting"
+          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
+        >
+          导出 JSON
+        </button>
+        <button
+          @click="syncAndReload"
+          :disabled="syncing"
+          class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
+        >
+          {{ syncing ? '同步中...' : '同步云端统计' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="bookDetail" class="app-card mb-8 p-5">
@@ -121,6 +190,8 @@ onMounted(async () => {
           <div class="flex flex-wrap gap-3 mt-4 text-[12px] app-muted">
             <span>章节进度：第 {{ bookDetail.progressIndex + 1 }} 章</span>
             <span>最近阅读：{{ bookDetail.lastRead ? new Date(bookDetail.lastRead).toLocaleString() : '暂无' }}</span>
+            <span>阅读速度：{{ bookDetail.speed.hasEnoughData ? formatSpeed(bookDetail.speed.charsPerMinute) : '暂无足够数据' }}</span>
+            <span>预计读完：{{ formatEstimate(bookDetail.estimate.remainingSeconds) }}</span>
           </div>
         </div>
       </div>
@@ -169,45 +240,66 @@ onMounted(async () => {
       正在整理统计数据...
     </div>
 
-    <div
-      v-else-if="!props.bookId && ranking.length === 0"
-      class="app-card p-10 text-center app-muted"
-    >
-      暂无阅读统计数据，开启记录后读一会儿书就会在这里出现。
-    </div>
+    <template v-else>
+      <div class="app-card p-5 mb-8">
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <div class="text-[15px] font-semibold app-title">连续阅读日历</div>
+            <div class="text-[12px] app-muted mt-1">最长连续 {{ calendar.longestStreak }} 天</div>
+          </div>
+          <div class="text-[11px] app-muted">近 90 天</div>
+        </div>
+        <div class="calendar-grid">
+          <div
+            v-for="day in calendarCells"
+            :key="day.date"
+            class="calendar-cell"
+            :class="`is-${calendarIntensity(day.durationSeconds)}`"
+            :title="`${day.date} · ${formatDuration(day.durationSeconds)} · ${day.charCount} 字`"
+          ></div>
+        </div>
+      </div>
 
-    <div
-      v-else-if="!props.bookId"
-      class="app-card app-divide-y overflow-hidden"
-    >
-      <button
-        v-for="item in ranking"
-        :key="item.bookIdentity"
-        class="app-row w-full flex items-center gap-4 px-5 py-4 text-left"
-        @click="item.localBookId && emit('open-book-stats', item.localBookId)"
+      <div
+        v-if="!props.bookId && ranking.length === 0"
+        class="app-card p-10 text-center app-muted"
       >
-        <BookCover
-          class="w-12 h-16 rounded-[var(--app-radius-input)] shrink-0 border border-[var(--app-border)]"
-          :cover-path="item.coverPath"
-          :title="item.bookTitle"
-        />
-        <div class="flex-1 min-w-0">
-          <div class="text-[14px] font-semibold app-title truncate">{{ item.bookTitle || '未命名书籍' }}</div>
-          <div class="text-[12px] app-muted truncate mt-1">{{ item.bookAuthor || '未知作者' }}</div>
-        </div>
-        <div class="text-right shrink-0">
-          <div class="text-[13px] font-semibold app-accent-text">{{ formatDuration(item.totalSeconds) }}</div>
-          <div class="text-[11px] app-muted mt-1">{{ new Date(item.lastUpdatedAt).toLocaleString() }}</div>
-        </div>
-      </button>
-    </div>
+        暂无阅读统计数据，开启记录后读一会儿书就会在这里出现。
+      </div>
 
-    <div
-      v-else
-      class="app-card p-8 text-center app-muted"
-    >
-      这本书的累计阅读时长已经汇总在上面的周期卡片里。
-    </div>
+      <div
+        v-else-if="!props.bookId"
+        class="app-card app-divide-y overflow-hidden"
+      >
+        <button
+          v-for="item in ranking"
+          :key="item.bookIdentity"
+          class="app-row w-full flex items-center gap-4 px-5 py-4 text-left"
+          @click="item.localBookId && emit('open-book-stats', item.localBookId)"
+        >
+          <BookCover
+            class="w-12 h-16 rounded-[var(--app-radius-input)] shrink-0 border border-[var(--app-border)]"
+            :cover-path="item.coverPath"
+            :title="item.bookTitle"
+          />
+          <div class="flex-1 min-w-0">
+            <div class="text-[14px] font-semibold app-title truncate">{{ item.bookTitle || '未命名书籍' }}</div>
+            <div class="text-[12px] app-muted truncate mt-1">{{ item.bookAuthor || '未知作者' }}</div>
+          </div>
+          <div class="text-right shrink-0">
+            <div class="text-[13px] font-semibold app-accent-text">{{ formatDuration(item.totalSeconds) }}</div>
+            <div class="text-[11px] app-muted mt-1">{{ new Date(item.lastUpdatedAt).toLocaleString() }}</div>
+          </div>
+        </button>
+      </div>
+
+      <div
+        v-else
+        class="app-card p-8 text-center app-muted"
+      >
+        这本书的累计阅读时长已经汇总在上面的周期卡片里。
+      </div>
+    </template>
   </div>
 </template>
 
@@ -232,5 +324,29 @@ onMounted(async () => {
   font-size: 24px;
   font-weight: 700;
   color: var(--app-text);
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(30, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.calendar-cell {
+  aspect-ratio: 1;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--app-text-muted) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-border) 70%, transparent);
+}
+
+.calendar-cell.is-1 { background: color-mix(in srgb, var(--app-accent) 24%, transparent); }
+.calendar-cell.is-2 { background: color-mix(in srgb, var(--app-accent) 42%, transparent); }
+.calendar-cell.is-3 { background: color-mix(in srgb, var(--app-accent) 62%, transparent); }
+.calendar-cell.is-4 { background: color-mix(in srgb, var(--app-accent) 82%, transparent); }
+
+@media (max-width: 720px) {
+  .calendar-grid {
+    grid-template-columns: repeat(15, minmax(0, 1fr));
+  }
 }
 </style>
