@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AnnualReadingReport } from '../../utils/readingInsights'
+import {
+  buildAnnualReportInsight,
+  buildAnnualReportMetricDisplays,
+  type AnnualReadingReport,
+  type AnnualReportMetricKey,
+} from '../../utils/readingInsights'
 
 type AnnualReportImageTemplate = 'magazine' | 'wrapped'
 type AnnualReportImageTheme = 'light' | 'dark'
@@ -9,6 +14,7 @@ const props = defineProps<{
   report: AnnualReadingReport
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme
+  summaryMetrics?: AnnualReportMetricKey[]
 }>()
 
 const formatHours = (seconds: number) => {
@@ -34,36 +40,36 @@ const formatBookTime = (seconds: number) => {
   return `${minutes} 分钟`
 }
 
-const summaryText = computed(() => {
-  if (props.report.readingDays >= 240) return '这一年，你把阅读变成了一种稳定的日常节奏。'
-  if (props.report.longestStreak >= 30) return '这一年，你用一段长长的连续阅读，把注意力留给了书。'
-  if (props.report.finishedBooks >= 10) return '这一年，你读完了许多故事，也留下了清晰的轨迹。'
-  return '这一年，你把碎片时间攒成了自己的阅读坐标。'
-})
+const isBookReport = computed(() => props.report.scope === 'book')
 
-const metrics = computed(() => [
-  { label: '阅读时长', value: formatHours(props.report.totalSeconds), unit: '小时' },
-  { label: '阅读字数', value: formatChars(props.report.totalChars), unit: '字' },
-  { label: '阅读天数', value: props.report.readingDays.toLocaleString('zh-CN'), unit: '天' },
-  { label: '最长连续', value: props.report.longestStreak.toLocaleString('zh-CN'), unit: '天' },
-])
+const reportTitle = computed(() => (
+  isBookReport.value ? `${props.report.year} 单书阅读报告` : `${props.report.year} 年度阅读报告`
+))
 
-const wrappedStats = computed(() => [
-  { label: '最长连续', value: props.report.longestStreak.toLocaleString('zh-CN'), unit: '天' },
-  { label: '完成书籍', value: props.report.finishedBooks.toLocaleString('zh-CN'), unit: '本' },
-  { label: '阅读天数', value: props.report.readingDays.toLocaleString('zh-CN'), unit: '天' },
-])
+const reportEyebrow = computed(() => (
+  isBookReport.value ? 'PACILREAD · BOOK YEAR IN READING' : 'PACILREAD · YEAR IN READING'
+))
 
-const topBooks = computed(() => props.report.topBooks.slice(0, 5))
+const displayBookTitle = computed(() => (
+  props.report.bookTitle || props.report.topBooks[0]?.title || '未命名书籍'
+))
+
+const summaryText = computed(() => buildAnnualReportInsight(props.report))
+
+const summaryMetrics = computed(() => buildAnnualReportMetricDisplays(props.report, props.summaryMetrics))
+
+const topBooks = computed(() => props.report.topBooks.slice(0, 4))
 const topBook = computed(() => props.report.topBooks[0] || null)
-const topAuthors = computed(() => props.report.topAuthors.slice(0, 4))
-const topTags = computed(() => props.report.topTags.slice(0, 6))
-const topSeries = computed(() => props.report.topSeries.slice(0, 4))
+const topAuthors = computed(() => props.report.topAuthors.slice(0, 3))
+const topTags = computed(() => props.report.topTags.slice(0, 5))
+const topSeries = computed(() => props.report.topSeries.slice(0, 3))
 
 const wrappedChips = computed(() => {
   const tags = props.report.topTags.map(item => item.name)
   const authors = props.report.topAuthors.map(item => item.name)
-  return [...tags, ...authors].filter(Boolean).slice(0, 8)
+  const series = props.report.topSeries.map(item => item.name)
+  const bookAuthor = isBookReport.value ? [props.report.bookAuthor] : []
+  return Array.from(new Set([...tags, ...series, ...bookAuthor, ...authors].filter(Boolean))).slice(0, 6)
 })
 
 const months = computed(() => {
@@ -72,7 +78,7 @@ const months = computed(() => {
     const monthNumber = Number(month.month.slice(5, 7))
     return {
       label: `${monthNumber}月`,
-      height: Math.max(12, Math.round((month.totalSeconds / maxSeconds) * 168)),
+      height: Math.max(12, Math.round((month.totalSeconds / maxSeconds) * 150)),
       active: month.totalSeconds > 0,
       value: formatBookTime(month.totalSeconds),
     }
@@ -87,170 +93,198 @@ const months = computed(() => {
     :class="[`is-${props.template}`, `theme-${props.theme}`]"
   >
     <template v-if="props.template === 'magazine'">
-      <header class="magazine-header">
-        <div>
-          <div class="eyebrow">PACILREAD · YEAR IN READING</div>
-          <h1>{{ props.report.year }} 年度阅读报告</h1>
-        </div>
-        <div class="year-mark">{{ props.report.year }}</div>
-      </header>
+      <div class="magazine-layout">
+        <section class="magazine-hero">
+          <header class="magazine-header">
+            <div>
+              <div class="eyebrow">{{ reportEyebrow }}</div>
+              <h1>{{ reportTitle }}</h1>
+              <div v-if="isBookReport" class="scope-title">{{ displayBookTitle }}</div>
+            </div>
+            <div class="year-mark">{{ props.report.year }}</div>
+          </header>
 
-      <p class="summary">{{ summaryText }}</p>
+          <p class="summary">{{ summaryText }}</p>
 
-      <section class="metric-grid">
-        <div v-for="metric in metrics" :key="metric.label" class="metric-card">
-          <div class="metric-label">{{ metric.label }}</div>
-          <div class="metric-value-row">
-            <span class="metric-value">{{ metric.value }}</span>
-            <span class="metric-unit">{{ metric.unit }}</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="magazine-main">
-        <div class="panel top-books-panel">
-          <div class="section-kicker">TOP BOOKS</div>
-          <h2>年度书单</h2>
-          <ol v-if="topBooks.length" class="book-list">
-            <li v-for="(book, index) in topBooks" :key="`${book.title}-${index}`">
-              <span class="book-rank">{{ String(index + 1).padStart(2, '0') }}</span>
-              <div class="book-copy">
-                <strong>{{ book.title || '未命名书籍' }}</strong>
-                <span>{{ book.author || '未知作者' }} · {{ formatBookTime(book.totalSeconds) }}</span>
+          <section class="metric-grid">
+            <div
+              v-for="metric in summaryMetrics"
+              :key="metric.key"
+              class="metric-card"
+              :class="{ 'is-text': metric.kind === 'text' }"
+            >
+              <div class="metric-label">{{ metric.label }}</div>
+              <div class="metric-value-row">
+                <span class="metric-value">{{ metric.value }}</span>
+                <span v-if="metric.unit" class="metric-unit">{{ metric.unit }}</span>
               </div>
-            </li>
-          </ol>
-          <div v-else class="empty-line">暂无年度书籍记录</div>
-        </div>
-
-        <div class="panel taste-panel">
-          <div class="section-kicker">READING MAP</div>
-          <h2>阅读地图</h2>
-
-          <div class="taste-group">
-            <span>常读作者</span>
-            <div class="pill-row">
-              <b v-for="author in topAuthors" :key="author.name">{{ author.name }}</b>
-              <em v-if="topAuthors.length === 0">暂无作者</em>
             </div>
-          </div>
+          </section>
+        </section>
 
-          <div class="taste-group">
-            <span>常读标签</span>
-            <div class="pill-row">
-              <b v-for="tag in topTags" :key="tag.name">{{ tag.name }}</b>
-              <em v-if="topTags.length === 0">暂无标签</em>
+        <section class="magazine-side">
+          <section class="magazine-main">
+            <div class="panel top-books-panel">
+              <div class="section-kicker">{{ isBookReport ? 'BOOK PROFILE' : 'TOP BOOKS' }}</div>
+              <h2>{{ isBookReport ? '本书书档' : '年度书单' }}</h2>
+              <ol v-if="topBooks.length" class="book-list">
+                <li v-for="(book, index) in topBooks" :key="`${book.title}-${index}`">
+                  <span class="book-rank">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <div class="book-copy">
+                    <strong>{{ book.title || '未命名书籍' }}</strong>
+                    <span>{{ book.author || '未知作者' }} · {{ formatBookTime(book.totalSeconds) }}</span>
+                  </div>
+                </li>
+              </ol>
+              <div v-else class="empty-line">暂无年度书籍记录</div>
             </div>
-          </div>
 
-          <div class="taste-group">
-            <span>常读系列</span>
-            <div class="pill-row">
-              <b v-for="series in topSeries" :key="series.name">{{ series.name }}</b>
-              <em v-if="topSeries.length === 0">暂无系列</em>
+            <div class="panel taste-panel">
+              <div class="section-kicker">READING MAP</div>
+              <h2>阅读地图</h2>
+
+              <div class="taste-group">
+                <span>{{ isBookReport ? '作者' : '常读作者' }}</span>
+                <div class="pill-row">
+                  <template v-if="isBookReport && props.report.bookAuthor">
+                    <b>{{ props.report.bookAuthor }}</b>
+                  </template>
+                  <template v-else>
+                    <b v-for="author in topAuthors" :key="author.name">{{ author.name }}</b>
+                  </template>
+                  <em v-if="topAuthors.length === 0 && !props.report.bookAuthor">暂无作者</em>
+                </div>
+              </div>
+
+              <div class="taste-group">
+                <span>{{ isBookReport ? '标签' : '常读标签' }}</span>
+                <div class="pill-row">
+                  <b v-for="tag in topTags" :key="tag.name">{{ tag.name }}</b>
+                  <em v-if="topTags.length === 0">暂无标签</em>
+                </div>
+              </div>
+
+              <div class="taste-group">
+                <span>{{ isBookReport ? '系列' : '常读系列' }}</span>
+                <div class="pill-row">
+                  <b v-for="series in topSeries" :key="series.name">{{ series.name }}</b>
+                  <em v-if="topSeries.length === 0">暂无系列</em>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </section>
+          </section>
 
-      <section class="panel month-panel">
-        <div class="month-heading">
-          <div>
-            <div class="section-kicker">MONTHLY RHYTHM</div>
-            <h2>12 个月阅读趋势</h2>
-          </div>
-          <span>{{ formatChars(props.report.totalChars) }} 字</span>
-        </div>
-        <div class="month-chart">
-          <div v-for="month in months" :key="month.label" class="month-column">
-            <div class="month-track">
-              <div
-                class="month-bar"
-                :class="{ 'is-empty': !month.active }"
-                :style="{ height: `${month.height}px` }"
-              ></div>
+          <section class="panel month-panel">
+            <div class="month-heading">
+              <div>
+                <div class="section-kicker">MONTHLY RHYTHM</div>
+                <h2>12 个月阅读趋势</h2>
+              </div>
+              <span>{{ formatChars(props.report.totalChars) }} 字</span>
             </div>
-            <span>{{ month.label }}</span>
-          </div>
-        </div>
-      </section>
+            <div class="month-chart">
+              <div v-for="month in months" :key="month.label" class="month-column">
+                <div class="month-track">
+                  <div
+                    class="month-bar"
+                    :class="{ 'is-empty': !month.active }"
+                    :style="{ height: `${month.height}px` }"
+                  ></div>
+                </div>
+                <span>{{ month.label }}</span>
+              </div>
+            </div>
+          </section>
+        </section>
 
-      <footer class="report-footer">
-        <span>PacilRead Desktop</span>
-        <span>Generated from local reading stats</span>
-      </footer>
+        <footer class="report-footer">
+          <span>PacilRead Desktop</span>
+          <span>Generated from local reading stats</span>
+        </footer>
+      </div>
     </template>
 
     <template v-else>
-      <header class="wrapped-header">
-        <div>
-          <div class="eyebrow">PACILREAD WRAPPED</div>
-          <h1>{{ props.report.year }}</h1>
-        </div>
-        <div class="wrapped-badge">READING</div>
-      </header>
+      <div class="wrapped-layout">
+        <section class="wrapped-hero">
+          <header class="wrapped-header">
+            <div>
+              <div class="eyebrow">{{ isBookReport ? 'PACILREAD BOOK WRAPPED' : 'PACILREAD WRAPPED' }}</div>
+              <h1>{{ props.report.year }}</h1>
+            </div>
+            <div class="wrapped-badge">{{ isBookReport ? 'BOOK' : 'READING' }}</div>
+          </header>
 
-      <section class="hero-number">
-        <div class="hero-label">你今年读了</div>
-        <div class="hero-value">
-          <span>{{ formatHours(props.report.totalSeconds) }}</span>
-          <b>小时</b>
-        </div>
-        <p>{{ summaryText }}</p>
-      </section>
+          <section class="hero-number">
+            <div class="hero-label">{{ isBookReport ? '这本书今年读了' : '你今年读了' }}</div>
+            <div class="hero-value">
+              <span>{{ formatHours(props.report.totalSeconds) }}</span>
+              <b>小时</b>
+            </div>
+            <p>{{ summaryText }}</p>
+          </section>
 
-      <section class="wrapped-stat-grid">
-        <div v-for="stat in wrappedStats" :key="stat.label" class="wrapped-stat-card">
-          <span>{{ stat.label }}</span>
-          <strong>{{ stat.value }}</strong>
-          <em>{{ stat.unit }}</em>
-        </div>
-      </section>
-
-      <section class="wrapped-book">
-        <div class="section-kicker">YOUR TOP BOOK</div>
-        <template v-if="topBook">
-          <h2>{{ topBook.title || '未命名书籍' }}</h2>
-          <p>{{ topBook.author || '未知作者' }} · {{ formatBookTime(topBook.totalSeconds) }}</p>
-        </template>
-        <template v-else>
-          <h2>暂无年度书籍记录</h2>
-          <p>读一会儿书，下一次这里就会亮起来。</p>
-        </template>
-      </section>
-
-      <section class="wrapped-chips">
-        <div class="section-kicker">SIGNALS</div>
-        <div class="chip-cloud">
-          <span v-for="chip in wrappedChips" :key="chip">{{ chip }}</span>
-          <span v-if="wrappedChips.length === 0">暂无标签</span>
-        </div>
-      </section>
-
-      <section class="wrapped-months">
-        <div class="month-heading">
-          <div>
-            <div class="section-kicker">MONTH BY MONTH</div>
-            <h2>阅读节奏</h2>
-          </div>
-          <span>{{ formatChars(props.report.totalChars) }} 字</span>
-        </div>
-        <div class="wrapped-bars">
-          <div v-for="month in months" :key="month.label" class="wrapped-bar-cell">
+          <section class="wrapped-stat-grid">
             <div
-              class="wrapped-bar"
-              :class="{ 'is-empty': !month.active }"
-              :style="{ height: `${month.height}px` }"
-            ></div>
-            <span>{{ month.label }}</span>
-          </div>
-        </div>
-      </section>
+              v-for="stat in summaryMetrics"
+              :key="stat.key"
+              class="wrapped-stat-card"
+              :class="{ 'is-text': stat.kind === 'text' }"
+            >
+              <span>{{ stat.label }}</span>
+              <strong>{{ stat.value }}</strong>
+              <em v-if="stat.unit">{{ stat.unit }}</em>
+            </div>
+          </section>
+        </section>
 
-      <footer class="wrapped-footer">
-        <span>PacilRead Desktop</span>
-        <span>{{ props.report.year }} Year in Reading</span>
-      </footer>
+        <section class="wrapped-side">
+          <section class="wrapped-book">
+            <div class="section-kicker">{{ isBookReport ? 'THIS BOOK' : 'YOUR TOP BOOK' }}</div>
+            <template v-if="topBook">
+              <h2>{{ topBook.title || '未命名书籍' }}</h2>
+              <p>{{ topBook.author || '未知作者' }} · {{ formatBookTime(topBook.totalSeconds) }}</p>
+            </template>
+            <template v-else>
+              <h2>暂无年度书籍记录</h2>
+              <p>读一会儿书，下一次这里就会亮起来。</p>
+            </template>
+          </section>
+
+          <section class="wrapped-chips">
+            <div class="section-kicker">SIGNALS</div>
+            <div class="chip-cloud">
+              <span v-for="chip in wrappedChips" :key="chip">{{ chip }}</span>
+              <span v-if="wrappedChips.length === 0">暂无标签</span>
+            </div>
+          </section>
+
+          <section class="wrapped-months">
+            <div class="month-heading">
+              <div>
+                <div class="section-kicker">MONTH BY MONTH</div>
+                <h2>阅读节奏</h2>
+              </div>
+              <span>{{ formatChars(props.report.totalChars) }} 字</span>
+            </div>
+            <div class="wrapped-bars">
+              <div v-for="month in months" :key="month.label" class="wrapped-bar-cell">
+                <div
+                  class="wrapped-bar"
+                  :class="{ 'is-empty': !month.active }"
+                  :style="{ height: `${month.height}px` }"
+                ></div>
+                <span>{{ month.label }}</span>
+              </div>
+            </div>
+          </section>
+
+          <footer class="wrapped-footer">
+            <span>PacilRead Desktop</span>
+            <span>{{ props.report.year }} Year in Reading</span>
+          </footer>
+        </section>
+      </div>
     </template>
   </div>
 </template>
@@ -262,11 +296,11 @@ const months = computed(() => {
 }
 
 .annual-report-image {
-  width: 1080px;
-  height: 1920px;
+  width: 1920px;
+  height: 1080px;
   overflow: hidden;
   position: relative;
-  padding: 78px 76px;
+  padding: 64px;
   font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   letter-spacing: 0;
   line-height: 1.32;
@@ -336,6 +370,40 @@ const months = computed(() => {
   color: var(--report-text);
 }
 
+.magazine-layout,
+.wrapped-layout {
+  position: relative;
+  height: 100%;
+  display: grid;
+  min-width: 0;
+}
+
+.magazine-layout {
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: 40px;
+  padding-bottom: 38px;
+}
+
+.wrapped-layout {
+  grid-template-columns: minmax(0, 1.03fr) minmax(0, 0.97fr);
+  gap: 44px;
+}
+
+.magazine-hero,
+.magazine-side,
+.wrapped-hero,
+.wrapped-side {
+  min-width: 0;
+}
+
+.magazine-side,
+.wrapped-side {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-height: 0;
+}
+
 .magazine-header,
 .wrapped-header,
 .month-heading,
@@ -344,7 +412,7 @@ const months = computed(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 28px;
+  gap: 24px;
 }
 
 .eyebrow,
@@ -358,45 +426,60 @@ const months = computed(() => {
 }
 
 .eyebrow {
-  font-size: 25px;
+  font-size: 22px;
   font-weight: 760;
   color: var(--report-accent);
 }
 
 .magazine-header h1 {
-  margin-top: 16px;
-  font-size: 70px;
-  line-height: 1.08;
+  margin-top: 18px;
+  max-width: 620px;
+  font-size: 68px;
+  line-height: 1.06;
+  font-weight: 780;
+}
+
+.scope-title {
+  margin-top: 18px;
+  max-width: 620px;
+  font-size: 38px;
+  line-height: 1.16;
   font-weight: 760;
-  max-width: 690px;
+  color: var(--report-accent-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .year-mark {
-  width: 150px;
-  height: 150px;
+  flex: 0 0 auto;
+  width: 128px;
+  height: 128px;
   border: 1px solid var(--report-border);
   background: var(--report-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 34px;
+  font-size: 32px;
   font-weight: 780;
   color: var(--report-accent-2);
 }
 
 .summary {
-  margin-top: 58px;
-  font-size: 36px;
+  margin-top: 48px;
+  max-width: 680px;
+  font-size: 34px;
   line-height: 1.42;
-  max-width: 850px;
   color: var(--report-muted);
 }
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-  margin-top: 56px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 52px;
 }
 
 .metric-card,
@@ -412,8 +495,8 @@ const months = computed(() => {
 
 .metric-card {
   min-width: 0;
-  min-height: 188px;
-  padding: 26px 20px;
+  min-height: 152px;
+  padding: 24px;
 }
 
 .metric-label {
@@ -422,19 +505,33 @@ const months = computed(() => {
 }
 
 .metric-value-row {
-  margin-top: 22px;
+  margin-top: 18px;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .metric-value {
   min-width: 0;
-  font-size: 48px;
+  font-size: 58px;
   line-height: 1;
   font-weight: 820;
   color: var(--report-accent);
+}
+
+.metric-card.is-text .metric-value-row {
+  align-items: flex-start;
+}
+
+.metric-card.is-text .metric-value {
+  font-size: 38px;
+  line-height: 1.14;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .metric-unit {
@@ -444,18 +541,19 @@ const months = computed(() => {
 }
 
 .magazine-main {
-  margin-top: 46px;
+  flex: 0 0 520px;
   display: grid;
-  grid-template-columns: 1.18fr 0.82fr;
-  gap: 22px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 20px;
+  min-height: 0;
 }
 
 .panel {
-  padding: 34px;
+  padding: 28px;
 }
 
 .section-kicker {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 760;
   color: var(--report-accent-2);
 }
@@ -463,7 +561,7 @@ const months = computed(() => {
 .panel h2,
 .wrapped-months h2 {
   margin-top: 8px;
-  font-size: 34px;
+  font-size: 32px;
   line-height: 1.12;
   font-weight: 760;
 }
@@ -471,28 +569,28 @@ const months = computed(() => {
 .book-list {
   list-style: none;
   padding: 0;
-  margin: 30px 0 0;
+  margin: 26px 0 0;
   display: grid;
-  gap: 21px;
+  gap: 18px;
 }
 
 .book-list li {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 50px minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
-  min-height: 82px;
+  min-height: 72px;
 }
 
 .book-rank {
-  height: 56px;
+  height: 50px;
   border-radius: 8px;
   background: var(--report-accent);
   color: #fffdf6;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
 }
 
@@ -509,15 +607,15 @@ const months = computed(() => {
 }
 
 .book-copy strong {
-  font-size: 28px;
-  line-height: 1.22;
+  font-size: 24px;
+  line-height: 1.2;
   font-weight: 760;
 }
 
 .book-copy span {
   display: block;
-  margin-top: 8px;
-  font-size: 20px;
+  margin-top: 7px;
+  font-size: 18px;
   color: var(--report-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -527,16 +625,15 @@ const months = computed(() => {
 .taste-panel {
   display: flex;
   flex-direction: column;
-  min-height: 520px;
 }
 
 .taste-group {
-  margin-top: 34px;
+  margin-top: 26px;
 }
 
 .taste-group > span {
   display: block;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--report-muted);
 }
@@ -546,20 +643,20 @@ const months = computed(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .pill-row b,
 .pill-row em,
 .chip-cloud span {
   max-width: 100%;
-  min-height: 40px;
-  padding: 8px 14px;
+  min-height: 36px;
+  padding: 7px 13px;
   border-radius: 8px;
   border: 1px solid var(--report-border);
   background: var(--report-soft);
   color: var(--report-text);
-  font-size: 20px;
+  font-size: 18px;
   font-style: normal;
   font-weight: 650;
   overflow: hidden;
@@ -568,32 +665,33 @@ const months = computed(() => {
 }
 
 .empty-line {
-  margin-top: 34px;
-  font-size: 24px;
+  margin-top: 28px;
+  font-size: 22px;
   color: var(--report-muted);
 }
 
 .month-panel {
-  margin-top: 22px;
+  flex: 1;
+  min-height: 0;
 }
 
 .month-heading h2 {
   margin-top: 8px;
-  font-size: 34px;
+  font-size: 32px;
 }
 
 .month-heading > span {
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 760;
   color: var(--report-accent);
 }
 
 .month-chart,
 .wrapped-bars {
-  margin-top: 34px;
-  height: 230px;
+  margin-top: 26px;
+  height: 192px;
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: end;
   gap: 12px;
 }
@@ -608,7 +706,7 @@ const months = computed(() => {
 
 .month-track {
   width: 100%;
-  height: 176px;
+  height: 158px;
   display: flex;
   align-items: end;
   border-bottom: 1px solid var(--report-border);
@@ -628,44 +726,44 @@ const months = computed(() => {
 
 .month-column span,
 .wrapped-bar-cell span {
-  margin-top: 12px;
-  font-size: 16px;
+  margin-top: 10px;
+  font-size: 15px;
   color: var(--report-muted);
   white-space: nowrap;
 }
 
-.report-footer,
-.wrapped-footer {
+.report-footer {
   position: absolute;
-  left: 76px;
-  right: 76px;
-  bottom: 58px;
-  font-size: 18px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-size: 17px;
   color: var(--report-muted);
 }
 
 .wrapped-header h1 {
   margin-top: 10px;
-  font-size: 84px;
+  font-size: 82px;
   line-height: 1;
   font-weight: 860;
 }
 
 .wrapped-badge {
-  padding: 18px 22px;
+  flex: 0 0 auto;
+  padding: 16px 20px;
   border-radius: 8px;
   background: var(--report-accent);
   color: #fff;
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 840;
 }
 
 .hero-number {
-  margin-top: 86px;
+  margin-top: 58px;
 }
 
 .hero-label {
-  font-size: 38px;
+  font-size: 36px;
   color: var(--report-muted);
 }
 
@@ -678,7 +776,7 @@ const months = computed(() => {
 }
 
 .hero-value span {
-  font-size: 188px;
+  font-size: 172px;
   line-height: 0.92;
   font-weight: 900;
   color: var(--report-accent);
@@ -686,67 +784,76 @@ const months = computed(() => {
 
 .hero-value b {
   flex: 0 0 auto;
-  font-size: 46px;
+  font-size: 44px;
   color: var(--report-accent-2);
 }
 
 .hero-number p {
-  margin-top: 34px;
+  margin-top: 30px;
   max-width: 780px;
-  font-size: 34px;
-  line-height: 1.38;
+  font-size: 33px;
+  line-height: 1.36;
   color: var(--report-muted);
 }
 
 .wrapped-stat-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
-  margin-top: 54px;
+  margin-top: 48px;
 }
 
 .wrapped-stat-card {
-  min-height: 208px;
-  padding: 26px 24px;
+  min-height: 168px;
+  padding: 24px;
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
 
 .wrapped-stat-card span {
-  font-size: 23px;
+  font-size: 22px;
   color: var(--report-muted);
 }
 
 .wrapped-stat-card strong {
   align-self: center;
-  font-size: 72px;
+  font-size: 66px;
   line-height: 1;
   color: var(--report-accent-2);
 }
 
+.wrapped-stat-card.is-text strong {
+  font-size: 34px;
+  line-height: 1.16;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 .wrapped-stat-card em {
   font-style: normal;
-  font-size: 22px;
+  font-size: 21px;
   color: var(--report-muted);
 }
 
 .wrapped-book {
-  margin-top: 28px;
-  padding: 34px;
-  min-height: 230px;
+  padding: 32px;
+  min-height: 222px;
 }
 
 .wrapped-book h2 {
   margin-top: 12px;
   max-width: 760px;
-  font-size: 48px;
+  font-size: 46px;
   line-height: 1.08;
   font-weight: 840;
 }
 
 .wrapped-book p {
   margin-top: 16px;
-  font-size: 24px;
+  font-size: 23px;
   color: var(--report-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -754,22 +861,22 @@ const months = computed(() => {
 }
 
 .wrapped-chips {
-  margin-top: 24px;
-  padding: 30px 34px 34px;
+  padding: 28px 32px 32px;
 }
 
 .chip-cloud span {
   background: var(--report-chip);
-  font-size: 24px;
+  font-size: 23px;
 }
 
 .wrapped-months {
-  margin-top: 24px;
-  padding: 30px 34px 34px;
+  flex: 1;
+  min-height: 0;
+  padding: 30px 32px;
 }
 
 .wrapped-bars {
-  height: 230px;
+  height: 204px;
   gap: 14px;
 }
 
@@ -778,5 +885,10 @@ const months = computed(() => {
   min-height: 12px;
   border-radius: 8px;
   background: linear-gradient(180deg, var(--report-accent-3), var(--report-accent-2));
+}
+
+.wrapped-footer {
+  font-size: 17px;
+  color: var(--report-muted);
 }
 </style>

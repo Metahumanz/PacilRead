@@ -50,7 +50,13 @@ export interface EstimatedFinish {
 }
 
 export interface AnnualReadingReport {
+  scope: 'global' | 'book'
   year: number
+  rangeTitle: string
+  bookTitle: string
+  bookAuthor: string
+  statusText: string
+  readingSpeedCharsPerMinute: number
   totalSeconds: number
   totalChars: number
   readingDays: number
@@ -61,6 +67,425 @@ export interface AnnualReadingReport {
   topTags: Array<{ name: string; totalSeconds: number }>
   topSeries: Array<{ name: string; totalSeconds: number }>
   monthly: Array<{ month: string; totalSeconds: number; charCount: number }>
+}
+
+export type AnnualReportMetricKey =
+  | 'total_duration'
+  | 'total_chars'
+  | 'reading_days'
+  | 'longest_streak'
+  | 'finished_books'
+  | 'top_book'
+  | 'top_author'
+  | 'top_tag'
+  | 'top_series'
+  | 'peak_month'
+  | 'active_months'
+  | 'daily_average'
+  | 'book_status'
+  | 'book_speed'
+
+export interface AnnualReportMetricDisplay {
+  key: AnnualReportMetricKey
+  label: string
+  value: string
+  unit: string
+  fullValue: string
+  kind: 'number' | 'text'
+}
+
+export const ANNUAL_REPORT_METRIC_KEYS: AnnualReportMetricKey[] = [
+  'total_duration',
+  'total_chars',
+  'reading_days',
+  'longest_streak',
+  'finished_books',
+  'top_book',
+  'top_author',
+  'top_tag',
+  'top_series',
+  'peak_month',
+  'active_months',
+  'daily_average',
+  'book_status',
+  'book_speed',
+]
+
+const DEFAULT_GLOBAL_ANNUAL_REPORT_METRICS: AnnualReportMetricKey[] = [
+  'reading_days',
+  'longest_streak',
+  'finished_books',
+  'total_duration',
+  'total_chars',
+]
+
+const DEFAULT_BOOK_ANNUAL_REPORT_METRICS: AnnualReportMetricKey[] = [
+  'reading_days',
+  'longest_streak',
+  'book_status',
+  'total_duration',
+  'total_chars',
+]
+
+const GLOBAL_ANNUAL_REPORT_METRIC_ORDER: AnnualReportMetricKey[] = [
+  'total_duration',
+  'total_chars',
+  'reading_days',
+  'longest_streak',
+  'finished_books',
+  'top_book',
+  'top_author',
+  'top_tag',
+  'top_series',
+  'peak_month',
+  'active_months',
+  'daily_average',
+]
+
+const BOOK_ANNUAL_REPORT_METRIC_ORDER: AnnualReportMetricKey[] = [
+  'total_duration',
+  'total_chars',
+  'reading_days',
+  'longest_streak',
+  'book_status',
+  'book_speed',
+  'peak_month',
+  'active_months',
+  'top_author',
+  'top_tag',
+  'top_series',
+]
+
+export function isAnnualReportMetricKey(value: string): value is AnnualReportMetricKey {
+  return (ANNUAL_REPORT_METRIC_KEYS as string[]).includes(value)
+}
+
+function formatCompactNumber(value: number): string {
+  const safeValue = Math.max(0, Math.round(value))
+  if (safeValue >= 10000) {
+    const wan = safeValue / 10000
+    return `${wan >= 100 ? Math.round(wan) : wan.toFixed(1)}万`
+  }
+  return safeValue.toLocaleString('zh-CN')
+}
+
+function formatMetricHours(seconds: number): string {
+  const hours = Math.max(0, seconds) / 3600
+  if (hours >= 100) return Math.round(hours).toLocaleString('zh-CN')
+  return hours.toFixed(1)
+}
+
+function formatInsightDuration(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.round(seconds))
+  if (safeSeconds >= 3600) return `${formatMetricHours(safeSeconds)} 小时`
+  if (safeSeconds >= 60) return `${Math.max(1, Math.round(safeSeconds / 60))} 分钟`
+  return `${safeSeconds} 秒`
+}
+
+function formatDailyAverage(seconds: number): { value: string; unit: string } {
+  const safeSeconds = Math.max(0, Math.round(seconds))
+  if (safeSeconds >= 3600) {
+    return { value: formatMetricHours(safeSeconds), unit: '小时/天' }
+  }
+  if (safeSeconds >= 60) {
+    return { value: String(Math.round(safeSeconds / 60)), unit: '分钟/天' }
+  }
+  return { value: String(safeSeconds), unit: '秒/天' }
+}
+
+function getPeakMonth(report: AnnualReadingReport): number {
+  let peakMonth = 0
+  let peakSeconds = 0
+  report.monthly.forEach((month, index) => {
+    if (month.totalSeconds > peakSeconds) {
+      peakSeconds = month.totalSeconds
+      peakMonth = index + 1
+    }
+  })
+  return peakSeconds > 0 ? peakMonth : 0
+}
+
+function getActiveMonthCount(report: AnnualReadingReport): number {
+  return report.monthly.filter(month => month.totalSeconds > 0).length
+}
+
+function shortenInsightText(value: string | undefined | null, maxLength: number): string {
+  const chars = Array.from(String(value || '').trim())
+  if (chars.length <= maxLength) return chars.join('')
+  return `${chars.slice(0, maxLength).join('')}...`
+}
+
+function quoteInsightBook(title: string | undefined | null): string {
+  return `《${shortenInsightText(title || '未命名书籍', 14)}》`
+}
+
+export function buildAnnualReportInsight(report: AnnualReadingReport): string {
+  const hasReadingData = report.totalSeconds > 0 || report.totalChars > 0 || report.readingDays > 0
+  if (!hasReadingData) {
+    return report.scope === 'book'
+      ? '这本书今年还没有形成可分析的阅读轨迹。'
+      : '今年还没有形成可分析的阅读轨迹。'
+  }
+
+  const peakMonth = getPeakMonth(report)
+  const activeMonths = getActiveMonthCount(report)
+  const peakMonthText = peakMonth > 0 ? `${peakMonth}月` : '全年'
+  const durationText = formatInsightDuration(report.totalSeconds)
+  const charsText = `${formatCompactNumber(report.totalChars)} 字`
+
+  if (report.scope === 'book') {
+    const bookTitle = quoteInsightBook(report.bookTitle || report.topBooks[0]?.title)
+    const speedText = report.readingSpeedCharsPerMinute > 0
+      ? `，平均约 ${report.readingSpeedCharsPerMinute.toLocaleString('zh-CN')} 字/分`
+      : ''
+    const monthText = activeMonths > 1
+      ? `阅读分布在 ${activeMonths} 个月，${peakMonthText}最集中`
+      : `阅读集中在 ${peakMonthText}`
+
+    if (report.statusText === '已读完') {
+      return `你读完了${bookTitle}，${monthText}；累计 ${durationText}、${report.readingDays} 个阅读日${speedText}。`
+    }
+    if (report.longestStreak >= 2) {
+      return `${bookTitle}今年累计 ${durationText}、${charsText}；最长连续 ${report.longestStreak} 天，${monthText}${speedText}。`
+    }
+    return `${bookTitle}今年累计 ${durationText}、${charsText}；记录了 ${report.readingDays} 个阅读日，${monthText}${speedText}。`
+  }
+
+  const rhythmText = activeMonths > 1
+    ? `在 ${activeMonths} 个月留下阅读记录，${peakMonthText}最集中`
+    : `阅读集中在 ${peakMonthText}`
+  const topBook = report.topBooks[0]
+  const topTagName = report.topTags[0]?.name
+  const topAuthorName = report.topAuthors[0]?.name
+  const focusText = topBook
+    ? `${quoteInsightBook(topBook.title)}投入最多（${formatInsightDuration(topBook.totalSeconds)}）`
+    : `累计 ${durationText}`
+  const tasteText = topTagName
+    ? `常读标签是“${shortenInsightText(topTagName, 10)}”`
+    : topAuthorName
+      ? `常读作者是 ${shortenInsightText(topAuthorName, 10)}`
+      : `累计 ${charsText}`
+  const finishedText = report.finishedBooks > 0
+    ? `，读完 ${report.finishedBooks.toLocaleString('zh-CN')} 本`
+    : ''
+
+  return `这一年你${rhythmText}；${focusText}，${tasteText}${finishedText}。`
+}
+
+export function getAnnualReportMetricLabel(key: AnnualReportMetricKey): string {
+  switch (key) {
+    case 'total_duration': return '阅读总时长'
+    case 'total_chars': return '阅读字数'
+    case 'reading_days': return '阅读天数'
+    case 'longest_streak': return '最长连续'
+    case 'finished_books': return '完成书籍'
+    case 'top_book': return 'Top 书籍'
+    case 'top_author': return '常读作者'
+    case 'top_tag': return '常读标签'
+    case 'top_series': return '常读系列'
+    case 'peak_month': return '最活跃月份'
+    case 'active_months': return '活跃月份'
+    case 'daily_average': return '日均阅读'
+    case 'book_status': return '完成状态'
+    case 'book_speed': return '阅读速度'
+    default: return '年度摘要'
+  }
+}
+
+function getAnnualReportMetricLabelForReport(report: AnnualReadingReport, key: AnnualReportMetricKey): string {
+  if (report.scope !== 'book') return getAnnualReportMetricLabel(key)
+  switch (key) {
+    case 'total_duration': return '本书时长'
+    case 'total_chars': return '本书字数'
+    case 'top_author': return '作者'
+    case 'top_tag': return '标签'
+    case 'top_series': return '系列'
+    default: return getAnnualReportMetricLabel(key)
+  }
+}
+
+export function getAnnualReportMetricDisplay(
+  report: AnnualReadingReport,
+  key: AnnualReportMetricKey,
+): AnnualReportMetricDisplay {
+  let value = ''
+  let unit = ''
+  let kind: AnnualReportMetricDisplay['kind'] = 'number'
+
+  switch (key) {
+    case 'total_duration':
+      value = formatMetricHours(report.totalSeconds)
+      unit = '小时'
+      break
+    case 'total_chars':
+      value = formatCompactNumber(report.totalChars)
+      unit = '字'
+      break
+    case 'reading_days':
+      value = report.readingDays.toLocaleString('zh-CN')
+      unit = '天'
+      break
+    case 'longest_streak':
+      value = report.longestStreak.toLocaleString('zh-CN')
+      unit = '天'
+      break
+    case 'finished_books':
+      value = report.finishedBooks.toLocaleString('zh-CN')
+      unit = '本'
+      break
+    case 'top_book':
+      value = report.topBooks[0]?.title || '暂无书籍'
+      kind = 'text'
+      break
+    case 'top_author':
+      value = report.scope === 'book'
+        ? report.bookAuthor || report.topAuthors[0]?.name || '暂无作者'
+        : report.topAuthors[0]?.name || '暂无作者'
+      kind = 'text'
+      break
+    case 'top_tag':
+      value = report.topTags[0]?.name || '暂无标签'
+      kind = 'text'
+      break
+    case 'top_series':
+      value = report.topSeries[0]?.name || '暂无系列'
+      kind = 'text'
+      break
+    case 'peak_month': {
+      const peakMonth = getPeakMonth(report)
+      value = peakMonth > 0 ? String(peakMonth) : '暂无'
+      unit = peakMonth > 0 ? '月' : ''
+      kind = peakMonth > 0 ? 'number' : 'text'
+      break
+    }
+    case 'active_months':
+      value = getActiveMonthCount(report).toLocaleString('zh-CN')
+      unit = '个月'
+      break
+    case 'daily_average': {
+      const average = report.readingDays > 0 ? report.totalSeconds / report.readingDays : 0
+      const formatted = formatDailyAverage(average)
+      value = formatted.value
+      unit = formatted.unit
+      break
+    }
+    case 'book_status':
+      value = report.statusText || '阅读中'
+      kind = 'text'
+      break
+    case 'book_speed':
+      value = report.readingSpeedCharsPerMinute > 0
+        ? report.readingSpeedCharsPerMinute.toLocaleString('zh-CN')
+        : '暂无'
+      unit = report.readingSpeedCharsPerMinute > 0 ? '字/分' : ''
+      kind = report.readingSpeedCharsPerMinute > 0 ? 'number' : 'text'
+      break
+  }
+
+  return {
+    key,
+    label: getAnnualReportMetricLabelForReport(report, key),
+    value,
+    unit,
+    fullValue: unit ? `${value} ${unit}` : value,
+    kind,
+  }
+}
+
+export function isAnnualReportMetricAvailable(
+  report: AnnualReadingReport,
+  key: AnnualReportMetricKey,
+): boolean {
+  const isBookScope = report.scope === 'book'
+  if (isBookScope && ['finished_books', 'top_book', 'daily_average'].includes(key)) return false
+  if (!isBookScope && ['book_status', 'book_speed'].includes(key)) return false
+
+  switch (key) {
+    case 'total_duration': return report.totalSeconds > 0
+    case 'total_chars': return report.totalChars > 0
+    case 'reading_days': return report.readingDays > 0
+    case 'longest_streak': return report.longestStreak > 0
+    case 'finished_books': return true
+    case 'top_book': return Boolean(report.topBooks[0]?.title)
+    case 'top_author': return Boolean((report.scope === 'book' ? report.bookAuthor : report.topAuthors[0]?.name)?.trim())
+    case 'top_tag': return Boolean(report.topTags[0]?.name)
+    case 'top_series': return Boolean(report.topSeries[0]?.name)
+    case 'peak_month': return getPeakMonth(report) > 0
+    case 'active_months': return getActiveMonthCount(report) > 0
+    case 'daily_average': return report.readingDays > 0 && report.totalSeconds > 0
+    case 'book_status': return Boolean(report.statusText.trim())
+    case 'book_speed': return report.readingSpeedCharsPerMinute > 0
+    default: return false
+  }
+}
+
+function supportsAnnualReportMetric(report: AnnualReadingReport, key: AnnualReportMetricKey): boolean {
+  const isBookScope = report.scope === 'book'
+  if (isBookScope && ['finished_books', 'top_book', 'daily_average'].includes(key)) return false
+  if (!isBookScope && ['book_status', 'book_speed'].includes(key)) return false
+  return true
+}
+
+function getAnnualReportMetricOrder(report: AnnualReadingReport): AnnualReportMetricKey[] {
+  return report.scope === 'book' ? BOOK_ANNUAL_REPORT_METRIC_ORDER : GLOBAL_ANNUAL_REPORT_METRIC_ORDER
+}
+
+function getDefaultAnnualReportMetrics(report: AnnualReadingReport): AnnualReportMetricKey[] {
+  return report.scope === 'book' ? DEFAULT_BOOK_ANNUAL_REPORT_METRICS : DEFAULT_GLOBAL_ANNUAL_REPORT_METRICS
+}
+
+export function getAnnualReportAvailableMetrics(report: AnnualReadingReport): AnnualReportMetricKey[] {
+  const available = getAnnualReportMetricOrder(report)
+    .filter(key => isAnnualReportMetricAvailable(report, key))
+
+  for (const metric of getDefaultAnnualReportMetrics(report)) {
+    if (!supportsAnnualReportMetric(report, metric) || available.includes(metric)) continue
+    available.push(metric)
+    if (available.length >= 3) break
+  }
+
+  return available
+}
+
+export function getAnnualReportAvailableMetricDisplays(report: AnnualReadingReport): AnnualReportMetricDisplay[] {
+  return getAnnualReportAvailableMetrics(report).map(key => getAnnualReportMetricDisplay(report, key))
+}
+
+export function sanitizeAnnualReportMetrics(
+  report: AnnualReadingReport,
+  metrics: readonly AnnualReportMetricKey[] = [],
+): AnnualReportMetricKey[] {
+  const availableMetrics = getAnnualReportAvailableMetrics(report)
+  const availableSet = new Set(availableMetrics)
+  const next: AnnualReportMetricKey[] = []
+
+  for (const metric of metrics) {
+    if (!availableSet.has(metric) || next.includes(metric)) continue
+    next.push(metric)
+    if (next.length >= 3) return next
+  }
+
+  for (const metric of getDefaultAnnualReportMetrics(report)) {
+    if (!availableSet.has(metric) || next.includes(metric)) continue
+    next.push(metric)
+    if (next.length >= 3) return next
+  }
+
+  for (const metric of availableMetrics) {
+    if (next.includes(metric)) continue
+    next.push(metric)
+    if (next.length >= 3) return next
+  }
+
+  return next
+}
+
+export function buildAnnualReportMetricDisplays(
+  report: AnnualReadingReport,
+  metrics: readonly AnnualReportMetricKey[] = [],
+): AnnualReportMetricDisplay[] {
+  return sanitizeAnnualReportMetrics(report, metrics)
+    .map(key => getAnnualReportMetricDisplay(report, key))
 }
 
 function todayString(): string {
@@ -229,13 +654,25 @@ function topFromMap(map: Map<string, number>, limit = 5): Array<{ name: string; 
     .slice(0, limit)
 }
 
+function readingStatusText(status: string | undefined): string {
+  if (status === 'finished') return '已读完'
+  if (status === 'unread') return '未开始'
+  return '阅读中'
+}
+
 export function buildAnnualReadingReport(
   rows: ReadingStatsInsightRow[],
   books: ReadingInsightBook[],
   year = new Date().getFullYear(),
+  options: { bookIdentity?: string | null } = {},
 ): AnnualReadingReport {
-  const calendar = buildReadingCalendar(rows, { year })
-  const yearRows = rows.filter(row => inDateRange(row, startOfYear(year), endOfYear(year)))
+  const bookIdentity = options.bookIdentity || null
+  const scopedBook = bookIdentity
+    ? books.find(book => book.readingStatsKey === bookIdentity) || null
+    : null
+  const isBookScope = Boolean(bookIdentity)
+  const calendar = buildReadingCalendar(rows, { year, bookIdentity })
+  const yearRows = rows.filter(row => inDateRange(row, startOfYear(year), endOfYear(year), bookIdentity))
   const booksByIdentity = new Map(books.map(book => [book.readingStatsKey, book]))
   const bookGroups = new Map<string, { title: string; author: string; totalSeconds: number; charCount: number }>()
   const authorTotals = new Map<string, number>()
@@ -248,7 +685,7 @@ export function buildAnnualReadingReport(
   }))
 
   for (const row of yearRows) {
-    const book = booksByIdentity.get(row.bookIdentity)
+    const book = scopedBook || booksByIdentity.get(row.bookIdentity)
     const group = bookGroups.get(row.bookIdentity) || {
       title: row.bookTitle || book?.title || '未命名书籍',
       author: row.bookAuthor || book?.author || '未知作者',
@@ -268,16 +705,41 @@ export function buildAnnualReadingReport(
     monthly[monthIndex].charCount += Number(row.charCount || 0)
   }
 
+  if (isBookScope && scopedBook && !bookGroups.has(scopedBook.readingStatsKey)) {
+    bookGroups.set(scopedBook.readingStatsKey, {
+      title: scopedBook.title || '未命名书籍',
+      author: scopedBook.author || '未知作者',
+      totalSeconds: 0,
+      charCount: 0,
+    })
+  }
+
+  const totalSeconds = calendar.reduce((sum, day) => sum + day.durationSeconds, 0)
+  const totalChars = calendar.reduce((sum, day) => sum + day.charCount, 0)
+  const topBooks = Array.from(bookGroups.values())
+    .sort((a, b) => b.totalSeconds - a.totalSeconds || a.title.localeCompare(b.title, 'zh-CN'))
+    .slice(0, isBookScope ? 1 : 8)
+  const bookTitle = scopedBook?.title || topBooks[0]?.title || ''
+  const bookAuthor = scopedBook?.author || topBooks[0]?.author || ''
+
   return {
+    scope: isBookScope ? 'book' : 'global',
     year,
-    totalSeconds: calendar.reduce((sum, day) => sum + day.durationSeconds, 0),
-    totalChars: calendar.reduce((sum, day) => sum + day.charCount, 0),
+    rangeTitle: isBookScope ? bookTitle || '未命名书籍' : '全部书籍',
+    bookTitle,
+    bookAuthor,
+    statusText: isBookScope ? readingStatusText(scopedBook?.readingStatus) : '',
+    readingSpeedCharsPerMinute: totalSeconds > 0 && totalChars > 0
+      ? Math.round(totalChars * 60 / totalSeconds)
+      : 0,
+    totalSeconds,
+    totalChars,
     readingDays: calendar.filter(day => day.durationSeconds > 0).length,
     longestStreak: calculateLongestStreak(calendar),
-    finishedBooks: books.filter(book => book.readingStatus === 'finished').length,
-    topBooks: Array.from(bookGroups.values())
-      .sort((a, b) => b.totalSeconds - a.totalSeconds || a.title.localeCompare(b.title, 'zh-CN'))
-      .slice(0, 8),
+    finishedBooks: isBookScope
+      ? scopedBook?.readingStatus === 'finished' ? 1 : 0
+      : books.filter(book => book.readingStatus === 'finished').length,
+    topBooks,
     topAuthors: topFromMap(authorTotals),
     topTags: topFromMap(tagTotals),
     topSeries: topFromMap(seriesTotals),
@@ -329,7 +791,7 @@ export function buildAnnualReportHtml(report: AnnualReadingReport): string {
 <body>
   <main>
     <h1>PacilRead ${report.year} 年度报告</h1>
-    <p>这一年，你把碎片时间攒成了清晰的阅读轨迹。</p>
+    <p>${escapeHtml(buildAnnualReportInsight(report))}</p>
     <section class="grid">
       <div class="card"><span>阅读时长</span><div class="value">${formatHours(report.totalSeconds)}h</div></div>
       <div class="card"><span>阅读天数</span><div class="value">${report.readingDays}</div></div>
