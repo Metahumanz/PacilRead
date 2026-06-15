@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  ANNUAL_REPORT_IMAGE_HEIGHT,
+  ANNUAL_REPORT_IMAGE_WIDTH,
+  createAnnualReadingReport,
   fetchReadingStatsBookDetail,
   fetchReadingStatsBookRank,
   fetchReadingCalendar,
@@ -17,7 +20,20 @@ import {
   type ReadingStatsPeriod,
 } from '../composables/useReadingStats'
 import { useAppTheme } from '../composables/useAppTheme'
+import { useSettings } from '../composables/useSettings'
+import {
+  getAnnualReportAvailableMetricDisplays,
+  isAnnualReportMetricKey,
+  sanitizeAnnualReportMetrics,
+  type AnnualReadingReport,
+  type AnnualReportMetricKey,
+} from '../utils/readingInsights'
 import BookCover from './common/BookCover.vue'
+import AnnualReportImageCard from './reports/AnnualReportImageCard.vue'
+
+const annualReportMetricStorageKey = (scope: 'global' | 'book') => (
+  `pacilread.annual_report.${scope}_metrics`
+)
 
 const props = defineProps<{
   bookId: number | null
@@ -36,23 +52,65 @@ const bookDetail = ref<ReadingStatsBookDetail | null>(null)
 const ranking = ref<ReadingStatsBookRankItem[]>([])
 const calendar = ref<ReadingCalendarSummary>({ days: [], longestStreak: 0 })
 const exporting = ref(false)
+const imagePreviewLoading = ref(false)
 const showImageExportDialog = ref(false)
 const selectedImageTemplate = ref<AnnualReportImageTemplate>('magazine')
 const selectedImageTheme = ref<AnnualReportImageTheme>('light')
+const previewReport = ref<AnnualReadingReport | null>(null)
+const previewFrame = ref<HTMLElement | null>(null)
+const previewScale = ref(0.5)
+const selectedAnnualReportMetrics = ref<AnnualReportMetricKey[]>([])
+const syncStatusText = ref('')
 const { resolvedBucket } = useAppTheme()
+const { webdavUrl, webdavSyncReadingStats } = useSettings()
+
+let syncRunId = 0
+let syncStatusTimer: number | null = null
+let previewResizeObserver: ResizeObserver | null = null
 
 const headerTitle = computed(() => {
-  if (bookDetail.value) return '单书阅读统计'
+  if (props.bookId) return '单书阅读统计'
   return '阅读统计'
 })
 
 const headerDescription = computed(() => {
-  if (bookDetail.value) return '查看这本书在当前设备与已同步设备上的累计阅读时长'
+  if (props.bookId) return '查看这本书在当前设备与已同步设备上的累计阅读时长'
   return '汇总今日、本周、本年的阅读时长，并按书籍聚合排行'
 })
 
-const loadData = async () => {
-  loading.value = true
+const canSyncReadingStats = computed(() => (
+  Boolean(webdavUrl.value.trim()) && webdavSyncReadingStats.value
+))
+
+const previewCardStyle = computed(() => ({
+  width: `${ANNUAL_REPORT_IMAGE_WIDTH}px`,
+  height: `${ANNUAL_REPORT_IMAGE_HEIGHT}px`,
+  transform: `scale(${previewScale.value})`,
+}))
+
+const annualReportMetricOptions = computed(() => (
+  previewReport.value ? getAnnualReportAvailableMetricDisplays(previewReport.value) : []
+))
+
+const selectedAnnualReportMetricSet = computed(() => new Set(selectedAnnualReportMetrics.value))
+
+const setSyncStatus = (message: string, autoClear = false) => {
+  syncStatusText.value = message
+  if (syncStatusTimer !== null) {
+    window.clearTimeout(syncStatusTimer)
+    syncStatusTimer = null
+  }
+  if (autoClear && message) {
+    syncStatusTimer = window.setTimeout(() => {
+      syncStatusText.value = ''
+      syncStatusTimer = null
+    }, 3500)
+  }
+}
+
+const loadData = async (options: { showLoading?: boolean } = {}) => {
+  const showLoading = options.showLoading ?? true
+  if (showLoading) loading.value = true
   try {
     overview.value = await fetchReadingStatsOverview(props.bookId)
     calendar.value = await fetchReadingCalendar(props.bookId)
@@ -64,17 +122,33 @@ const loadData = async () => {
       ranking.value = await fetchReadingStatsBookRank(selectedPeriod.value)
     }
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
-const syncAndReload = async () => {
+const syncAndReload = async (source: 'auto' | 'manual' = 'manual') => {
+  const runId = ++syncRunId
+  if (!canSyncReadingStats.value) {
+    if (source === 'manual') setSyncStatus('未启用云端统计同步，当前展示本地统计', true)
+    return
+  }
+
   syncing.value = true
+  setSyncStatus('正在同步云端统计...')
   try {
-    await mergeRemoteReadingStats()
-    await loadData()
+    const mergedCount = await mergeRemoteReadingStats()
+    if (runId !== syncRunId) return
+    await loadData({ showLoading: false })
+    setSyncStatus(
+      mergedCount > 0 ? '已同步云端统计，数据已刷新' : '已检查云端统计，当前展示本地统计',
+      true,
+    )
+  } catch (error) {
+    if (runId !== syncRunId) return
+    console.error('Reading stats sync failed:', error)
+    setSyncStatus('云端同步失败，已展示本地统计', true)
   } finally {
-    syncing.value = false
+    if (runId === syncRunId) syncing.value = false
   }
 }
 
@@ -123,10 +197,87 @@ const exportReport = async (format: 'html' | 'json') => {
   }
 }
 
-const openImageExportDialog = () => {
+const readStoredAnnualReportMetrics = (scope: 'global' | 'book'): AnnualReportMetricKey[] => {
+  try {
+    const raw = window.localStorage.getItem(annualReportMetricStorageKey(scope))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is AnnualReportMetricKey => (
+      typeof item === 'string' && isAnnualReportMetricKey(item)
+    ))
+  } catch (_) {
+    return []
+  }
+}
+
+const saveStoredAnnualReportMetrics = (scope: 'global' | 'book', metrics: AnnualReportMetricKey[]) => {
+  try {
+    window.localStorage.setItem(annualReportMetricStorageKey(scope), JSON.stringify(metrics))
+  } catch (_) {}
+}
+
+const resetAnnualReportMetricSelection = (report: AnnualReadingReport) => {
+  const initialMetrics = selectedAnnualReportMetrics.value.length
+    ? selectedAnnualReportMetrics.value
+    : readStoredAnnualReportMetrics(report.scope)
+  selectedAnnualReportMetrics.value = sanitizeAnnualReportMetrics(report, initialMetrics)
+  saveStoredAnnualReportMetrics(report.scope, selectedAnnualReportMetrics.value)
+}
+
+const selectAnnualReportMetric = (metric: AnnualReportMetricKey) => {
+  if (!previewReport.value) return
+  if (selectedAnnualReportMetrics.value.includes(metric)) return
+  const nextMetrics = selectedAnnualReportMetrics.value.length >= 3
+    ? selectedAnnualReportMetrics.value.slice(1)
+    : [...selectedAnnualReportMetrics.value]
+  nextMetrics.push(metric)
+  selectedAnnualReportMetrics.value = sanitizeAnnualReportMetrics(previewReport.value, nextMetrics)
+  saveStoredAnnualReportMetrics(previewReport.value.scope, selectedAnnualReportMetrics.value)
+}
+
+const updatePreviewScale = () => {
+  const frameWidth = previewFrame.value?.clientWidth || 0
+  if (frameWidth <= 0) return
+  previewScale.value = Math.min(1, frameWidth / ANNUAL_REPORT_IMAGE_WIDTH)
+}
+
+const attachPreviewResizeObserver = async () => {
+  await nextTick()
+  previewResizeObserver?.disconnect()
+  previewResizeObserver = null
+  updatePreviewScale()
+  if (!previewFrame.value) return
+  previewResizeObserver = new ResizeObserver(updatePreviewScale)
+  previewResizeObserver.observe(previewFrame.value)
+}
+
+const closeImageExportDialog = () => {
+  if (exporting.value) return
+  showImageExportDialog.value = false
+  previewReport.value = null
+}
+
+const openImageExportDialog = async () => {
   selectedImageTemplate.value = 'magazine'
   selectedImageTheme.value = resolvedBucket.value === 'dark' ? 'dark' : 'light'
-  showImageExportDialog.value = true
+  selectedAnnualReportMetrics.value = []
+  imagePreviewLoading.value = true
+  try {
+    const report = await createAnnualReadingReport(new Date().getFullYear(), { bookId: props.bookId })
+    if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+      throw new Error(props.bookId ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
+    }
+    previewReport.value = report
+    resetAnnualReportMetricSelection(report)
+    showImageExportDialog.value = true
+    await attachPreviewResizeObserver()
+  } catch (error) {
+    console.error('Prepare annual report preview failed:', error)
+    window.alert(error instanceof Error ? error.message : '生成预览失败')
+  } finally {
+    imagePreviewLoading.value = false
+  }
 }
 
 const exportReportImage = async () => {
@@ -135,6 +286,8 @@ const exportReportImage = async () => {
     await exportAnnualReadingReportImage({
       template: selectedImageTemplate.value,
       theme: selectedImageTheme.value,
+      bookId: props.bookId,
+      summaryMetrics: selectedAnnualReportMetrics.value,
     })
     showImageExportDialog.value = false
   } catch (error) {
@@ -146,7 +299,9 @@ const exportReportImage = async () => {
 }
 
 watch(() => props.bookId, () => {
-  loadData().catch((error) => console.error('Load reading stats failed:', error))
+  loadData()
+    .then(() => syncAndReload('auto'))
+    .catch((error) => console.error('Load reading stats failed:', error))
 })
 
 watch(selectedPeriod, () => {
@@ -156,10 +311,28 @@ watch(selectedPeriod, () => {
 
 onMounted(async () => {
   try {
-    await syncAndReload()
-  } catch (error) {
-    console.error('Initial reading stats sync failed:', error)
     await loadData()
+    void syncAndReload('auto')
+  } catch (error) {
+    console.error('Initial reading stats load failed:', error)
+    loading.value = false
+  }
+})
+
+onUnmounted(() => {
+  syncRunId++
+  if (syncStatusTimer !== null) window.clearTimeout(syncStatusTimer)
+  syncStatusTimer = null
+  previewResizeObserver?.disconnect()
+  previewResizeObserver = null
+})
+
+watch(showImageExportDialog, (shown) => {
+  if (shown) {
+    attachPreviewResizeObserver().catch((error) => console.error('Attach report preview observer failed:', error))
+  } else {
+    previewResizeObserver?.disconnect()
+    previewResizeObserver = null
   }
 })
 </script>
@@ -178,6 +351,7 @@ onMounted(async () => {
           <h2 class="app-title text-[22px] font-semibold">{{ headerTitle }}</h2>
         </div>
         <p class="app-muted text-[13px]">{{ headerDescription }}</p>
+        <p v-if="syncStatusText" class="app-muted text-[12px] mt-2">{{ syncStatusText }}</p>
       </div>
 
       <div class="flex flex-wrap justify-end gap-2">
@@ -198,15 +372,14 @@ onMounted(async () => {
           导出 JSON
         </button>
         <button
-          v-if="!props.bookId"
           @click="openImageExportDialog"
-          :disabled="exporting"
+          :disabled="exporting || imagePreviewLoading"
           class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
         >
-          导出图片
+          {{ imagePreviewLoading ? '准备预览...' : '导出图片' }}
         </button>
         <button
-          @click="syncAndReload"
+          @click="syncAndReload()"
           :disabled="syncing"
           class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
         >
@@ -215,94 +388,133 @@ onMounted(async () => {
       </div>
     </div>
 
-    <Transition name="fade">
-      <div
-        v-if="showImageExportDialog"
-        class="fixed inset-0 app-modal-backdrop z-[220] flex items-center justify-center p-6"
-        @click.self="showImageExportDialog = false"
-      >
-        <div class="app-card app-card-strong w-full max-w-lg p-6">
-          <div class="flex items-start justify-between gap-4 mb-6">
-            <div>
-              <h3 class="app-title text-[18px] font-semibold">导出年度报告图片</h3>
+    <Teleport to="body">
+      <Transition name="fade">
+        <div
+          v-if="showImageExportDialog"
+          class="fixed inset-0 app-modal-backdrop z-[1000] flex items-center justify-center p-6"
+          @click.self="closeImageExportDialog"
+        >
+          <div class="app-card app-card-strong w-full max-w-[1240px] max-h-[calc(100vh-3rem)] overflow-y-auto p-6">
+            <div class="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <h3 class="app-title text-[18px] font-semibold">
+                  {{ previewReport?.scope === 'book' ? '导出单书年度报告图片' : '导出年度报告图片' }}
+                </h3>
+                <p class="app-muted text-[12px] mt-1">横屏 1920 x 1080 PNG</p>
+              </div>
+              <button
+                type="button"
+                class="app-icon-button w-9 h-9 flex items-center justify-center text-[18px]"
+                :disabled="exporting"
+                @click="closeImageExportDialog"
+              >
+                x
+              </button>
             </div>
-            <button
-              type="button"
-              class="app-icon-button w-9 h-9 flex items-center justify-center text-[18px]"
-              :disabled="exporting"
-              @click="showImageExportDialog = false"
-            >
-              x
-            </button>
-          </div>
 
-          <div class="space-y-5">
-            <section>
-              <div class="app-section-label text-[12px] mb-2">模板</div>
-              <div class="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  class="app-button p-3 text-left"
-                  :class="{ 'app-button-primary': selectedImageTemplate === 'magazine' }"
-                  @click="selectedImageTemplate = 'magazine'"
-                >
-                  <div class="text-[13px] font-semibold">阅读杂志感</div>
-                </button>
-                <button
-                  type="button"
-                  class="app-button p-3 text-left"
-                  :class="{ 'app-button-primary': selectedImageTemplate === 'wrapped' }"
-                  @click="selectedImageTemplate = 'wrapped'"
-                >
-                  <div class="text-[13px] font-semibold">Wrapped 风格</div>
-                </button>
+            <div class="image-export-layout">
+              <div ref="previewFrame" class="report-preview-frame">
+                <div v-if="previewReport" class="report-preview-scale" :style="previewCardStyle">
+                  <AnnualReportImageCard
+                    :report="previewReport"
+                    :template="selectedImageTemplate"
+                    :theme="selectedImageTheme"
+                    :summary-metrics="selectedAnnualReportMetrics"
+                  />
+                </div>
+                <div v-else class="h-full flex items-center justify-center app-muted text-[13px]">
+                  正在生成预览...
+                </div>
               </div>
-            </section>
 
-            <section>
-              <div class="app-section-label text-[12px] mb-2">主题</div>
-              <div class="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  class="app-button p-3 text-left"
-                  :class="{ 'app-button-primary': selectedImageTheme === 'light' }"
-                  @click="selectedImageTheme = 'light'"
-                >
-                  <div class="text-[13px] font-semibold">浅色</div>
-                </button>
-                <button
-                  type="button"
-                  class="app-button p-3 text-left"
-                  :class="{ 'app-button-primary': selectedImageTheme === 'dark' }"
-                  @click="selectedImageTheme = 'dark'"
-                >
-                  <div class="text-[13px] font-semibold">深色</div>
-                </button>
+              <div class="image-export-controls">
+                <section>
+                  <div class="app-section-label text-[12px] mb-2">风格</div>
+                  <div class="grid grid-cols-2 lg:grid-cols-1 gap-2">
+                    <button
+                      type="button"
+                      class="app-button p-3 text-left"
+                      :class="{ 'app-button-primary': selectedImageTemplate === 'magazine' }"
+                      @click="selectedImageTemplate = 'magazine'"
+                    >
+                      <div class="text-[13px] font-semibold">静读留白</div>
+                    </button>
+                    <button
+                      type="button"
+                      class="app-button p-3 text-left"
+                      :class="{ 'app-button-primary': selectedImageTemplate === 'wrapped' }"
+                      @click="selectedImageTemplate = 'wrapped'"
+                    >
+                      <div class="text-[13px] font-semibold">高光节奏</div>
+                    </button>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="app-section-label text-[12px] mb-2">主题</div>
+                  <div class="grid grid-cols-2 lg:grid-cols-1 gap-2">
+                    <button
+                      type="button"
+                      class="app-button p-3 text-left"
+                      :class="{ 'app-button-primary': selectedImageTheme === 'light' }"
+                      @click="selectedImageTheme = 'light'"
+                    >
+                      <div class="text-[13px] font-semibold">浅色</div>
+                    </button>
+                    <button
+                      type="button"
+                      class="app-button p-3 text-left"
+                      :class="{ 'app-button-primary': selectedImageTheme === 'dark' }"
+                      @click="selectedImageTheme = 'dark'"
+                    >
+                      <div class="text-[13px] font-semibold">深色</div>
+                    </button>
+                  </div>
+                </section>
+
+                <section v-if="annualReportMetricOptions.length">
+                  <div class="app-section-label text-[12px] mb-1">年度摘要</div>
+                  <p class="app-muted text-[11px] mb-2">选择 3 项，继续选择会替换最早一项</p>
+                  <div class="metric-option-list">
+                    <button
+                      v-for="metric in annualReportMetricOptions"
+                      :key="metric.key"
+                      type="button"
+                      class="metric-option"
+                      :class="{ 'is-active': selectedAnnualReportMetricSet.has(metric.key) }"
+                      @click="selectAnnualReportMetric(metric.key)"
+                    >
+                      <span>{{ metric.label }}</span>
+                      <strong>{{ metric.fullValue }}</strong>
+                    </button>
+                  </div>
+                </section>
               </div>
-            </section>
-          </div>
+            </div>
 
-          <div class="flex gap-3 mt-7">
-            <button
-              type="button"
-              class="app-button flex-1 py-2.5 text-[13px] disabled:opacity-50"
-              :disabled="exporting"
-              @click="showImageExportDialog = false"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="app-button app-button-primary flex-1 py-2.5 text-[13px] disabled:opacity-50"
-              :disabled="exporting"
-              @click="exportReportImage"
-            >
-              {{ exporting ? '导出中...' : '保存 PNG' }}
-            </button>
+            <div class="flex gap-3 mt-7">
+              <button
+                type="button"
+                class="app-button flex-1 py-2.5 text-[13px] disabled:opacity-50"
+                :disabled="exporting"
+                @click="closeImageExportDialog"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="app-button app-button-primary flex-1 py-2.5 text-[13px] disabled:opacity-50"
+                :disabled="exporting"
+                @click="exportReportImage"
+              >
+                {{ exporting ? '导出中...' : '保存 PNG' }}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    </Transition>
+      </Transition>
+    </Teleport>
 
     <div v-if="bookDetail" class="app-card mb-8 p-5">
       <div class="flex items-center gap-4">
@@ -470,6 +682,98 @@ onMounted(async () => {
 .calendar-cell.is-2 { background: color-mix(in srgb, var(--app-accent) 42%, transparent); }
 .calendar-cell.is-3 { background: color-mix(in srgb, var(--app-accent) 62%, transparent); }
 .calendar-cell.is-4 { background: color-mix(in srgb, var(--app-accent) 82%, transparent); }
+
+.image-export-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: 1.25rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.report-preview-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-input);
+  background: rgba(var(--app-glass-strong-rgb), 0.38);
+}
+
+.report-preview-scale {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: top left;
+  pointer-events: none;
+}
+
+.image-export-controls {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.metric-option-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 18.5rem;
+  overflow-y: auto;
+  padding-right: 0.125rem;
+}
+
+.metric-option {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-input);
+  background: rgba(var(--app-glass-strong-rgb), var(--app-glass-opacity, 0.8));
+  color: var(--app-text);
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.metric-option:hover {
+  background: rgba(var(--app-glass-strong-rgb), 0.96);
+}
+
+.metric-option.is-active {
+  background: var(--app-accent);
+  border-color: var(--app-accent);
+  color: var(--app-text-on-primary);
+}
+
+.metric-option span,
+.metric-option strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-option span {
+  font-size: 11px;
+  color: var(--app-text-muted);
+}
+
+.metric-option.is-active span {
+  color: color-mix(in srgb, var(--app-text-on-primary) 78%, transparent);
+}
+
+.metric-option strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@media (max-width: 1024px) {
+  .image-export-layout {
+    grid-template-columns: 1fr;
+  }
+}
 
 @media (max-width: 720px) {
   .calendar-grid {
