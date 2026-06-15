@@ -22,6 +22,7 @@ import {
   calculateReadingSpeed,
   estimateFinishTime,
   type AnnualReadingReport,
+  type AnnualReportMetricKey,
   type EstimatedFinish,
   type ReadingCalendarDay,
   type ReadingSpeedStats,
@@ -36,6 +37,9 @@ export {
 export type ReadingStatsPeriod = 'today' | 'week' | 'year'
 export type AnnualReportImageTemplate = 'magazine' | 'wrapped'
 export type AnnualReportImageTheme = 'light' | 'dark'
+
+export const ANNUAL_REPORT_IMAGE_WIDTH = 1920
+export const ANNUAL_REPORT_IMAGE_HEIGHT = 1080
 
 export interface ReadingStatsOverview {
   today: number
@@ -776,11 +780,22 @@ export async function fetchReadingCalendar(bookId?: number | null): Promise<Read
   }
 }
 
-export async function createAnnualReadingReport(year = new Date().getFullYear()): Promise<AnnualReadingReport> {
+export async function createAnnualReadingReport(
+  year = new Date().getFullYear(),
+  options: { bookId?: number | null } = {},
+): Promise<AnnualReadingReport> {
   const { useDataStore: getStore } = await import('./useDataStore')
   const store = getStore()
   if (!store.dataLoaded.value) await store.loadAllData()
-  return buildAnnualReadingReport(store.getReadingStatsRows() as any[], store.books.value as any[], year)
+  const bookIdentity = typeof options.bookId === 'number'
+    ? store.getBook(options.bookId)?.readingStatsKey
+    : null
+  if (typeof options.bookId === 'number' && !bookIdentity) {
+    throw new Error('未找到这本书的阅读统计')
+  }
+  return buildAnnualReadingReport(store.getReadingStatsRows() as any[], store.books.value as any[], year, {
+    bookIdentity,
+  })
 }
 
 export async function exportAnnualReadingReport(format: 'html' | 'json'): Promise<void> {
@@ -807,14 +822,16 @@ async function waitForReportImageRender(): Promise<void> {
   })
 }
 
-export async function exportAnnualReadingReportImage(options: {
+export async function renderAnnualReadingReportImageDataUrl(options: {
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme
   year?: number
-}): Promise<void> {
-  const report = await createAnnualReadingReport(options.year)
+  bookId?: number | null
+  summaryMetrics?: AnnualReportMetricKey[]
+}): Promise<{ report: AnnualReadingReport; dataUrl: string }> {
+  const report = await createAnnualReadingReport(options.year, { bookId: options.bookId })
   if (report.totalSeconds <= 0 && report.totalChars <= 0) {
-    throw new Error('今年还没有足够的阅读统计')
+    throw new Error(report.scope === 'book' ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
   }
   if (typeof document === 'undefined') {
     throw new Error('当前环境不支持图片导出')
@@ -826,8 +843,8 @@ export async function exportAnnualReadingReportImage(options: {
     position: 'fixed',
     left: '-99999px',
     top: '0',
-    width: '1080px',
-    height: '1920px',
+    width: `${ANNUAL_REPORT_IMAGE_WIDTH}px`,
+    height: `${ANNUAL_REPORT_IMAGE_HEIGHT}px`,
     overflow: 'hidden',
     pointerEvents: 'none',
     zIndex: '-1',
@@ -839,6 +856,7 @@ export async function exportAnnualReadingReportImage(options: {
       report,
       template: options.template,
       theme: options.theme,
+      summaryMetrics: options.summaryMetrics,
     }),
   })
 
@@ -849,23 +867,36 @@ export async function exportAnnualReadingReportImage(options: {
     if (!node) throw new Error('年度报告图片渲染失败')
 
     const dataUrl = await toPng(node, {
-      width: 1080,
-      height: 1920,
+      width: ANNUAL_REPORT_IMAGE_WIDTH,
+      height: ANNUAL_REPORT_IMAGE_HEIGHT,
       pixelRatio: 1,
       cacheBust: true,
     })
-
-    const result = await window.electronAPI.dialog.saveBinaryFile({
-      defaultPath: `PacilRead-${report.year}-年度报告-${options.template}-${options.theme}.png`,
-      dataUrl,
-      filters: [{ name: 'PNG', extensions: ['png'] }],
-    })
-    if (!result.success && !result.canceled) {
-      throw new Error('图片保存失败')
-    }
+    return { report, dataUrl }
   } finally {
     app.unmount()
     stage.remove()
+  }
+}
+
+export async function exportAnnualReadingReportImage(options: {
+  template: AnnualReportImageTemplate
+  theme: AnnualReportImageTheme
+  year?: number
+  bookId?: number | null
+  summaryMetrics?: AnnualReportMetricKey[]
+}): Promise<void> {
+  const { report, dataUrl } = await renderAnnualReadingReportImageDataUrl(options)
+  const titleSegment = report.scope === 'book' && report.bookTitle
+    ? `-${sanitizeRemoteFileName(report.bookTitle)}`
+    : ''
+  const result = await window.electronAPI.dialog.saveBinaryFile({
+    defaultPath: `PacilRead-${report.year}${titleSegment}-年度报告-${options.template}-${options.theme}.png`,
+    dataUrl,
+    filters: [{ name: 'PNG', extensions: ['png'] }],
+  })
+  if (!result.success && !result.canceled) {
+    throw new Error('图片保存失败')
   }
 }
 

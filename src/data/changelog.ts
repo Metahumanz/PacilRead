@@ -7,6 +7,19 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.2.2',
+    date: '2026-06-15',
+    changes: [
+      'Stats（统计）：进入统计页后立即展示本地阅读统计，云端阅读统计改为后台同步，并用小号状态文字提示同步进度或失败回退',
+      'Annual Report Preview（年度报告预览）：年度报告 PNG 导出改为先预览再保存，预览弹窗覆盖整个窗口，不再被侧栏或内容面板遮挡',
+      'Landscape Report（横屏报告）：年度报告图片改为 1920 x 1080 横屏导出，阅读杂志感与高光节奏两套风格均重新排版',
+      'Metric Selection（数据选择）：参考移动端 1.2.2，年度摘要支持从可用指标中选择 3 项，超出后替换最早选择项，并区分全局与单书保存偏好',
+      'Book Annual Report（单书年度报告）：单书统计页新增年度报告图片预览与保存，指标、标题、书档和文案按单本书数据生成',
+      'Insight Analysis（数据分析）：年度报告分析句改为基于真实阅读数据生成，会结合高峰月份、活跃月份、Top 书籍、常读标签、读完数量、单书速度和完成状态',
+      'Tests（测试）：补充全局与单书年度报告口径、指标选择和数据分析文案的逻辑测试',
+    ]
+  },
+  {
     version: '1.2.1',
     date: '2026-06-14',
     changes: [

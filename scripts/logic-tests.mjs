@@ -151,6 +151,31 @@ assert.equal(annualReport.monthly[1].totalSeconds, 1800)
 assert.equal(annualReport.monthly[11].totalSeconds, 0)
 assert.deepEqual(plain(annualReport.topTags[0]), { name: '科幻', totalSeconds: 5400 })
 assert.deepEqual(plain(annualReport.topSeries[0]), { name: '银河', totalSeconds: 3600 })
+assert.equal(
+  readingInsights.buildAnnualReportInsight(annualReport),
+  '这一年你在 2 个月留下阅读记录，1月最集中；《A》投入最多（1.0 小时），常读标签是“科幻”，读完 1 本。',
+)
+const bookAnnualReport = readingInsights.buildAnnualReadingReport(annualRows, annualBooks, 2026, { bookIdentity: 'a' })
+assert.equal(bookAnnualReport.scope, 'book')
+assert.equal(bookAnnualReport.rangeTitle, 'A')
+assert.equal(bookAnnualReport.totalSeconds, 3600)
+assert.equal(bookAnnualReport.totalChars, 10000)
+assert.equal(bookAnnualReport.readingDays, 1)
+assert.equal(bookAnnualReport.finishedBooks, 1)
+assert.equal(bookAnnualReport.statusText, '已读完')
+assert.equal(bookAnnualReport.readingSpeedCharsPerMinute, 167)
+assert.deepEqual(
+  plain(readingInsights.sanitizeAnnualReportMetrics(bookAnnualReport, [])),
+  ['reading_days', 'longest_streak', 'book_status'],
+)
+assert.equal(
+  readingInsights.getAnnualReportMetricDisplay(bookAnnualReport, 'total_duration').label,
+  '本书时长',
+)
+assert.equal(
+  readingInsights.buildAnnualReportInsight(bookAnnualReport),
+  '你读完了《A》，阅读集中在 1月；累计 1.0 小时、1 个阅读日，平均约 167 字/分。',
+)
 const emptyAnnualReport = readingInsights.buildAnnualReadingReport([], [], 2026)
 assert.equal(emptyAnnualReport.totalSeconds, 0)
 assert.equal(emptyAnnualReport.totalChars, 0)
