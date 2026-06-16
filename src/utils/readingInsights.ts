@@ -69,6 +69,46 @@ export interface AnnualReadingReport {
   monthly: Array<{ month: string; totalSeconds: number; charCount: number }>
 }
 
+export type ReadingReportPeriod = 'day' | 'week' | 'year'
+export type WeeklyReportRangeMode = 'calendarWeek' | 'last7Days'
+
+export interface ReadingReportRange {
+  period: ReadingReportPeriod
+  weekMode: WeeklyReportRangeMode | null
+  startDate: string
+  endDate: string
+  title: string
+  rangeTitle: string
+  fileLabel: string
+}
+
+export interface ReadingPeriodReport {
+  scope: 'global' | 'book'
+  period: ReadingReportPeriod
+  weekMode: WeeklyReportRangeMode | null
+  title: string
+  rangeTitle: string
+  startDate: string
+  endDate: string
+  fileLabel: string
+  bookTitle: string
+  bookAuthor: string
+  statusText: string
+  readingSpeedCharsPerMinute: number
+  totalSeconds: number
+  totalChars: number
+  readingDays: number
+  longestStreak: number
+  activeBooks: number
+  finishedBooks: number
+  topBooks: Array<{ title: string; author: string; totalSeconds: number; charCount: number }>
+  topAuthors: Array<{ name: string; totalSeconds: number }>
+  topTags: Array<{ name: string; totalSeconds: number }>
+  topSeries: Array<{ name: string; totalSeconds: number }>
+  daily: ReadingCalendarDay[]
+  monthly: Array<{ month: string; totalSeconds: number; charCount: number }>
+}
+
 export type AnnualReportMetricKey =
   | 'total_duration'
   | 'total_chars'
@@ -517,6 +557,63 @@ function endOfYear(year: number): string {
   return `${year}-12-31`
 }
 
+function startOfCalendarWeek(date: Date): Date {
+  const startDate = new Date(date)
+  const day = startDate.getDay()
+  const diff = day === 0 ? 6 : day - 1
+  startDate.setDate(startDate.getDate() - diff)
+  return startDate
+}
+
+export function buildReadingReportRange(
+  period: ReadingReportPeriod,
+  options: { weekMode?: WeeklyReportRangeMode; now?: Date } = {},
+): ReadingReportRange {
+  const now = options.now ?? new Date()
+  const endDate = toDateString(now)
+
+  if (period === 'day') {
+    return {
+      period,
+      weekMode: null,
+      startDate: endDate,
+      endDate,
+      title: `${endDate} 阅读日报`,
+      rangeTitle: endDate,
+      fileLabel: `${endDate}-日报`,
+    }
+  }
+
+  if (period === 'week') {
+    const weekMode = options.weekMode ?? 'calendarWeek'
+    const startDate = weekMode === 'last7Days'
+      ? toDateString(addDays(parseDate(endDate), -6))
+      : toDateString(startOfCalendarWeek(now))
+    const modeTitle = weekMode === 'last7Days' ? '过去七天阅读周报' : '本周阅读周报'
+    const modeLabel = weekMode === 'last7Days' ? '过去七天周报' : '自然周周报'
+    return {
+      period,
+      weekMode,
+      startDate,
+      endDate,
+      title: modeTitle,
+      rangeTitle: `${startDate} 至 ${endDate}`,
+      fileLabel: `${startDate}_${endDate}-${modeLabel}`,
+    }
+  }
+
+  const year = now.getFullYear()
+  return {
+    period,
+    weekMode: null,
+    startDate: startOfYear(year),
+    endDate,
+    title: `${year} 阅读年报`,
+    rangeTitle: `${startOfYear(year)} 至 ${endDate}`,
+    fileLabel: `${year}-年报`,
+  }
+}
+
 function inDateRange(row: ReadingStatsInsightRow, start: string, end: string, bookIdentity?: string | null): boolean {
   if (row.date < start || row.date > end) return false
   if (bookIdentity && row.bookIdentity !== bookIdentity) return false
@@ -543,6 +640,36 @@ export function buildReadingCalendar(
     byDate.set(row.date, entry)
   }
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function buildReadingCalendarRange(
+  rows: ReadingStatsInsightRow[],
+  startDate: string,
+  endDate: string,
+  bookIdentity?: string | null,
+): ReadingCalendarDay[] {
+  const byDate = new Map<string, ReadingCalendarDay>()
+  for (const row of rows) {
+    if (!inDateRange(row, startDate, endDate, bookIdentity)) continue
+    const entry = byDate.get(row.date) || { date: row.date, durationSeconds: 0, charCount: 0 }
+    entry.durationSeconds += Number(row.durationSeconds || 0)
+    entry.charCount += Number(row.charCount || 0)
+    byDate.set(row.date, entry)
+  }
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function buildDailyBuckets(calendar: ReadingCalendarDay[], startDate: string, endDate: string): ReadingCalendarDay[] {
+  const byDate = new Map(calendar.map(day => [day.date, day]))
+  const days: ReadingCalendarDay[] = []
+  let cursor = parseDate(startDate)
+  const end = parseDate(endDate)
+  while (toDateString(cursor) <= toDateString(end)) {
+    const key = toDateString(cursor)
+    days.push(byDate.get(key) || { date: key, durationSeconds: 0, charCount: 0 })
+    cursor = addDays(cursor, 1)
+  }
+  return days
 }
 
 export function calculateLongestStreak(days: ReadingCalendarDay[]): number {
@@ -747,6 +874,109 @@ export function buildAnnualReadingReport(
   }
 }
 
+export function buildReadingPeriodReport(
+  rows: ReadingStatsInsightRow[],
+  books: ReadingInsightBook[],
+  range: ReadingReportRange,
+  options: { bookIdentity?: string | null } = {},
+): ReadingPeriodReport {
+  const bookIdentity = options.bookIdentity || null
+  const scopedBook = bookIdentity
+    ? books.find(book => book.readingStatsKey === bookIdentity) || null
+    : null
+  const isBookScope = Boolean(bookIdentity)
+  const periodRows = rows.filter(row => inDateRange(row, range.startDate, range.endDate, bookIdentity))
+  const booksByIdentity = new Map(books.map(book => [book.readingStatsKey, book]))
+  const activeBookIdentities = new Set<string>()
+  const bookGroups = new Map<string, { title: string; author: string; totalSeconds: number; charCount: number }>()
+  const authorTotals = new Map<string, number>()
+  const tagTotals = new Map<string, number>()
+  const seriesTotals = new Map<string, number>()
+  const calendar = buildReadingCalendarRange(rows, range.startDate, range.endDate, bookIdentity)
+  const daily = buildDailyBuckets(calendar, range.startDate, range.endDate)
+  const year = Number(range.startDate.slice(0, 4))
+  const monthly = Array.from({ length: 12 }, (_, index) => ({
+    month: `${year}-${String(index + 1).padStart(2, '0')}`,
+    totalSeconds: 0,
+    charCount: 0,
+  }))
+
+  for (const row of periodRows) {
+    const book = scopedBook || booksByIdentity.get(row.bookIdentity)
+    activeBookIdentities.add(row.bookIdentity)
+    const group = bookGroups.get(row.bookIdentity) || {
+      title: row.bookTitle || book?.title || '未命名书籍',
+      author: row.bookAuthor || book?.author || '未知作者',
+      totalSeconds: 0,
+      charCount: 0,
+    }
+    group.totalSeconds += Number(row.durationSeconds || 0)
+    group.charCount += Number(row.charCount || 0)
+    bookGroups.set(row.bookIdentity, group)
+
+    bumpMap(authorTotals, group.author, Number(row.durationSeconds || 0))
+    for (const tag of book?.tags || []) bumpMap(tagTotals, tag, Number(row.durationSeconds || 0))
+    if (book?.series) bumpMap(seriesTotals, book.series, Number(row.durationSeconds || 0))
+
+    if (row.date.startsWith(`${year}-`)) {
+      const monthIndex = Math.max(0, Math.min(11, Number(row.date.slice(5, 7)) - 1))
+      monthly[monthIndex].totalSeconds += Number(row.durationSeconds || 0)
+      monthly[monthIndex].charCount += Number(row.charCount || 0)
+    }
+  }
+
+  if (isBookScope && scopedBook && !bookGroups.has(scopedBook.readingStatsKey)) {
+    bookGroups.set(scopedBook.readingStatsKey, {
+      title: scopedBook.title || '未命名书籍',
+      author: scopedBook.author || '未知作者',
+      totalSeconds: 0,
+      charCount: 0,
+    })
+  }
+
+  const totalSeconds = calendar.reduce((sum, day) => sum + day.durationSeconds, 0)
+  const totalChars = calendar.reduce((sum, day) => sum + day.charCount, 0)
+  const topBooks = Array.from(bookGroups.values())
+    .sort((a, b) => b.totalSeconds - a.totalSeconds || a.title.localeCompare(b.title, 'zh-CN'))
+    .slice(0, isBookScope ? 1 : 8)
+  const bookTitle = scopedBook?.title || topBooks[0]?.title || ''
+  const bookAuthor = scopedBook?.author || topBooks[0]?.author || ''
+  const finishedBooks = isBookScope
+    ? scopedBook?.readingStatus === 'finished' ? 1 : 0
+    : books.filter(book => activeBookIdentities.has(book.readingStatsKey) && book.readingStatus === 'finished').length
+
+  return {
+    scope: isBookScope ? 'book' : 'global',
+    period: range.period,
+    weekMode: range.weekMode,
+    title: range.title,
+    rangeTitle: isBookScope && bookTitle
+      ? `${bookTitle} · ${range.rangeTitle}`
+      : range.rangeTitle,
+    startDate: range.startDate,
+    endDate: range.endDate,
+    fileLabel: range.fileLabel,
+    bookTitle,
+    bookAuthor,
+    statusText: isBookScope ? readingStatusText(scopedBook?.readingStatus) : '',
+    readingSpeedCharsPerMinute: totalSeconds > 0 && totalChars > 0
+      ? Math.round(totalChars * 60 / totalSeconds)
+      : 0,
+    totalSeconds,
+    totalChars,
+    readingDays: calendar.filter(day => day.durationSeconds > 0).length,
+    longestStreak: calculateLongestStreak(calendar),
+    activeBooks: activeBookIdentities.size,
+    finishedBooks,
+    topBooks,
+    topAuthors: topFromMap(authorTotals),
+    topTags: topFromMap(tagTotals),
+    topSeries: topFromMap(seriesTotals),
+    daily,
+    monthly,
+  }
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -758,6 +988,109 @@ function escapeHtml(value: unknown): string {
 
 function formatHours(seconds: number): string {
   return (Math.max(0, seconds) / 3600).toFixed(1)
+}
+
+export function buildReadingPeriodReportInsight(report: ReadingPeriodReport): string {
+  const hasReadingData = report.totalSeconds > 0 || report.totalChars > 0 || report.readingDays > 0
+  if (!hasReadingData) {
+    if (report.scope === 'book') return '这个周期里，这本书还没有形成可分析的阅读轨迹。'
+    return '这个周期里还没有形成可分析的阅读轨迹。'
+  }
+
+  const durationText = formatInsightDuration(report.totalSeconds)
+  const charsText = `${formatCompactNumber(report.totalChars)} 字`
+  const topBook = report.topBooks[0]
+  const topBookText = topBook
+    ? `${quoteInsightBook(topBook.title)}投入最多（${formatInsightDuration(topBook.totalSeconds)}）`
+    : `累计 ${durationText}`
+  const tasteText = report.topTags[0]?.name
+    ? `常读标签是“${shortenInsightText(report.topTags[0].name, 10)}”`
+    : report.topAuthors[0]?.name
+      ? `常读作者是 ${shortenInsightText(report.topAuthors[0].name, 10)}`
+      : `累计 ${charsText}`
+
+  if (report.scope === 'book') {
+    const bookTitle = quoteInsightBook(report.bookTitle || report.topBooks[0]?.title)
+    const speedText = report.readingSpeedCharsPerMinute > 0
+      ? `，平均约 ${report.readingSpeedCharsPerMinute.toLocaleString('zh-CN')} 字/分`
+      : ''
+    return `${bookTitle}在这个周期累计 ${durationText}、${charsText}；记录了 ${report.readingDays} 个阅读日${speedText}。`
+  }
+
+  if (report.period === 'day') {
+    return `这一天你累计阅读 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
+  }
+  if (report.period === 'week') {
+    const weekText = report.weekMode === 'last7Days' ? '过去七天' : '这个自然周'
+    return `${weekText}你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
+  }
+  return `这一年你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
+}
+
+export function buildReadingPeriodReportHtml(report: ReadingPeriodReport): string {
+  const topBooks = report.topBooks.map(book => (
+    `<li><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)} · ${formatHours(book.totalSeconds)} 小时 · ${escapeHtml(formatCompactNumber(book.charCount))} 字</span></li>`
+  )).join('')
+  const daily = report.daily.map(day => (
+    `<div><span>${escapeHtml(day.date)}</span><strong>${formatHours(day.durationSeconds)}h</strong><em>${escapeHtml(formatCompactNumber(day.charCount))} 字</em></div>`
+  )).join('')
+  const months = report.monthly.map(month => (
+    `<div><span>${escapeHtml(month.month)}</span><strong>${formatHours(month.totalSeconds)}h</strong><em>${escapeHtml(formatCompactNumber(month.charCount))} 字</em></div>`
+  )).join('')
+  const timelineTitle = report.period === 'year' ? '月度趋势' : '每日明细'
+  const timelineContent = report.period === 'year' ? months : daily
+  const activeBooksLabel = report.scope === 'book' ? '当前书籍' : '活跃书籍'
+  const activeBooksValue = report.scope === 'book' ? (report.bookTitle || '未命名书籍') : `${report.activeBooks} 本`
+  const title = report.scope === 'book' && report.bookTitle
+    ? `${report.title} · ${report.bookTitle}`
+    : report.title
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>PacilRead ${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #162033; background: #f5f7f2; }
+    main { max-width: 900px; margin: 0 auto; padding: 48px 28px; }
+    h1 { font-size: 36px; margin: 0 0 8px; }
+    h2 { margin-top: 0; }
+    p { color: #506052; line-height: 1.7; }
+    .range { color: #667085; font-size: 14px; margin-bottom: 22px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin: 28px 0; }
+    .card { background: white; border: 1px solid #dfe7d8; border-radius: 8px; padding: 18px; box-shadow: 0 12px 32px rgba(30, 41, 59, 0.06); }
+    .value { font-size: 26px; font-weight: 800; margin-top: 8px; color: #1f3a2d; }
+    ol { padding-left: 22px; }
+    li { margin: 12px 0; }
+    li span { display: block; color: #667085; margin-top: 2px; }
+    .timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+    .timeline div { background: white; border: 1px solid #dfe7d8; border-radius: 8px; padding: 10px; }
+    .timeline span, .timeline em { display:block; color:#667085; font-size:12px; font-style: normal; }
+    .timeline strong { display:block; margin: 4px 0 2px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="range">${escapeHtml(report.rangeTitle)}</div>
+    <p>${escapeHtml(buildReadingPeriodReportInsight(report))}</p>
+    <section class="grid">
+      <div class="card"><span>阅读时长</span><div class="value">${formatHours(report.totalSeconds)}h</div></div>
+      <div class="card"><span>阅读字数</span><div class="value">${escapeHtml(formatCompactNumber(report.totalChars))}</div></div>
+      <div class="card"><span>阅读天数</span><div class="value">${report.readingDays} 天</div></div>
+      <div class="card"><span>${escapeHtml(activeBooksLabel)}</span><div class="value">${escapeHtml(activeBooksValue)}</div></div>
+    </section>
+    <section class="card">
+      <h2>${report.scope === 'book' ? '本书摘要' : 'Top 书籍'}</h2>
+      <ol>${topBooks || '<li>暂无阅读记录</li>'}</ol>
+    </section>
+    <section class="card">
+      <h2>${timelineTitle}</h2>
+      <div class="timeline">${timelineContent}</div>
+    </section>
+  </main>
+</body>
+</html>`
 }
 
 export function buildAnnualReportHtml(report: AnnualReadingReport): string {

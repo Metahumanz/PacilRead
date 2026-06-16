@@ -183,6 +183,52 @@ assert.equal(emptyAnnualReport.topBooks.length, 0)
 assert.equal(emptyAnnualReport.monthly.length, 12)
 assert.equal(emptyAnnualReport.monthly.every(month => month.totalSeconds === 0), true)
 
+const periodRows = [
+  { date: '2026-01-01', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 600, charCount: 1200, updatedAt: 1 },
+  { date: '2026-01-05', bookIdentity: 'b', bookTitle: 'B', bookAuthor: 'BB', durationSeconds: 1200, charCount: 2400, updatedAt: 2 },
+  { date: '2026-01-06', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 1800, charCount: 3600, updatedAt: 3 },
+  { date: '2026-01-07', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 600, charCount: 1200, updatedAt: 4 },
+  { date: '2025-12-31', bookIdentity: 'a', bookTitle: 'A', bookAuthor: 'AA', durationSeconds: 999, charCount: 999, updatedAt: 5 },
+]
+const fixedNow = new Date(2026, 0, 7)
+const calendarWeekRange = readingInsights.buildReadingReportRange('week', {
+  weekMode: 'calendarWeek',
+  now: fixedNow,
+})
+assert.deepEqual(plain(calendarWeekRange), {
+  period: 'week',
+  weekMode: 'calendarWeek',
+  startDate: '2026-01-05',
+  endDate: '2026-01-07',
+  title: '本周阅读周报',
+  rangeTitle: '2026-01-05 至 2026-01-07',
+  fileLabel: '2026-01-05_2026-01-07-自然周周报',
+})
+const calendarWeekReport = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, calendarWeekRange)
+assert.equal(calendarWeekReport.totalSeconds, 3600)
+assert.equal(calendarWeekReport.totalChars, 7200)
+assert.equal(calendarWeekReport.readingDays, 3)
+assert.equal(calendarWeekReport.activeBooks, 2)
+assert.equal(calendarWeekReport.daily.length, 3)
+assert.equal(calendarWeekReport.topBooks[0].title, 'A')
+const last7Range = readingInsights.buildReadingReportRange('week', {
+  weekMode: 'last7Days',
+  now: fixedNow,
+})
+const last7Report = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, last7Range)
+assert.equal(last7Range.startDate, '2026-01-01')
+assert.equal(last7Report.totalSeconds, 4200)
+assert.equal(last7Report.daily.length, 7)
+const dailyRange = readingInsights.buildReadingReportRange('day', { now: fixedNow })
+const dailyReport = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, dailyRange, { bookIdentity: 'a' })
+assert.equal(dailyReport.scope, 'book')
+assert.equal(dailyReport.totalSeconds, 600)
+assert.equal(dailyReport.rangeTitle, 'A · 2026-01-07')
+assert.equal(
+  readingInsights.buildReadingPeriodReportHtml(calendarWeekReport).includes('本周阅读周报'),
+  true,
+)
+
 const pagination = loadTsModule('src/utils/pagination.ts')
 const slices = [
   { startChar: 0, endChar: 10, bodyEndInSlice: 10 },

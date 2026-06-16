@@ -17,6 +17,9 @@ import { SETTING_KEYS_BY_SCOPE } from '../utils/settingsSchema'
 import {
   buildAnnualReadingReport,
   buildAnnualReportHtml,
+  buildReadingPeriodReport,
+  buildReadingPeriodReportHtml,
+  buildReadingReportRange,
   buildReadingCalendar,
   calculateLongestStreak,
   calculateReadingSpeed,
@@ -24,8 +27,11 @@ import {
   type AnnualReadingReport,
   type AnnualReportMetricKey,
   type EstimatedFinish,
+  type ReadingPeriodReport,
+  type ReadingReportPeriod,
   type ReadingCalendarDay,
   type ReadingSpeedStats,
+  type WeeklyReportRangeMode,
 } from '../utils/readingInsights'
 
 export {
@@ -35,6 +41,8 @@ export {
 } from '../utils/webdav'
 
 export type ReadingStatsPeriod = 'today' | 'week' | 'year'
+export type ReadingStatsWeekMode = WeeklyReportRangeMode
+export type { ReadingPeriodReport, ReadingReportPeriod }
 export type AnnualReportImageTemplate = 'magazine' | 'wrapped'
 export type AnnualReportImageTheme = 'light' | 'dark'
 
@@ -44,6 +52,7 @@ export const ANNUAL_REPORT_IMAGE_HEIGHT = 1080
 export interface ReadingStatsOverview {
   today: number
   week: number
+  last7Days: number
   year: number
 }
 
@@ -236,35 +245,19 @@ export function formatDuration(seconds: number): string {
   return `${remainSeconds}秒`
 }
 
-function toDateString(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 function buildRemoteReadingStatsFileName(deviceId: string): string {
   return `device-${deviceId}.json`
 }
 
-function getPeriodRange(period: ReadingStatsPeriod): { start: string; end: string } {
-  const now = new Date()
-  const end = toDateString(now)
-
-  if (period === 'today') {
-    return { start: end, end }
-  }
-
-  if (period === 'week') {
-    const startDate = new Date(now)
-    const day = startDate.getDay()
-    const diff = day === 0 ? 6 : day - 1
-    startDate.setDate(startDate.getDate() - diff)
-    return { start: toDateString(startDate), end }
-  }
-
-  const startDate = new Date(now.getFullYear(), 0, 1)
-  return { start: toDateString(startDate), end }
+function getPeriodRange(
+  period: ReadingStatsPeriod,
+  options: { weekMode?: ReadingStatsWeekMode } = {},
+): { start: string; end: string } {
+  const reportPeriod: ReadingReportPeriod = period === 'today' ? 'day' : period
+  const range = buildReadingReportRange(reportPeriod, {
+    weekMode: options.weekMode,
+  })
+  return { start: range.startDate, end: range.endDate }
 }
 
 async function readSettingsMap(): Promise<Record<string, string>> {
@@ -687,17 +680,22 @@ export async function fetchReadingStatsOverview(bookId?: number | null): Promise
   const bookIdentity = typeof bookId === 'number' ? await getBookIdentityById(bookId) : null
   const todayRange = getPeriodRange('today')
   const weekRange = getPeriodRange('week')
+  const last7DaysRange = getPeriodRange('week', { weekMode: 'last7Days' })
   const yearRange = getPeriodRange('year')
 
   return {
     today: await queryReadingStatsTotal(todayRange.start, todayRange.end, bookIdentity),
     week: await queryReadingStatsTotal(weekRange.start, weekRange.end, bookIdentity),
+    last7Days: await queryReadingStatsTotal(last7DaysRange.start, last7DaysRange.end, bookIdentity),
     year: await queryReadingStatsTotal(yearRange.start, yearRange.end, bookIdentity),
   }
 }
 
-export async function fetchReadingStatsBookRank(period: ReadingStatsPeriod): Promise<ReadingStatsBookRankItem[]> {
-  const range = getPeriodRange(period)
+export async function fetchReadingStatsBookRank(
+  period: ReadingStatsPeriod,
+  options: { weekMode?: ReadingStatsWeekMode } = {},
+): Promise<ReadingStatsBookRankItem[]> {
+  const range = getPeriodRange(period, options)
   const { useDataStore: getStore } = await import('./useDataStore')
   const store = getStore()
   if (!store.dataLoaded.value) await store.loadAllData()
@@ -798,6 +796,28 @@ export async function createAnnualReadingReport(
   })
 }
 
+export async function createReadingPeriodReport(options: {
+  period: ReadingReportPeriod
+  weekMode?: ReadingStatsWeekMode
+  bookId?: number | null
+}): Promise<ReadingPeriodReport> {
+  const { useDataStore: getStore } = await import('./useDataStore')
+  const store = getStore()
+  if (!store.dataLoaded.value) await store.loadAllData()
+  const bookIdentity = typeof options.bookId === 'number'
+    ? store.getBook(options.bookId)?.readingStatsKey
+    : null
+  if (typeof options.bookId === 'number' && !bookIdentity) {
+    throw new Error('未找到这本书的阅读统计')
+  }
+  const range = buildReadingReportRange(options.period, {
+    weekMode: options.weekMode,
+  })
+  return buildReadingPeriodReport(store.getReadingStatsRows() as any[], store.books.value as any[], range, {
+    bookIdentity,
+  })
+}
+
 export async function exportAnnualReadingReport(format: 'html' | 'json'): Promise<void> {
   const report = await createAnnualReadingReport()
   const content = format === 'json'
@@ -805,6 +825,30 @@ export async function exportAnnualReadingReport(format: 'html' | 'json'): Promis
     : buildAnnualReportHtml(report)
   await window.electronAPI.dialog.saveTextFile({
     defaultPath: `PacilRead-${report.year}-年度报告.${format}`,
+    content,
+    filters: format === 'json'
+      ? [{ name: 'JSON', extensions: ['json'] }]
+      : [{ name: 'HTML', extensions: ['html'] }],
+  })
+}
+
+export async function exportReadingPeriodReport(
+  format: 'html' | 'json',
+  options: {
+    period: ReadingReportPeriod
+    weekMode?: ReadingStatsWeekMode
+    bookId?: number | null
+  },
+): Promise<void> {
+  const report = await createReadingPeriodReport(options)
+  const content = format === 'json'
+    ? JSON.stringify(report, null, 2)
+    : buildReadingPeriodReportHtml(report)
+  const bookSegment = report.scope === 'book' && report.bookTitle
+    ? `-${sanitizeRemoteFileName(report.bookTitle)}`
+    : ''
+  await window.electronAPI.dialog.saveTextFile({
+    defaultPath: `PacilRead${bookSegment}-${report.fileLabel}.${format}`,
     content,
     filters: format === 'json'
       ? [{ name: 'JSON', extensions: ['json'] }]
@@ -822,17 +866,12 @@ async function waitForReportImageRender(): Promise<void> {
   })
 }
 
-export async function renderAnnualReadingReportImageDataUrl(options: {
+async function renderReportImageCardDataUrl(options: {
+  report: AnnualReadingReport | ReadingPeriodReport
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme
-  year?: number
-  bookId?: number | null
   summaryMetrics?: AnnualReportMetricKey[]
-}): Promise<{ report: AnnualReadingReport; dataUrl: string }> {
-  const report = await createAnnualReadingReport(options.year, { bookId: options.bookId })
-  if (report.totalSeconds <= 0 && report.totalChars <= 0) {
-    throw new Error(report.scope === 'book' ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
-  }
+}): Promise<string> {
   if (typeof document === 'undefined') {
     throw new Error('当前环境不支持图片导出')
   }
@@ -853,7 +892,7 @@ export async function renderAnnualReadingReportImageDataUrl(options: {
 
   const app = createApp({
     render: () => h(AnnualReportImageCard, {
-      report,
+      report: options.report,
       template: options.template,
       theme: options.theme,
       summaryMetrics: options.summaryMetrics,
@@ -864,19 +903,38 @@ export async function renderAnnualReadingReportImageDataUrl(options: {
     app.mount(stage)
     await waitForReportImageRender()
     const node = stage.querySelector<HTMLElement>('[data-report-image-root]')
-    if (!node) throw new Error('年度报告图片渲染失败')
+    if (!node) throw new Error('报告图片渲染失败')
 
-    const dataUrl = await toPng(node, {
+    return await toPng(node, {
       width: ANNUAL_REPORT_IMAGE_WIDTH,
       height: ANNUAL_REPORT_IMAGE_HEIGHT,
       pixelRatio: 1,
       cacheBust: true,
     })
-    return { report, dataUrl }
   } finally {
     app.unmount()
     stage.remove()
   }
+}
+
+export async function renderAnnualReadingReportImageDataUrl(options: {
+  template: AnnualReportImageTemplate
+  theme: AnnualReportImageTheme
+  year?: number
+  bookId?: number | null
+  summaryMetrics?: AnnualReportMetricKey[]
+}): Promise<{ report: AnnualReadingReport; dataUrl: string }> {
+  const report = await createAnnualReadingReport(options.year, { bookId: options.bookId })
+  if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+    throw new Error(report.scope === 'book' ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
+  }
+  const dataUrl = await renderReportImageCardDataUrl({
+    report,
+    template: options.template,
+    theme: options.theme,
+    summaryMetrics: options.summaryMetrics,
+  })
+  return { report, dataUrl }
 }
 
 export async function exportAnnualReadingReportImage(options: {
@@ -892,6 +950,57 @@ export async function exportAnnualReadingReportImage(options: {
     : ''
   const result = await window.electronAPI.dialog.saveBinaryFile({
     defaultPath: `PacilRead-${report.year}${titleSegment}-年度报告-${options.template}-${options.theme}.png`,
+    dataUrl,
+    filters: [{ name: 'PNG', extensions: ['png'] }],
+  })
+  if (!result.success && !result.canceled) {
+    throw new Error('图片保存失败')
+  }
+}
+
+function getReadingPeriodReportKindLabel(period: ReadingReportPeriod): string {
+  if (period === 'day') return '每日报告'
+  if (period === 'week') return '周报'
+  return '年度报告'
+}
+
+export async function renderReadingPeriodReportImageDataUrl(options: {
+  period: ReadingReportPeriod
+  weekMode?: ReadingStatsWeekMode
+  bookId?: number | null
+  template: AnnualReportImageTemplate
+  theme: AnnualReportImageTheme
+}): Promise<{ report: ReadingPeriodReport; dataUrl: string }> {
+  const report = await createReadingPeriodReport({
+    period: options.period,
+    weekMode: options.weekMode,
+    bookId: options.bookId,
+  })
+  if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+    const label = getReadingPeriodReportKindLabel(report.period)
+    throw new Error(report.scope === 'book' ? `这本书当前范围还没有足够的阅读统计` : `当前范围还没有足够的阅读统计，暂不能生成${label}`)
+  }
+  const dataUrl = await renderReportImageCardDataUrl({
+    report,
+    template: options.template,
+    theme: options.theme,
+  })
+  return { report, dataUrl }
+}
+
+export async function exportReadingPeriodReportImage(options: {
+  period: ReadingReportPeriod
+  weekMode?: ReadingStatsWeekMode
+  bookId?: number | null
+  template: AnnualReportImageTemplate
+  theme: AnnualReportImageTheme
+}): Promise<void> {
+  const { report, dataUrl } = await renderReadingPeriodReportImageDataUrl(options)
+  const bookSegment = report.scope === 'book' && report.bookTitle
+    ? `-${sanitizeRemoteFileName(report.bookTitle)}`
+    : ''
+  const result = await window.electronAPI.dialog.saveBinaryFile({
+    defaultPath: `PacilRead${bookSegment}-${report.fileLabel}-图片-${options.template}-${options.theme}.png`,
     dataUrl,
     filters: [{ name: 'PNG', extensions: ['png'] }],
   })
