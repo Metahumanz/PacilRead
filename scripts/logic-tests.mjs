@@ -210,6 +210,7 @@ assert.equal(calendarWeekReport.totalChars, 7200)
 assert.equal(calendarWeekReport.readingDays, 3)
 assert.equal(calendarWeekReport.activeBooks, 2)
 assert.equal(calendarWeekReport.daily.length, 3)
+assert.equal(calendarWeekReport.rhythmDaily.length, 3)
 assert.equal(calendarWeekReport.topBooks[0].title, 'A')
 const last7Range = readingInsights.buildReadingReportRange('week', {
   weekMode: 'last7Days',
@@ -224,6 +225,11 @@ const dailyReport = readingInsights.buildReadingPeriodReport(periodRows, annualB
 assert.equal(dailyReport.scope, 'book')
 assert.equal(dailyReport.totalSeconds, 600)
 assert.equal(dailyReport.rangeTitle, 'A · 2026-01-07')
+assert.equal(dailyReport.daily.length, 1)
+assert.equal(dailyReport.rhythmDaily.length, 7)
+assert.equal(dailyReport.rhythmDaily[0].date, '2026-01-01')
+assert.equal(dailyReport.rhythmDaily[6].date, '2026-01-07')
+assert.equal(dailyReport.rhythmDaily.reduce((sum, day) => sum + day.durationSeconds, 0), 3000)
 assert.equal(
   readingInsights.buildReadingPeriodReportHtml(calendarWeekReport).includes('本周阅读周报'),
   true,

@@ -106,6 +106,7 @@ export interface ReadingPeriodReport {
   topTags: Array<{ name: string; totalSeconds: number }>
   topSeries: Array<{ name: string; totalSeconds: number }>
   daily: ReadingCalendarDay[]
+  rhythmDaily: ReadingCalendarDay[]
   monthly: Array<{ month: string; totalSeconds: number; charCount: number }>
 }
 
@@ -894,6 +895,15 @@ export function buildReadingPeriodReport(
   const seriesTotals = new Map<string, number>()
   const calendar = buildReadingCalendarRange(rows, range.startDate, range.endDate, bookIdentity)
   const daily = buildDailyBuckets(calendar, range.startDate, range.endDate)
+  const rhythmStartDate = range.period === 'day'
+    ? toDateString(addDays(parseDate(range.endDate), -6))
+    : range.startDate
+  const rhythmCalendar = range.period === 'day'
+    ? buildReadingCalendarRange(rows, rhythmStartDate, range.endDate, bookIdentity)
+    : calendar
+  const rhythmDaily = range.period === 'year'
+    ? []
+    : buildDailyBuckets(rhythmCalendar, rhythmStartDate, range.endDate)
   const year = Number(range.startDate.slice(0, 4))
   const monthly = Array.from({ length: 12 }, (_, index) => ({
     month: `${year}-${String(index + 1).padStart(2, '0')}`,
@@ -973,6 +983,7 @@ export function buildReadingPeriodReport(
     topTags: topFromMap(tagTotals),
     topSeries: topFromMap(seriesTotals),
     daily,
+    rhythmDaily,
     monthly,
   }
 }

@@ -198,6 +198,7 @@ const topBook = computed(() => props.report.topBooks[0] || null)
 const topAuthors = computed(() => props.report.topAuthors.slice(0, 3))
 const topTags = computed(() => props.report.topTags.slice(0, 5))
 const topSeries = computed(() => props.report.topSeries.slice(0, 3))
+const isDailyReport = computed(() => periodReport.value?.period === 'day')
 
 const wrappedChips = computed(() => {
   const tags = props.report.topTags.map(item => item.name)
@@ -210,22 +211,64 @@ const wrappedChips = computed(() => {
 const rhythmTitle = computed(() => {
   const period = periodReport.value
   if (!period || period.period === 'year') return '12 个月阅读趋势'
-  if (period.period === 'day') return '当日阅读节奏'
+  if (period.period === 'day') return '今日阅读构成'
   return '每日阅读节奏'
 })
 
-const rhythmKicker = computed(() => (
-  periodReport.value && periodReport.value.period !== 'year' ? 'DAILY RHYTHM' : 'MONTHLY RHYTHM'
-))
+const rhythmKicker = computed(() => {
+  const period = periodReport.value
+  if (period?.period === 'day') return 'TODAY MIX'
+  if (period && period.period !== 'year') return 'DAILY RHYTHM'
+  return 'MONTHLY RHYTHM'
+})
+
+const dailyBookItems = computed(() => {
+  const totalSeconds = Math.max(1, props.report.totalSeconds)
+  return props.report.topBooks.slice(0, 4).map((book) => {
+    const hasDuration = book.totalSeconds > 0
+    const percent = hasDuration
+      ? Math.max(1, Math.round((Math.max(0, book.totalSeconds) / totalSeconds) * 100))
+      : 0
+    return {
+      title: book.title || '未命名书籍',
+      author: book.author || '未知作者',
+      duration: formatBookTime(book.totalSeconds),
+      chars: `${formatChars(book.charCount)} 字`,
+      percent,
+      width: hasDuration ? Math.max(7, percent) : 0,
+    }
+  })
+})
+
+const dailyContextItems = computed(() => {
+  const period = periodReport.value
+  if (!period || period.period !== 'day') return []
+  const days = period.rhythmDaily.length ? period.rhythmDaily : period.daily
+  const maxSeconds = Math.max(...days.map(day => day.durationSeconds), 1)
+  return days.map((day) => ({
+    label: day.date.slice(5).replace('-', '/'),
+    height: Math.max(5, Math.round((day.durationSeconds / maxSeconds) * 52)),
+    active: day.durationSeconds > 0,
+    current: day.date === period.endDate,
+  }))
+})
+
+const dailyContextGridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${Math.max(1, dailyContextItems.value.length)}, minmax(0, 1fr))`,
+}))
 
 const rhythmItems = computed(() => {
   const period = periodReport.value
   if (period && period.period !== 'year') {
-    const maxSeconds = Math.max(...period.daily.map(day => day.durationSeconds), 1)
-    return period.daily.map((day) => ({
-      label: period.period === 'day' ? day.date.slice(5) : day.date.slice(5).replace('-', '/'),
+    const days = period.period === 'day' && period.rhythmDaily.length
+      ? period.rhythmDaily
+      : period.daily
+    const maxSeconds = Math.max(...days.map(day => day.durationSeconds), 1)
+    return days.map((day) => ({
+      label: day.date.slice(5).replace('-', '/'),
       height: Math.max(12, Math.round((day.durationSeconds / maxSeconds) * 150)),
       active: day.durationSeconds > 0,
+      current: period.period === 'day' && day.date === period.endDate,
       value: formatBookTime(day.durationSeconds),
     }))
   }
@@ -236,6 +279,7 @@ const rhythmItems = computed(() => {
       label: `${monthNumber}月`,
       height: Math.max(12, Math.round((month.totalSeconds / maxSeconds) * 150)),
       active: month.totalSeconds > 0,
+      current: false,
       value: formatBookTime(month.totalSeconds),
     }
   })
@@ -346,12 +390,61 @@ const footerRangeLabel = computed(() => (
               </div>
               <span>{{ formatChars(props.report.totalChars) }} 字</span>
             </div>
-            <div class="month-chart" :style="rhythmGridStyle">
-              <div v-for="month in rhythmItems" :key="month.label" class="month-column">
+            <div v-if="isDailyReport" class="daily-report-visual">
+              <div v-if="dailyBookItems.length" class="daily-book-bars">
+                <div
+                  v-for="book in dailyBookItems"
+                  :key="`${book.title}-${book.author}`"
+                  class="daily-book-row"
+                >
+                  <div class="daily-book-copy">
+                    <strong>{{ book.title }}</strong>
+                    <span>{{ book.author }} · {{ book.chars }}</span>
+                  </div>
+                  <div class="daily-book-amount">
+                    <b>{{ book.percent }}%</b>
+                    <span>{{ book.duration }}</span>
+                  </div>
+                  <div class="daily-book-track">
+                    <div class="daily-book-fill" :style="{ width: `${book.width}%` }"></div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-line">暂无今日书籍记录</div>
+
+              <div class="daily-context">
+                <div class="daily-context-heading">
+                  <span>最近 7 天</span>
+                  <strong>今日高亮</strong>
+                </div>
+                <div class="daily-context-bars" :style="dailyContextGridStyle">
+                  <div
+                    v-for="day in dailyContextItems"
+                    :key="day.label"
+                    class="daily-context-cell"
+                    :class="{ 'is-current': day.current }"
+                  >
+                    <div
+                      class="daily-context-bar"
+                      :class="{ 'is-empty': !day.active, 'is-current': day.current }"
+                      :style="{ height: `${day.height}px` }"
+                    ></div>
+                    <span>{{ day.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="month-chart" :style="rhythmGridStyle">
+              <div
+                v-for="month in rhythmItems"
+                :key="month.label"
+                class="month-column"
+                :class="{ 'is-current': month.current }"
+              >
                 <div class="month-track">
                   <div
                     class="month-bar"
-                    :class="{ 'is-empty': !month.active }"
+                    :class="{ 'is-empty': !month.active, 'is-current': month.current }"
                     :style="{ height: `${month.height}px` }"
                   ></div>
                 </div>
@@ -427,15 +520,64 @@ const footerRangeLabel = computed(() => (
             <div class="month-heading">
               <div>
                 <div class="section-kicker">{{ rhythmKicker }}</div>
-                <h2>阅读节奏</h2>
+                <h2>{{ rhythmTitle }}</h2>
               </div>
               <span>{{ formatChars(props.report.totalChars) }} 字</span>
             </div>
-            <div class="wrapped-bars" :style="rhythmGridStyle">
-              <div v-for="month in rhythmItems" :key="month.label" class="wrapped-bar-cell">
+            <div v-if="isDailyReport" class="daily-report-visual is-wrapped">
+              <div v-if="dailyBookItems.length" class="daily-book-bars">
+                <div
+                  v-for="book in dailyBookItems"
+                  :key="`${book.title}-${book.author}`"
+                  class="daily-book-row"
+                >
+                  <div class="daily-book-copy">
+                    <strong>{{ book.title }}</strong>
+                    <span>{{ book.author }} · {{ book.chars }}</span>
+                  </div>
+                  <div class="daily-book-amount">
+                    <b>{{ book.percent }}%</b>
+                    <span>{{ book.duration }}</span>
+                  </div>
+                  <div class="daily-book-track">
+                    <div class="daily-book-fill" :style="{ width: `${book.width}%` }"></div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-line">暂无今日书籍记录</div>
+
+              <div class="daily-context">
+                <div class="daily-context-heading">
+                  <span>最近 7 天</span>
+                  <strong>今日高亮</strong>
+                </div>
+                <div class="daily-context-bars" :style="dailyContextGridStyle">
+                  <div
+                    v-for="day in dailyContextItems"
+                    :key="day.label"
+                    class="daily-context-cell"
+                    :class="{ 'is-current': day.current }"
+                  >
+                    <div
+                      class="daily-context-bar"
+                      :class="{ 'is-empty': !day.active, 'is-current': day.current }"
+                      :style="{ height: `${day.height}px` }"
+                    ></div>
+                    <span>{{ day.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="wrapped-bars" :style="rhythmGridStyle">
+              <div
+                v-for="month in rhythmItems"
+                :key="month.label"
+                class="wrapped-bar-cell"
+                :class="{ 'is-current': month.current }"
+              >
                 <div
                   class="wrapped-bar"
-                  :class="{ 'is-empty': !month.active }"
+                  :class="{ 'is-empty': !month.active, 'is-current': month.current }"
                   :style="{ height: `${month.height}px` }"
                 ></div>
                 <span>{{ month.label }}</span>
@@ -860,6 +1002,151 @@ const footerRangeLabel = computed(() => (
   gap: 12px;
 }
 
+.daily-report-visual {
+  margin-top: 24px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.daily-book-bars {
+  display: grid;
+  gap: 16px;
+}
+
+.daily-book-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 18px;
+  align-items: center;
+}
+
+.daily-book-copy {
+  min-width: 0;
+}
+
+.daily-book-copy strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 22px;
+  line-height: 1.16;
+  font-weight: 760;
+  word-break: break-word;
+}
+
+.daily-book-copy span,
+.daily-book-amount span {
+  display: block;
+  margin-top: 5px;
+  font-size: 15px;
+  color: var(--report-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.daily-book-amount {
+  min-width: 118px;
+  text-align: right;
+}
+
+.daily-book-amount b {
+  display: block;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--report-accent);
+}
+
+.daily-book-track {
+  grid-column: 1 / -1;
+  height: 17px;
+  border: 1px solid var(--report-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--report-soft);
+}
+
+.daily-book-fill {
+  height: 100%;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--report-accent), var(--report-accent-3));
+}
+
+.daily-book-row:nth-child(2n) .daily-book-fill {
+  background: linear-gradient(90deg, var(--report-accent-2), var(--report-accent));
+}
+
+.daily-context {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid var(--report-border);
+}
+
+.daily-context-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.daily-context-heading span {
+  font-size: 17px;
+  font-weight: 720;
+  color: var(--report-muted);
+}
+
+.daily-context-heading strong {
+  font-size: 17px;
+  color: var(--report-accent-2);
+}
+
+.daily-context-bars {
+  margin-top: 12px;
+  height: 78px;
+  display: grid;
+  align-items: end;
+  gap: 9px;
+}
+
+.daily-context-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.daily-context-bar {
+  width: 100%;
+  min-height: 5px;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, var(--report-accent-3), var(--report-accent));
+}
+
+.daily-context-bar.is-current {
+  background: linear-gradient(180deg, var(--report-accent-2), var(--report-accent));
+  box-shadow: 0 0 0 3px var(--report-soft);
+}
+
+.daily-context-bar.is-empty {
+  opacity: 0.28;
+}
+
+.daily-context-cell span {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--report-muted);
+  white-space: nowrap;
+}
+
+.daily-context-cell.is-current span {
+  color: var(--report-accent-2);
+  font-weight: 760;
+}
+
 .month-column,
 .wrapped-bar-cell {
   min-width: 0;
@@ -883,6 +1170,11 @@ const footerRangeLabel = computed(() => (
   background: linear-gradient(180deg, var(--report-accent), var(--report-accent-3));
 }
 
+.month-bar.is-current {
+  background: linear-gradient(180deg, var(--report-accent-2), var(--report-accent));
+  box-shadow: 0 0 0 3px var(--report-soft);
+}
+
 .month-bar.is-empty,
 .wrapped-bar.is-empty {
   opacity: 0.28;
@@ -894,6 +1186,12 @@ const footerRangeLabel = computed(() => (
   font-size: 15px;
   color: var(--report-muted);
   white-space: nowrap;
+}
+
+.month-column.is-current span,
+.wrapped-bar-cell.is-current span {
+  color: var(--report-accent-2);
+  font-weight: 760;
 }
 
 .report-footer {
@@ -1049,6 +1347,11 @@ const footerRangeLabel = computed(() => (
   min-height: 12px;
   border-radius: 8px;
   background: linear-gradient(180deg, var(--report-accent-3), var(--report-accent-2));
+}
+
+.wrapped-bar.is-current {
+  background: linear-gradient(180deg, var(--report-accent-2), var(--report-accent));
+  box-shadow: 0 0 0 3px var(--report-soft);
 }
 
 .wrapped-footer {

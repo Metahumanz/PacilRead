@@ -752,44 +752,6 @@ watch(showImageExportDialog, (shown) => {
         </div>
       </div>
 
-      <div class="app-card p-5 mb-8">
-        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
-          <div>
-            <div class="text-[15px] font-semibold app-title">{{ reportKindLabel }}</div>
-            <div class="text-[12px] app-muted mt-1">{{ currentPeriodReport?.rangeTitle || currentRangeLabel }}</div>
-          </div>
-          <div class="report-actions">
-            <button
-              type="button"
-              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
-              :disabled="exporting || !currentReportHasData"
-              @click="exportReport('html')"
-            >
-              生成 HTML
-            </button>
-            <button
-              type="button"
-              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
-              :disabled="exporting || !currentReportHasData"
-              @click="exportReport('json')"
-            >
-              生成 JSON
-            </button>
-            <button
-              type="button"
-              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
-              :disabled="exporting || imagePreviewLoading || !currentReportHasData"
-              @click="openImageExportDialog"
-            >
-              {{ imagePreviewLoading ? '准备预览...' : '图片预览' }}
-            </button>
-          </div>
-        </div>
-        <div class="report-summary-lines">
-          <div v-for="line in currentReportLines" :key="line">{{ line }}</div>
-        </div>
-      </div>
-
       <div
         v-if="!props.bookId && ranking.length === 0"
         class="app-card p-10 text-center app-muted"
@@ -832,6 +794,44 @@ watch(showImageExportDialog, (shown) => {
         class="app-card p-8 text-center app-muted"
       >
         这本书的累计阅读时长已经汇总在上面的周期卡片里。
+      </div>
+
+      <div class="app-card p-5 mt-8 mb-8">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+          <div>
+            <div class="text-[15px] font-semibold app-title">{{ reportKindLabel }}</div>
+            <div class="text-[12px] app-muted mt-1">{{ currentPeriodReport?.rangeTitle || currentRangeLabel }}</div>
+          </div>
+          <div class="report-actions">
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || !currentReportHasData"
+              @click="exportReport('html')"
+            >
+              生成 HTML
+            </button>
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || !currentReportHasData"
+              @click="exportReport('json')"
+            >
+              生成 JSON
+            </button>
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || imagePreviewLoading || !currentReportHasData"
+              @click="openImageExportDialog"
+            >
+              {{ imagePreviewLoading ? '准备预览...' : '图片预览' }}
+            </button>
+          </div>
+        </div>
+        <div class="report-summary-lines">
+          <div v-for="line in currentReportLines" :key="line">{{ line }}</div>
+        </div>
       </div>
     </template>
   </div>
