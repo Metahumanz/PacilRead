@@ -3,19 +3,30 @@ import { computed } from 'vue'
 import {
   buildAnnualReportInsight,
   buildAnnualReportMetricDisplays,
+  buildReadingPeriodReportInsight,
   type AnnualReadingReport,
   type AnnualReportMetricKey,
+  type ReadingPeriodReport,
 } from '../../utils/readingInsights'
 
 type AnnualReportImageTemplate = 'magazine' | 'wrapped'
 type AnnualReportImageTheme = 'light' | 'dark'
 
 const props = defineProps<{
-  report: AnnualReadingReport
+  report: AnnualReadingReport | ReadingPeriodReport
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme
   summaryMetrics?: AnnualReportMetricKey[]
 }>()
+
+interface ReportImageMetricDisplay {
+  key: string
+  label: string
+  value: string
+  unit: string
+  fullValue: string
+  kind: 'number' | 'text'
+}
 
 const formatHours = (seconds: number) => {
   const hours = Math.max(0, seconds) / 3600
@@ -40,23 +51,147 @@ const formatBookTime = (seconds: number) => {
   return `${minutes} 分钟`
 }
 
+const isReadingPeriodReport = (
+  report: AnnualReadingReport | ReadingPeriodReport,
+): report is ReadingPeriodReport => 'period' in report
+
+const periodReport = computed(() => (
+  isReadingPeriodReport(props.report) ? props.report : null
+))
+
+const annualReport = computed(() => (
+  isReadingPeriodReport(props.report) ? null : props.report
+))
+
+const isPeriodReport = computed(() => Boolean(periodReport.value))
+
 const isBookReport = computed(() => props.report.scope === 'book')
 
-const reportTitle = computed(() => (
-  isBookReport.value ? `${props.report.year} 单书阅读报告` : `${props.report.year} 年度阅读报告`
+const reportYear = computed(() => (
+  annualReport.value?.year || Number(periodReport.value?.startDate.slice(0, 4)) || new Date().getFullYear()
 ))
 
+const periodKindLabel = computed(() => {
+  const report = periodReport.value
+  if (!report) return '年度报告'
+  if (report.period === 'day') return '每日报告'
+  if (report.period === 'week') return '周报'
+  return '年度报告'
+})
+
+const reportTitle = computed(() => {
+  const period = periodReport.value
+  if (period) {
+    return period.scope === 'book'
+      ? `单书${periodKindLabel.value}`
+      : period.title
+  }
+  return isBookReport.value
+    ? `${reportYear.value} 单书阅读报告`
+    : `${reportYear.value} 年度阅读报告`
+})
+
 const reportEyebrow = computed(() => (
-  isBookReport.value ? 'PACILREAD · BOOK YEAR IN READING' : 'PACILREAD · YEAR IN READING'
+  periodReport.value
+    ? isBookReport.value
+      ? 'PACILREAD · BOOK READING REPORT'
+      : `PACILREAD · ${periodReport.value.period.toUpperCase()} REPORT`
+    : isBookReport.value
+      ? 'PACILREAD · BOOK YEAR IN READING'
+      : 'PACILREAD · YEAR IN READING'
 ))
+
+const reportMark = computed(() => {
+  const period = periodReport.value
+  if (!period) return String(reportYear.value)
+  if (period.period === 'day') return 'DAY'
+  if (period.period === 'week') return 'WEEK'
+  return String(reportYear.value)
+})
+
+const wrappedHeroTitle = computed(() => {
+  const period = periodReport.value
+  if (!period) return String(reportYear.value)
+  if (period.period === 'day') return 'DAY'
+  if (period.period === 'week') return 'WEEK'
+  return String(reportYear.value)
+})
+
+const wrappedEyebrow = computed(() => (
+  isBookReport.value
+    ? 'PACILREAD BOOK WRAPPED'
+    : periodReport.value
+      ? `PACILREAD ${periodReport.value.period.toUpperCase()} WRAPPED`
+      : 'PACILREAD WRAPPED'
+))
+
+const wrappedBadge = computed(() => {
+  if (isBookReport.value) return 'BOOK'
+  const period = periodReport.value
+  if (period?.period === 'day') return 'DAY'
+  if (period?.period === 'week') return 'WEEK'
+  return 'READING'
+})
+
+const heroDurationLabel = computed(() => {
+  const period = periodReport.value
+  if (isBookReport.value) {
+    if (period?.period === 'day') return '这本书今天读了'
+    if (period?.period === 'week') return '这本书这周读了'
+    return '这本书今年读了'
+  }
+  if (period?.period === 'day') return '你今天读了'
+  if (period?.period === 'week') return '你这周读了'
+  return '你今年读了'
+})
 
 const displayBookTitle = computed(() => (
   props.report.bookTitle || props.report.topBooks[0]?.title || '未命名书籍'
 ))
 
-const summaryText = computed(() => buildAnnualReportInsight(props.report))
+const summaryText = computed(() => (
+  periodReport.value
+    ? buildReadingPeriodReportInsight(periodReport.value)
+    : buildAnnualReportInsight(annualReport.value!)
+))
 
-const summaryMetrics = computed(() => buildAnnualReportMetricDisplays(props.report, props.summaryMetrics))
+const buildPeriodMetricDisplays = (report: ReadingPeriodReport): ReportImageMetricDisplay[] => {
+  const thirdMetric = report.scope === 'book'
+    ? { label: '阅读天数', value: report.readingDays.toLocaleString('zh-CN'), unit: '天' }
+    : { label: report.period === 'year' ? '完成书籍' : '阅读书籍', value: (report.period === 'year' ? report.finishedBooks : report.activeBooks).toLocaleString('zh-CN'), unit: '本' }
+  return [
+    {
+      key: 'total_duration',
+      label: '阅读时长',
+      value: formatHours(report.totalSeconds),
+      unit: '小时',
+      fullValue: `${formatHours(report.totalSeconds)} 小时`,
+      kind: 'number',
+    },
+    {
+      key: 'total_chars',
+      label: '阅读字数',
+      value: formatChars(report.totalChars),
+      unit: '字',
+      fullValue: `${formatChars(report.totalChars)} 字`,
+      kind: 'number',
+    },
+    {
+      key: 'scope_count',
+      label: thirdMetric.label,
+      value: thirdMetric.value,
+      unit: thirdMetric.unit,
+      fullValue: `${thirdMetric.value} ${thirdMetric.unit}`,
+      kind: 'number',
+    },
+  ]
+}
+
+const summaryMetrics = computed<ReportImageMetricDisplay[]>(() => (
+  periodReport.value
+    ? buildPeriodMetricDisplays(periodReport.value)
+    : buildAnnualReportMetricDisplays(annualReport.value!, props.summaryMetrics)
+))
 
 const topBooks = computed(() => props.report.topBooks.slice(0, 4))
 const topBook = computed(() => props.report.topBooks[0] || null)
@@ -72,7 +207,28 @@ const wrappedChips = computed(() => {
   return Array.from(new Set([...tags, ...series, ...bookAuthor, ...authors].filter(Boolean))).slice(0, 6)
 })
 
-const months = computed(() => {
+const rhythmTitle = computed(() => {
+  const period = periodReport.value
+  if (!period || period.period === 'year') return '12 个月阅读趋势'
+  if (period.period === 'day') return '当日阅读节奏'
+  return '每日阅读节奏'
+})
+
+const rhythmKicker = computed(() => (
+  periodReport.value && periodReport.value.period !== 'year' ? 'DAILY RHYTHM' : 'MONTHLY RHYTHM'
+))
+
+const rhythmItems = computed(() => {
+  const period = periodReport.value
+  if (period && period.period !== 'year') {
+    const maxSeconds = Math.max(...period.daily.map(day => day.durationSeconds), 1)
+    return period.daily.map((day) => ({
+      label: period.period === 'day' ? day.date.slice(5) : day.date.slice(5).replace('-', '/'),
+      height: Math.max(12, Math.round((day.durationSeconds / maxSeconds) * 150)),
+      active: day.durationSeconds > 0,
+      value: formatBookTime(day.durationSeconds),
+    }))
+  }
   const maxSeconds = Math.max(...props.report.monthly.map(month => month.totalSeconds), 1)
   return props.report.monthly.map((month) => {
     const monthNumber = Number(month.month.slice(5, 7))
@@ -84,6 +240,14 @@ const months = computed(() => {
     }
   })
 })
+
+const rhythmGridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${Math.max(1, rhythmItems.value.length)}, minmax(0, 1fr))`,
+}))
+
+const footerRangeLabel = computed(() => (
+  periodReport.value?.rangeTitle || `${reportYear.value} Year in Reading`
+))
 </script>
 
 <template>
@@ -101,7 +265,7 @@ const months = computed(() => {
               <h1>{{ reportTitle }}</h1>
               <div v-if="isBookReport" class="scope-title">{{ displayBookTitle }}</div>
             </div>
-            <div class="year-mark">{{ props.report.year }}</div>
+            <div class="year-mark">{{ reportMark }}</div>
           </header>
 
           <p class="summary">{{ summaryText }}</p>
@@ -126,7 +290,7 @@ const months = computed(() => {
           <section class="magazine-main">
             <div class="panel top-books-panel">
               <div class="section-kicker">{{ isBookReport ? 'BOOK PROFILE' : 'TOP BOOKS' }}</div>
-              <h2>{{ isBookReport ? '本书书档' : '年度书单' }}</h2>
+              <h2>{{ isBookReport ? '本书书档' : isPeriodReport ? '范围书单' : '年度书单' }}</h2>
               <ol v-if="topBooks.length" class="book-list">
                 <li v-for="(book, index) in topBooks" :key="`${book.title}-${index}`">
                   <span class="book-rank">{{ String(index + 1).padStart(2, '0') }}</span>
@@ -136,7 +300,7 @@ const months = computed(() => {
                   </div>
                 </li>
               </ol>
-              <div v-else class="empty-line">暂无年度书籍记录</div>
+              <div v-else class="empty-line">{{ isPeriodReport ? '暂无当前范围书籍记录' : '暂无年度书籍记录' }}</div>
             </div>
 
             <div class="panel taste-panel">
@@ -177,13 +341,13 @@ const months = computed(() => {
           <section class="panel month-panel">
             <div class="month-heading">
               <div>
-                <div class="section-kicker">MONTHLY RHYTHM</div>
-                <h2>12 个月阅读趋势</h2>
+                <div class="section-kicker">{{ rhythmKicker }}</div>
+                <h2>{{ rhythmTitle }}</h2>
               </div>
               <span>{{ formatChars(props.report.totalChars) }} 字</span>
             </div>
-            <div class="month-chart">
-              <div v-for="month in months" :key="month.label" class="month-column">
+            <div class="month-chart" :style="rhythmGridStyle">
+              <div v-for="month in rhythmItems" :key="month.label" class="month-column">
                 <div class="month-track">
                   <div
                     class="month-bar"
@@ -209,14 +373,14 @@ const months = computed(() => {
         <section class="wrapped-hero">
           <header class="wrapped-header">
             <div>
-              <div class="eyebrow">{{ isBookReport ? 'PACILREAD BOOK WRAPPED' : 'PACILREAD WRAPPED' }}</div>
-              <h1>{{ props.report.year }}</h1>
+              <div class="eyebrow">{{ wrappedEyebrow }}</div>
+              <h1>{{ wrappedHeroTitle }}</h1>
             </div>
-            <div class="wrapped-badge">{{ isBookReport ? 'BOOK' : 'READING' }}</div>
+            <div class="wrapped-badge">{{ wrappedBadge }}</div>
           </header>
 
           <section class="hero-number">
-            <div class="hero-label">{{ isBookReport ? '这本书今年读了' : '你今年读了' }}</div>
+            <div class="hero-label">{{ heroDurationLabel }}</div>
             <div class="hero-value">
               <span>{{ formatHours(props.report.totalSeconds) }}</span>
               <b>小时</b>
@@ -246,7 +410,7 @@ const months = computed(() => {
               <p>{{ topBook.author || '未知作者' }} · {{ formatBookTime(topBook.totalSeconds) }}</p>
             </template>
             <template v-else>
-              <h2>暂无年度书籍记录</h2>
+              <h2>{{ isPeriodReport ? '暂无当前范围书籍记录' : '暂无年度书籍记录' }}</h2>
               <p>读一会儿书，下一次这里就会亮起来。</p>
             </template>
           </section>
@@ -262,13 +426,13 @@ const months = computed(() => {
           <section class="wrapped-months">
             <div class="month-heading">
               <div>
-                <div class="section-kicker">MONTH BY MONTH</div>
+                <div class="section-kicker">{{ rhythmKicker }}</div>
                 <h2>阅读节奏</h2>
               </div>
               <span>{{ formatChars(props.report.totalChars) }} 字</span>
             </div>
-            <div class="wrapped-bars">
-              <div v-for="month in months" :key="month.label" class="wrapped-bar-cell">
+            <div class="wrapped-bars" :style="rhythmGridStyle">
+              <div v-for="month in rhythmItems" :key="month.label" class="wrapped-bar-cell">
                 <div
                   class="wrapped-bar"
                   :class="{ 'is-empty': !month.active }"
@@ -281,7 +445,7 @@ const months = computed(() => {
 
           <footer class="wrapped-footer">
             <span>PacilRead Desktop</span>
-            <span>{{ props.report.year }} Year in Reading</span>
+            <span>{{ footerRangeLabel }}</span>
           </footer>
         </section>
       </div>

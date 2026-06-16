@@ -7,6 +7,18 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.2.3',
+    date: '2026-06-16',
+    changes: [
+      'Reading Stats（阅读统计）：统计页改为本日、本周、本年范围切换，周统计支持自然周与过去七天两种口径',
+      'Period Reports（周期报告）：新增每日、每周、每年报告生成，HTML/JSON 与页面当前查看范围保持一致，并支持单书统计',
+      'Report Preview（报告预览）：日报告、周报告、年度报告都支持横屏图片预览与 PNG 保存，报告入口下沉为当前阅读时长的附属功能',
+      'Report Layout（报告布局）：参考移动端统计页结构，将导出入口从顶部工具栏移到统计范围卡片之后，减少对核心统计信息的干扰',
+      'Build（构建）：执行 electron:build 后会自动打开文件资源管理器并定位最新安装包，同时保留 electron:buid 兼容命令',
+      'Tests（测试）：补充日/周报告范围、自然周/过去七天口径、单书日报与报告 HTML 的逻辑覆盖',
+    ]
+  },
+  {
     version: '1.2.2',
     date: '2026-06-15',
     changes: [

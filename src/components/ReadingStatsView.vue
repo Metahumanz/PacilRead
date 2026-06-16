@@ -4,20 +4,25 @@ import {
   ANNUAL_REPORT_IMAGE_HEIGHT,
   ANNUAL_REPORT_IMAGE_WIDTH,
   createAnnualReadingReport,
+  createReadingPeriodReport,
   fetchReadingStatsBookDetail,
   fetchReadingStatsBookRank,
   fetchReadingCalendar,
   fetchReadingStatsOverview,
   formatDuration,
   mergeRemoteReadingStats,
-  exportAnnualReadingReport,
+  exportReadingPeriodReport,
   exportAnnualReadingReportImage,
+  exportReadingPeriodReportImage,
   type AnnualReportImageTemplate,
   type AnnualReportImageTheme,
+  type ReadingPeriodReport,
+  type ReadingReportPeriod,
   type ReadingCalendarSummary,
   type ReadingStatsBookDetail,
   type ReadingStatsBookRankItem,
   type ReadingStatsPeriod,
+  type ReadingStatsWeekMode,
 } from '../composables/useReadingStats'
 import { useAppTheme } from '../composables/useAppTheme'
 import { useSettings } from '../composables/useSettings'
@@ -46,23 +51,36 @@ const emit = defineEmits<{
 
 const loading = ref(true)
 const syncing = ref(false)
-const selectedPeriod = ref<ReadingStatsPeriod>('week')
-const overview = ref({ today: 0, week: 0, year: 0 })
+const selectedPeriod = ref<ReadingStatsPeriod>('today')
+const selectedWeekMode = ref<ReadingStatsWeekMode>('calendarWeek')
+const overview = ref({ today: 0, week: 0, last7Days: 0, year: 0 })
 const bookDetail = ref<ReadingStatsBookDetail | null>(null)
 const ranking = ref<ReadingStatsBookRankItem[]>([])
 const calendar = ref<ReadingCalendarSummary>({ days: [], longestStreak: 0 })
+const currentPeriodReport = ref<ReadingPeriodReport | null>(null)
 const exporting = ref(false)
 const imagePreviewLoading = ref(false)
 const showImageExportDialog = ref(false)
 const selectedImageTemplate = ref<AnnualReportImageTemplate>('magazine')
 const selectedImageTheme = ref<AnnualReportImageTheme>('light')
-const previewReport = ref<AnnualReadingReport | null>(null)
+const previewReport = ref<AnnualReadingReport | ReadingPeriodReport | null>(null)
 const previewFrame = ref<HTMLElement | null>(null)
 const previewScale = ref(0.5)
 const selectedAnnualReportMetrics = ref<AnnualReportMetricKey[]>([])
 const syncStatusText = ref('')
 const { resolvedBucket } = useAppTheme()
 const { webdavUrl, webdavSyncReadingStats } = useSettings()
+
+const periodOptions: Array<{ value: ReadingStatsPeriod; label: string }> = [
+  { value: 'today', label: '本日' },
+  { value: 'week', label: '本周' },
+  { value: 'year', label: '本年' },
+]
+
+const weekModeOptions: Array<{ value: ReadingStatsWeekMode; label: string }> = [
+  { value: 'calendarWeek', label: '自然周' },
+  { value: 'last7Days', label: '过去七天' },
+]
 
 let syncRunId = 0
 let syncStatusTimer: number | null = null
@@ -88,11 +106,113 @@ const previewCardStyle = computed(() => ({
   transform: `scale(${previewScale.value})`,
 }))
 
+const isAnnualPreviewReport = (
+  report: AnnualReadingReport | ReadingPeriodReport | null,
+): report is AnnualReadingReport => Boolean(report && !('period' in report))
+
+const isPeriodPreviewReport = (
+  report: AnnualReadingReport | ReadingPeriodReport | null,
+): report is ReadingPeriodReport => Boolean(report && 'period' in report)
+
+const annualPreviewReport = computed(() => (
+  isAnnualPreviewReport(previewReport.value) ? previewReport.value : null
+))
+
+const periodPreviewReport = computed(() => (
+  isPeriodPreviewReport(previewReport.value) ? previewReport.value : null
+))
+
 const annualReportMetricOptions = computed(() => (
-  previewReport.value ? getAnnualReportAvailableMetricDisplays(previewReport.value) : []
+  annualPreviewReport.value ? getAnnualReportAvailableMetricDisplays(annualPreviewReport.value) : []
 ))
 
 const selectedAnnualReportMetricSet = computed(() => new Set(selectedAnnualReportMetrics.value))
+
+const weekOverviewSeconds = computed(() => (
+  selectedWeekMode.value === 'last7Days' ? overview.value.last7Days : overview.value.week
+))
+
+const selectedPeriodReportKey = computed<ReadingReportPeriod>(() => (
+  selectedPeriod.value === 'today' ? 'day' : selectedPeriod.value
+))
+
+const currentRangeLabel = computed(() => {
+  if (selectedPeriod.value === 'today') return '本日'
+  if (selectedPeriod.value === 'week') return selectedWeekMode.value === 'last7Days' ? '过去七天' : '本周'
+  return '本年'
+})
+
+const currentRangeSeconds = computed(() => {
+  if (selectedPeriod.value === 'today') return overview.value.today
+  if (selectedPeriod.value === 'week') return weekOverviewSeconds.value
+  return overview.value.year
+})
+
+const reportKindLabelForPeriod = (period: ReadingReportPeriod) => {
+  if (period === 'day') return '每日报告'
+  if (period === 'week') return '周报'
+  return '年度报告'
+}
+
+const reportKindLabel = computed(() => {
+  return reportKindLabelForPeriod(selectedPeriodReportKey.value)
+})
+
+const imageExportDialogTitle = computed(() => {
+  const report = previewReport.value
+  if (!report) return '导出报告图片'
+  const scopeLabel = report.scope === 'book' ? '单书' : ''
+  if (isPeriodPreviewReport(report)) {
+    return `导出${scopeLabel}${reportKindLabelForPeriod(report.period)}图片`
+  }
+  return `导出${scopeLabel}年度报告图片`
+})
+
+const currentReportHasData = computed(() => {
+  const report = currentPeriodReport.value
+  return Boolean(report && (report.totalSeconds > 0 || report.totalChars > 0 || report.readingDays > 0))
+})
+
+const formatCompactNumber = (value: number) => {
+  const safeValue = Math.max(0, Math.round(value))
+  if (safeValue >= 10000) {
+    const wan = safeValue / 10000
+    return `${wan >= 100 ? Math.round(wan) : wan.toFixed(1)}万`
+  }
+  return safeValue.toLocaleString('zh-CN')
+}
+
+const currentReportLines = computed(() => {
+  const report = currentPeriodReport.value
+  if (!report || !currentReportHasData.value) return ['当前范围还没有足够的阅读统计']
+  const lines = [
+    `${report.rangeTitle} · ${formatDuration(report.totalSeconds)} · ${formatCompactNumber(report.totalChars)} 字`,
+    `阅读天数 ${report.readingDays} 天 · 最长连续 ${report.longestStreak} 天`,
+  ]
+  if (report.scope === 'book') {
+    if (report.bookTitle) lines.push(`书籍：${report.bookTitle}`)
+    if (report.bookAuthor) lines.push(`作者：${report.bookAuthor}`)
+    if (report.topTags[0]?.name) lines.push(`标签：${report.topTags[0].name}`)
+    if (report.topSeries[0]?.name) lines.push(`系列：${report.topSeries[0].name}`)
+  } else {
+    lines.push(selectedPeriod.value === 'year'
+      ? `完成书籍 ${report.finishedBooks} 本`
+      : `阅读书籍 ${report.activeBooks} 本`)
+    if (report.topBooks[0]?.title) lines.push(`Top 书籍：${report.topBooks[0].title}`)
+    if (report.topAuthors[0]?.name) lines.push(`常读作者：${report.topAuthors[0].name}`)
+    if (report.topTags[0]?.name) lines.push(`常读标签：${report.topTags[0].name}`)
+    if (report.topSeries[0]?.name) lines.push(`常读系列：${report.topSeries[0].name}`)
+  }
+  return lines
+})
+
+const selectPeriod = (period: ReadingStatsPeriod) => {
+  selectedPeriod.value = period
+}
+
+const selectWeekMode = (mode: ReadingStatsWeekMode) => {
+  selectedWeekMode.value = mode
+}
 
 const setSyncStatus = (message: string, autoClear = false) => {
   syncStatusText.value = message
@@ -114,12 +234,19 @@ const loadData = async (options: { showLoading?: boolean } = {}) => {
   try {
     overview.value = await fetchReadingStatsOverview(props.bookId)
     calendar.value = await fetchReadingCalendar(props.bookId)
+    currentPeriodReport.value = await createReadingPeriodReport({
+      period: selectedPeriodReportKey.value,
+      weekMode: selectedWeekMode.value,
+      bookId: props.bookId,
+    })
     if (props.bookId) {
       bookDetail.value = await fetchReadingStatsBookDetail(props.bookId)
       ranking.value = []
     } else {
       bookDetail.value = null
-      ranking.value = await fetchReadingStatsBookRank(selectedPeriod.value)
+      ranking.value = await fetchReadingStatsBookRank(selectedPeriod.value, {
+        weekMode: selectedWeekMode.value,
+      })
     }
   } finally {
     if (showLoading) loading.value = false
@@ -189,9 +316,17 @@ const formatEstimate = (seconds: number | null) => {
 }
 
 const exportReport = async (format: 'html' | 'json') => {
+  if (!currentReportHasData.value) {
+    window.alert(`暂无可生成的${reportKindLabel.value}`)
+    return
+  }
   exporting.value = true
   try {
-    await exportAnnualReadingReport(format)
+    await exportReadingPeriodReport(format, {
+      period: selectedPeriodReportKey.value,
+      weekMode: selectedWeekMode.value,
+      bookId: props.bookId,
+    })
   } finally {
     exporting.value = false
   }
@@ -226,14 +361,15 @@ const resetAnnualReportMetricSelection = (report: AnnualReadingReport) => {
 }
 
 const selectAnnualReportMetric = (metric: AnnualReportMetricKey) => {
-  if (!previewReport.value) return
+  const report = annualPreviewReport.value
+  if (!report) return
   if (selectedAnnualReportMetrics.value.includes(metric)) return
   const nextMetrics = selectedAnnualReportMetrics.value.length >= 3
     ? selectedAnnualReportMetrics.value.slice(1)
     : [...selectedAnnualReportMetrics.value]
   nextMetrics.push(metric)
-  selectedAnnualReportMetrics.value = sanitizeAnnualReportMetrics(previewReport.value, nextMetrics)
-  saveStoredAnnualReportMetrics(previewReport.value.scope, selectedAnnualReportMetrics.value)
+  selectedAnnualReportMetrics.value = sanitizeAnnualReportMetrics(report, nextMetrics)
+  saveStoredAnnualReportMetrics(report.scope, selectedAnnualReportMetrics.value)
 }
 
 const updatePreviewScale = () => {
@@ -264,16 +400,28 @@ const openImageExportDialog = async () => {
   selectedAnnualReportMetrics.value = []
   imagePreviewLoading.value = true
   try {
-    const report = await createAnnualReadingReport(new Date().getFullYear(), { bookId: props.bookId })
-    if (report.totalSeconds <= 0 && report.totalChars <= 0) {
-      throw new Error(props.bookId ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
+    if (selectedPeriod.value === 'year') {
+      const report = await createAnnualReadingReport(new Date().getFullYear(), { bookId: props.bookId })
+      if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+        throw new Error(props.bookId ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
+      }
+      previewReport.value = report
+      resetAnnualReportMetricSelection(report)
+    } else {
+      const report = await createReadingPeriodReport({
+        period: selectedPeriodReportKey.value,
+        weekMode: selectedWeekMode.value,
+        bookId: props.bookId,
+      })
+      if (report.totalSeconds <= 0 && report.totalChars <= 0) {
+        throw new Error(props.bookId ? '这本书当前范围还没有足够的阅读统计' : `暂无可生成的${reportKindLabel.value}`)
+      }
+      previewReport.value = report
     }
-    previewReport.value = report
-    resetAnnualReportMetricSelection(report)
     showImageExportDialog.value = true
     await attachPreviewResizeObserver()
   } catch (error) {
-    console.error('Prepare annual report preview failed:', error)
+    console.error('Prepare reading report preview failed:', error)
     window.alert(error instanceof Error ? error.message : '生成预览失败')
   } finally {
     imagePreviewLoading.value = false
@@ -283,15 +431,26 @@ const openImageExportDialog = async () => {
 const exportReportImage = async () => {
   exporting.value = true
   try {
-    await exportAnnualReadingReportImage({
-      template: selectedImageTemplate.value,
-      theme: selectedImageTheme.value,
-      bookId: props.bookId,
-      summaryMetrics: selectedAnnualReportMetrics.value,
-    })
+    const periodReport = periodPreviewReport.value
+    if (periodReport) {
+      await exportReadingPeriodReportImage({
+        period: periodReport.period,
+        weekMode: periodReport.weekMode || selectedWeekMode.value,
+        template: selectedImageTemplate.value,
+        theme: selectedImageTheme.value,
+        bookId: props.bookId,
+      })
+    } else {
+      await exportAnnualReadingReportImage({
+        template: selectedImageTemplate.value,
+        theme: selectedImageTheme.value,
+        bookId: props.bookId,
+        summaryMetrics: selectedAnnualReportMetrics.value,
+      })
+    }
     showImageExportDialog.value = false
   } catch (error) {
-    console.error('Export annual report image failed:', error)
+    console.error('Export reading report image failed:', error)
     window.alert(error instanceof Error ? error.message : '导出图片失败')
   } finally {
     exporting.value = false
@@ -305,8 +464,12 @@ watch(() => props.bookId, () => {
 })
 
 watch(selectedPeriod, () => {
-  if (props.bookId) return
   loadData().catch((error) => console.error('Reload reading stats ranking failed:', error))
+})
+
+watch(selectedWeekMode, () => {
+  if (selectedPeriod.value !== 'week') return
+  loadData().catch((error) => console.error('Reload weekly reading stats failed:', error))
 })
 
 onMounted(async () => {
@@ -356,29 +519,6 @@ watch(showImageExportDialog, (shown) => {
 
       <div class="flex flex-wrap justify-end gap-2">
         <button
-          v-if="!props.bookId"
-          @click="exportReport('html')"
-          :disabled="exporting"
-          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
-        >
-          导出 HTML
-        </button>
-        <button
-          v-if="!props.bookId"
-          @click="exportReport('json')"
-          :disabled="exporting"
-          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
-        >
-          导出 JSON
-        </button>
-        <button
-          @click="openImageExportDialog"
-          :disabled="exporting || imagePreviewLoading"
-          class="app-button px-4 py-2 text-[13px] disabled:opacity-50"
-        >
-          {{ imagePreviewLoading ? '准备预览...' : '导出图片' }}
-        </button>
-        <button
           @click="syncAndReload()"
           :disabled="syncing"
           class="app-button app-button-primary px-4 py-2 text-[13px] disabled:opacity-50"
@@ -399,7 +539,7 @@ watch(showImageExportDialog, (shown) => {
             <div class="flex items-start justify-between gap-4 mb-6">
               <div>
                 <h3 class="app-title text-[18px] font-semibold">
-                  {{ previewReport?.scope === 'book' ? '导出单书年度报告图片' : '导出年度报告图片' }}
+                  {{ imageExportDialogTitle }}
                 </h3>
                 <p class="app-muted text-[12px] mt-1">横屏 1920 x 1080 PNG</p>
               </div>
@@ -516,6 +656,58 @@ watch(showImageExportDialog, (shown) => {
       </Transition>
     </Teleport>
 
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+      <div class="period-toggle" aria-label="统计范围">
+        <button
+          v-for="option in periodOptions"
+          :key="option.value"
+          type="button"
+          class="period-toggle-button"
+          :class="{ 'is-active': selectedPeriod === option.value }"
+          @click="selectPeriod(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+      <div
+        v-if="selectedPeriod === 'week'"
+        class="week-mode-toggle"
+        aria-label="周统计口径"
+      >
+        <button
+          v-for="option in weekModeOptions"
+          :key="option.value"
+          type="button"
+          class="week-mode-button"
+          :class="{ 'is-active': selectedWeekMode === option.value }"
+          @click="selectWeekMode(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+    </div>
+
+    <div class="app-card current-range-card mb-8 p-5">
+      <div>
+        <div class="stats-label">{{ currentRangeLabel }}阅读总时长</div>
+        <div class="stats-value is-primary">{{ formatDuration(currentRangeSeconds) }}</div>
+      </div>
+      <div class="current-range-meta">
+        <div>
+          <span>阅读字数</span>
+          <strong>{{ formatCompactNumber(currentPeriodReport?.totalChars || 0) }} 字</strong>
+        </div>
+        <div>
+          <span>阅读天数</span>
+          <strong>{{ currentPeriodReport?.readingDays || 0 }} 天</strong>
+        </div>
+        <div>
+          <span>最长连续</span>
+          <strong>{{ currentPeriodReport?.longestStreak || 0 }} 天</strong>
+        </div>
+      </div>
+    </div>
+
     <div v-if="bookDetail" class="app-card mb-8 p-5">
       <div class="flex items-center gap-4">
         <BookCover
@@ -534,45 +726,6 @@ watch(showImageExportDialog, (shown) => {
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-      <div class="stats-card">
-        <div class="stats-label">今日</div>
-        <div class="stats-value">{{ formatDuration(overview.today) }}</div>
-      </div>
-      <div class="stats-card">
-        <div class="stats-label">本周</div>
-        <div class="stats-value">{{ formatDuration(overview.week) }}</div>
-      </div>
-      <div class="stats-card">
-        <div class="stats-label">本年</div>
-        <div class="stats-value">{{ formatDuration(overview.year) }}</div>
-      </div>
-    </div>
-
-    <div v-if="!props.bookId" class="mb-4 flex items-center gap-2">
-      <button
-        @click="selectedPeriod = 'today'"
-        :class="{ 'is-active': selectedPeriod === 'today' }"
-        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
-      >
-        今日排行
-      </button>
-      <button
-        @click="selectedPeriod = 'week'"
-        :class="{ 'is-active': selectedPeriod === 'week' }"
-        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
-      >
-        本周排行
-      </button>
-      <button
-        @click="selectedPeriod = 'year'"
-        :class="{ 'is-active': selectedPeriod === 'year' }"
-        class="app-chip px-3 py-1.5 text-[12px] font-medium transition-colors"
-      >
-        本年排行
-      </button>
     </div>
 
     <div v-if="loading" class="py-16 text-center app-muted">
@@ -599,17 +752,59 @@ watch(showImageExportDialog, (shown) => {
         </div>
       </div>
 
+      <div class="app-card p-5 mb-8">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+          <div>
+            <div class="text-[15px] font-semibold app-title">{{ reportKindLabel }}</div>
+            <div class="text-[12px] app-muted mt-1">{{ currentPeriodReport?.rangeTitle || currentRangeLabel }}</div>
+          </div>
+          <div class="report-actions">
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || !currentReportHasData"
+              @click="exportReport('html')"
+            >
+              生成 HTML
+            </button>
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || !currentReportHasData"
+              @click="exportReport('json')"
+            >
+              生成 JSON
+            </button>
+            <button
+              type="button"
+              class="app-button px-3 py-1.5 text-[12px] disabled:opacity-50"
+              :disabled="exporting || imagePreviewLoading || !currentReportHasData"
+              @click="openImageExportDialog"
+            >
+              {{ imagePreviewLoading ? '准备预览...' : '图片预览' }}
+            </button>
+          </div>
+        </div>
+        <div class="report-summary-lines">
+          <div v-for="line in currentReportLines" :key="line">{{ line }}</div>
+        </div>
+      </div>
+
       <div
         v-if="!props.bookId && ranking.length === 0"
         class="app-card p-10 text-center app-muted"
       >
-        暂无阅读统计数据，开启记录后读一会儿书就会在这里出现。
+        当前范围还没有阅读统计数据。
       </div>
 
       <div
         v-else-if="!props.bookId"
         class="app-card app-divide-y overflow-hidden"
       >
+        <div class="px-5 py-4">
+          <div class="text-[15px] font-semibold app-title">按书统计</div>
+          <div class="text-[12px] app-muted mt-1">{{ currentRangeLabel }}</div>
+        </div>
         <button
           v-for="item in ranking"
           :key="item.bookIdentity"
@@ -643,16 +838,6 @@ watch(showImageExportDialog, (shown) => {
 </template>
 
 <style scoped>
-.stats-card {
-  background: var(--app-card);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-card);
-  padding: 1.25rem;
-  box-shadow: var(--app-shadow);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
-}
-
 .stats-label {
   font-size: 12px;
   color: var(--app-text-muted);
@@ -663,6 +848,97 @@ watch(showImageExportDialog, (shown) => {
   font-size: 24px;
   font-weight: 700;
   color: var(--app-text);
+}
+
+.period-toggle,
+.week-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  min-height: 2.25rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-input);
+  background: rgba(var(--app-glass-strong-rgb), var(--app-glass-opacity, 0.8));
+}
+
+.period-toggle-button,
+.week-mode-button {
+  min-width: 3.25rem;
+  height: 1.75rem;
+  padding: 0 0.65rem;
+  border-radius: calc(var(--app-radius-input) - 4px);
+  color: var(--app-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.period-toggle-button.is-active,
+.week-mode-button.is-active {
+  background: var(--app-accent);
+  color: var(--app-text-on-primary);
+}
+
+.current-range-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 1fr);
+  gap: 1.25rem;
+  align-items: center;
+}
+
+.stats-value.is-primary {
+  font-size: 30px;
+}
+
+.current-range-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.current-range-meta div {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-input);
+  background: rgba(var(--app-glass-strong-rgb), 0.42);
+}
+
+.current-range-meta span,
+.current-range-meta strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-range-meta span {
+  font-size: 11px;
+  color: var(--app-text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.current-range-meta strong {
+  font-size: 13px;
+  color: var(--app-text);
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.report-summary-lines {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--app-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .calendar-grid {
@@ -776,6 +1052,18 @@ watch(showImageExportDialog, (shown) => {
 }
 
 @media (max-width: 720px) {
+  .current-range-card {
+    grid-template-columns: 1fr;
+  }
+
+  .current-range-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .report-actions {
+    justify-content: flex-start;
+  }
+
   .calendar-grid {
     grid-template-columns: repeat(15, minmax(0, 1fr));
   }
