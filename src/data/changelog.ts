@@ -7,6 +7,17 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.2.4',
+    date: '2026-06-16',
+    changes: [
+      'Stats Layout（统计布局）：阅读时长导出报告入口移动到按书统计下方，先展示书籍分布，再提供 HTML、JSON 与 PNG 导出',
+      'Daily Report（每日报告）：日报告图片主视觉改为今日按书阅读构成，用横向占比条展示各书时长、字数和贡献比例',
+      'Daily Context（每日上下文）：最近 7 天柱状图降级为小型上下文提示，并高亮报告当天，避免日报告只有单根主柱',
+      'Report Data（报告数据）：周期报告新增 rhythmDaily 展示数据，保留 daily 作为真实当前范围明细，周报和年报口径不变',
+      'Tests（测试）：补充日报告 7 天上下文与周报 rhythmDaily 口径覆盖，确保 HTML/JSON 与图片数据来源稳定',
+    ]
+  },
+  {
     version: '1.2.3',
     date: '2026-06-16',
     changes: [
