@@ -723,15 +723,6 @@ function deleteLocalSnapshot(id: string): { success: boolean } {
   return { success: true }
 }
 
-function createDailyStartupSnapshot(): void {
-  const today = new Date().toISOString().slice(0, 10)
-  const existsToday = listLocalSnapshots().some((snapshot) => (
-    snapshot.reason === '每日自动快照'
-    && new Date(snapshot.createdAt).toISOString().slice(0, 10) === today
-  ))
-  if (!existsToday) createLocalSnapshot('每日自动快照')
-}
-
 function initializeJsonStore(): void {
   ensureDataDir()
   for (const [entityType, fileName] of Object.entries(JSON_FILES)) {
@@ -1271,7 +1262,6 @@ app.whenReady().then(async () => {
   screen.on('display-metrics-changed', () => notifyDisplayRefreshRate(true))
   try {
     initializeJsonStore()
-    createDailyStartupSnapshot()
     console.log('JSON data store initialized successfully')
   } catch (error) {
     console.error('JSON data store init failed:', String(error))
