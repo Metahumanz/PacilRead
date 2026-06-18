@@ -18,6 +18,7 @@ import { usePageFlipScheduler } from '../composables/usePageFlipScheduler'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
+import { isSimilarRemoteProgress } from '../utils/remoteProgress'
 import { toPng } from 'html-to-image'
 import { quoteContextExcerpt, quoteTextFromPageLines } from '../utils/quoteShare'
 
@@ -69,6 +70,16 @@ const shareCardGenerating = ref(false)
 const showSharePreview = ref(false)
 const bookmarkPanelVersion = ref(0)
 const bookmarkStatus = ref('')
+interface RemoteProgressSuggestion {
+  chapterIndex: number
+  chapterTitle: string
+  charOffset: number
+  timestamp: number
+  excerpt: string
+}
+const remoteProgressSuggestion = ref<RemoteProgressSuggestion | null>(null)
+const remoteProgressChecking = ref(false)
+let readerDisposed = false
 
 let lastFirstReadableLoggedBookId = -1
 
@@ -100,7 +111,23 @@ const {
 const { rules, fetchRules, applyReplacements } = useRules()
 const { effectiveRefreshRate } = useDisplayRefreshRate()
 const { startHUD, stopHUD, formatHUD } = useHUD()
-const { getApplicableProgressFromWebdav, uploadProgressToWebdav } = useSync()
+const { canDownloadProgressFromWebdav, getApplicableProgressFromWebdav, uploadProgressToWebdav } = useSync()
+type ProgressUploadContext = Parameters<typeof uploadProgressToWebdav>[0]
+let deferredProgressUpload: ProgressUploadContext | null = null
+
+const guardedUploadProgressToWebdav = async (context: ProgressUploadContext) => {
+  if (remoteProgressChecking.value || remoteProgressSuggestion.value) {
+    deferredProgressUpload = context
+    return
+  }
+  await uploadProgressToWebdav(context)
+}
+
+const flushDeferredProgressUpload = async () => {
+  const pending = deferredProgressUpload
+  deferredProgressUpload = null
+  if (pending && !readerDisposed) await uploadProgressToWebdav(pending)
+}
 const { resolvedBucket } = useAppTheme()
 const readingTimeTracker = useReadingTimeTracker({
   enabled: readingTimeTrackingEnabled,
@@ -203,7 +230,7 @@ const {
   getTotalPages: () => pagination.totalPages.value,
   getPendingWebdavPos: () => pagination.pendingWebdavPos.value,
   getChapterOffset: () => getChapterOffset(),
-  uploadProgressToWebdav,
+  uploadProgressToWebdav: guardedUploadProgressToWebdav,
 })
 
 // ---- Reader Paginator (async prewarm + cache) ----
@@ -751,21 +778,76 @@ const toggleAutoPage = () => { if (autoPageActive.value) stopAutoPage(); else st
 watch(autoPageSpeed, () => { if (autoPageActive.value) startAutoPage() })
 
 // ---- WebDAV download ----
-const applyProgressFromWebdav = async () => {
-  if (!book.value) return
+const checkRemoteProgressInBackground = async () => {
+  if (!book.value || readerDisposed) return
+  let suggestionCreated = false
   try {
     const remote = await getApplicableProgressFromWebdav(book.value)
-    if (remote && remote.durChapterIndex >= 0 && remote.durChapterIndex < chapters.value.length) {
-      pendingWebdavPos.value = remote.durChapterPos
-      await prewarmChapterAt(remote.durChapterIndex, {
-        mode: 'partial',
-        targetOffset: pendingWebdavPos.value,
-        extraPagesAfterTarget: 2,
-      })
-      if (remote.durChapterIndex !== currentChapterIndex.value) goToChapter(remote.durChapterIndex, true)
-      else recalc()
+    if (!remote || readerDisposed) return
+    if (remote.durChapterIndex < 0 || remote.durChapterIndex >= chapters.value.length) return
+    if (isSimilarRemoteProgress(
+      remote.durChapterIndex,
+      remote.durChapterPos,
+      currentChapterIndex.value,
+      getChapterOffset(),
+    )) return
+
+    const chapter = chapters.value[remote.durChapterIndex]
+    const excerpt = await window.electronAPI.library.getChapterTextExcerpt(
+      props.bookId,
+      chapter.id,
+      remote.durChapterPos,
+      64,
+    )
+    if (readerDisposed) return
+    remoteProgressSuggestion.value = {
+      chapterIndex: remote.durChapterIndex,
+      chapterTitle: chapter.title || remote.durChapterTitle || `第 ${remote.durChapterIndex + 1} 章`,
+      charOffset: remote.durChapterPos,
+      timestamp: remote.durChapterTime,
+      excerpt: excerpt || '打开后可从该章的云端位置继续阅读',
     }
+    suggestionCreated = true
   } catch (e) { console.error('WebDAV download err:', e) }
+  finally {
+    if (!suggestionCreated && !readerDisposed) {
+      remoteProgressChecking.value = false
+      await flushDeferredProgressUpload()
+    }
+  }
+}
+
+const keepLocalProgress = async () => {
+  remoteProgressSuggestion.value = null
+  remoteProgressChecking.value = false
+  await flushDeferredProgressUpload()
+}
+
+const jumpToRemoteProgress = async () => {
+  const target = remoteProgressSuggestion.value
+  if (!target) return
+  remoteProgressSuggestion.value = null
+  remoteProgressChecking.value = true
+  deferredProgressUpload = null
+
+  try {
+    pendingWebdavPos.value = target.charOffset
+    await prewarmChapterAt(target.chapterIndex, {
+      mode: 'partial',
+      targetOffset: target.charOffset,
+      extraPagesAfterTarget: 2,
+    })
+    if (readerDisposed) return
+    if (target.chapterIndex !== currentChapterIndex.value) goToChapter(target.chapterIndex, true)
+    else recalc()
+    if (book.value) book.value.lastReadAt = Math.max(book.value.lastReadAt || 0, target.timestamp)
+  } catch (error) {
+    console.error('Jump to WebDAV progress failed:', error)
+  } finally {
+    remoteProgressChecking.value = false
+    deferredProgressUpload = null
+    if (!readerDisposed) window.setTimeout(() => saveProgress(), 160)
+  }
 }
 
 // ---- Interaction ----
@@ -782,7 +864,7 @@ const disableKeyHints = async () => {
 
 const isReaderChromeTarget = (target: EventTarget | null) => {
   const t = target as HTMLElement | null
-  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p, .key-hints-overlay')
+  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p, .key-hints-overlay, .remote-progress-banner')
 }
 
 const handleClick = (e: MouseEvent) => {
@@ -912,6 +994,9 @@ const toggleImmersiveMode = () => {
 }
 const handleGoBack = async () => {
   try {
+    remoteProgressSuggestion.value = null
+    remoteProgressChecking.value = false
+    deferredProgressUpload = null
     await readingTimeTracker.stop()
     await flushProgress()
     closeAll()
@@ -1027,9 +1112,11 @@ onMounted(async () => {
   } else if (book.value) {
     currentPage.value = book.value.progressOffset || 0
   }
-  if (!props.initialBookmark) {
-    await applyProgressFromWebdav()
-  }
+  const shouldCheckRemoteProgress = !props.initialBookmark
+    && !!book.value
+    && chapters.value.length > 0
+    && canDownloadProgressFromWebdav()
+  remoteProgressChecking.value = shouldCheckRemoteProgress
   setProgressReady(true)
   await ensureChapterContent(currentChapterIndex.value)
   await prewarmChapterAt(currentChapterIndex.value, {
@@ -1049,6 +1136,7 @@ onMounted(async () => {
     }
     prewarmNearbyChapters()
     prewarmChapterAt(currentChapterIndex.value)
+    if (shouldCheckRemoteProgress) void checkRemoteProgressInBackground()
   })
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleKeydown)
@@ -1058,6 +1146,10 @@ onMounted(async () => {
   injectHighlightStyles()
 })
 onUnmounted(async () => {
+  readerDisposed = true
+  remoteProgressSuggestion.value = null
+  remoteProgressChecking.value = false
+  deferredProgressUpload = null
   stopHUD()
   stopTts()
   stopAutoPage()
@@ -1235,6 +1327,28 @@ onUnmounted(async () => {
         </div>
       </Transition>
 
+      <Transition name="remote-progress">
+        <div
+          v-if="remoteProgressSuggestion"
+          class="remote-progress-banner"
+          role="status"
+          aria-live="polite"
+          @click.stop
+          @pointerdown.stop
+          @wheel.stop.prevent
+          @contextmenu.stop
+        >
+          <div class="remote-progress-copy">
+            <strong>云端进度 · {{ remoteProgressSuggestion.chapterTitle }}</strong>
+            <small>大约读到：{{ remoteProgressSuggestion.excerpt }}</small>
+          </div>
+          <div class="remote-progress-actions">
+            <button type="button" @click.stop="keepLocalProgress">留在这里</button>
+            <button type="button" class="remote-progress-jump" @click.stop="jumpToRemoteProgress">跳转</button>
+          </div>
+        </div>
+      </Transition>
+
       <!-- Reader Menu -->
       <Transition name="menu-slide">
         <ReaderMenu 
@@ -1351,6 +1465,22 @@ onUnmounted(async () => {
 .share-preview-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .share-preview-actions .app-button,.share-preview-dismiss { min-height:48px; justify-content:center; }
 .bookmark-toast { position:absolute; left:50%; top:86px; transform:translateX(-50%); z-index:70; padding:8px 14px; border-radius:999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.12); color:white; font-size:13px; font-weight:700; box-shadow:0 12px 32px rgba(0,0,0,0.35); backdrop-filter:blur(16px); }
+.remote-progress-banner { position:absolute; z-index:80; top:16px; left:50%; width:min(780px,calc(100% - 32px)); min-height:68px; transform:translateX(-50%); box-sizing:border-box; display:flex; align-items:center; gap:18px; padding:12px 14px 12px 18px; border:1px solid var(--app-border); border-radius:var(--app-radius-card); color:var(--app-text); background:color-mix(in srgb,var(--app-surface) 92%,transparent); box-shadow:var(--app-shadow-hover); backdrop-filter:blur(18px); user-select:none; }
+.remote-progress-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:5px; }
+.remote-progress-copy strong { overflow:hidden; color:var(--app-text); font-size:14px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.remote-progress-copy small { display:-webkit-box; overflow:hidden; color:var(--app-text-muted); font-size:12px; line-height:1.45; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.remote-progress-actions { flex:none; display:flex; align-items:center; gap:8px; }
+.remote-progress-actions button { min-width:76px; height:36px; padding:0 13px; border:1px solid var(--app-border); border-radius:10px; color:var(--app-text-secondary); background:var(--app-surface-secondary); font-size:13px; font-weight:700; cursor:pointer; }
+.remote-progress-actions button:hover { color:var(--app-text); background:var(--app-surface-hover); }
+.remote-progress-actions .remote-progress-jump { border-color:color-mix(in srgb,var(--app-accent) 70%,transparent); color:white; background:var(--app-accent); }
+.remote-progress-actions .remote-progress-jump:hover { background:var(--app-accent-hover); }
+.remote-progress-enter-active,.remote-progress-leave-active { transition:opacity .2s ease,transform .24s cubic-bezier(.16,1,.3,1); }
+.remote-progress-enter-from,.remote-progress-leave-to { opacity:0; transform:translate(-50%,-12px); }
+@media (max-width:640px) {
+  .remote-progress-banner { align-items:flex-start; gap:10px; padding:12px; }
+  .remote-progress-actions { flex-direction:column-reverse; }
+  .remote-progress-actions button { min-width:70px; height:32px; padding:0 10px; }
+}
 .load { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; color:rgba(255,255,255,0.5); z-index:1; }
 .spinner { width:40px; height:40px; border:2px solid rgba(59,130,246,0.2); border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg) } }

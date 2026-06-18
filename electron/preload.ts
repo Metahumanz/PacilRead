@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateBook: (bookId: number, fields: Record<string, unknown>) => ipcRenderer.invoke('library:updateBook', bookId, fields),
     getBookChapterList: (bookId: number) => ipcRenderer.invoke('library:getBookChapterList', bookId),
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => ipcRenderer.invoke('library:getChapterContentBatch', bookId, chapterIds),
+    getChapterTextExcerpt: (bookId: number, chapterId: number, charOffset: number, maxChars?: number) => (
+      ipcRenderer.invoke('library:getChapterTextExcerpt', bookId, chapterId, charOffset, maxChars)
+    ),
     getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('library:getBookIdsWithFileGzipChapters'),
     hasBookChapterTextFiles: (bookId: number) => ipcRenderer.invoke('library:hasBookChapterTextFiles', bookId),
     createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('library:createBookChapterTextZip', bookId),

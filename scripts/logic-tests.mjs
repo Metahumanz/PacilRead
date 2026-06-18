@@ -62,6 +62,13 @@ assert.equal(webdav.sanitizeWebdavDirectorySegment('../desktop/settings'), 'desk
 assert.equal(webdav.buildProgressFileName({ title: 'A:B/C', author: '' }), 'A_B_C_未知.json')
 assert.deepEqual(plain(webdav.extractHrefValues('<d:href>/a.txt</d:href><href>/b.txt</href>')), ['/a.txt', '/b.txt'])
 
+const remoteProgress = loadTsModule('src/utils/remoteProgress.ts')
+assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 2, 450), true)
+assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1300, 2, 450), false)
+assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 3, 1200), false)
+assert.equal(remoteProgress.buildRemoteProgressExcerpt('0123456789ABCDEFGHIJ', 10, 9), '…789ABCDEF…')
+assert.equal(remoteProgress.buildRemoteProgressExcerpt('第一行\n  第二行', 0, 64), '第一行 第二行')
+
 const settingsSchema = loadTsModule('src/utils/settingsSchema.ts')
 const boolDef = settingsSchema.boolSetting('enabled', false, 'ui')
 assert.equal(settingsSchema.readSetting({ enabled: 'true' }, boolDef), true)
