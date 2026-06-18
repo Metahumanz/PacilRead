@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { perfLog, perfNow } from '../../../utils/perf'
-import type { ChapterContentPayload, ReaderChapter } from '../../../types/entities'
+import type { BookSearchResult, ReaderChapter } from '../../../types/entities'
 
-interface SearchResult { chapterIndex: number; matchIndex: number; chapterTitle: string; snippet: string }
+interface SearchResult extends BookSearchResult { matchIndex: number }
 
 const props = defineProps<{
   bookId: number
@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'jump', index: number): void
+  (e: 'jump', result: BookSearchResult): void
 }>()
 
 const searchQuery = ref('')
@@ -24,49 +24,17 @@ const doSearch = async () => {
   const runId = ++searchRunId
   const q = searchQuery.value.trim()
   if (!q) { searchResults.value = []; searching.value = false; return }
-  const queryLower = q.toLowerCase()
   const startedAt = perfNow()
   searching.value = true
   try {
-    const results: SearchResult[] = []
-    const batchSize = 8
-    for (let start = 0; start < props.chapters.length; start += batchSize) {
-      if (runId !== searchRunId) return
-      const batch = props.chapters.slice(start, start + batchSize)
-      const idsToLoad = batch
-        .filter((chapter) => !chapter.body_text && !chapter.body)
-        .map((chapter) => chapter.id)
-      const loaded = idsToLoad.length > 0
-        ? await window.electronAPI.library.getChapterContentBatch(props.bookId, idsToLoad) as ChapterContentPayload[]
-        : []
-      if (runId !== searchRunId) return
-      const loadedById = new Map(loaded.map((chapter) => [chapter.id, chapter]))
-
-      for (let offset = 0; offset < batch.length; offset++) {
-        const chapter = batch[offset]
-        const i = start + offset
-        const loadedChapter = loadedById.get(chapter.id)
-        const plain = chapter.body_text || loadedChapter?.body_text || (chapter.body || loadedChapter?.body || '').replace(/<[^>]+>/g, '')
-        const plainLower = plain.toLowerCase()
-        let matchIndex = 0
-        let startIndex = 0
-        while (startIndex < plain.length) {
-          const idx = plainLower.indexOf(queryLower, startIndex)
-          if (idx < 0) break
-          const snippetStart = Math.max(0, idx - 20)
-          const snippetEnd = Math.min(plain.length, idx + q.length + 40)
-          results.push({
-            chapterIndex: i,
-            matchIndex: matchIndex++,
-            chapterTitle: chapter.title,
-            snippet: (snippetStart > 0 ? '...' : '') + plain.substring(snippetStart, snippetEnd) + (snippetEnd < plain.length ? '...' : '')
-          })
-          startIndex = idx + q.length
-        }
-      }
-      searchResults.value = [...results]
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    }
+    const results = await window.electronAPI.library.searchBook(props.bookId, q)
+    if (runId !== searchRunId) return
+    const counts = new Map<number, number>()
+    searchResults.value = results.map(result => {
+      const matchIndex = counts.get(result.chapterIndex) || 0
+      counts.set(result.chapterIndex, matchIndex + 1)
+      return { ...result, matchIndex }
+    })
   } catch (e) {
     console.error(e)
   } finally {
@@ -77,8 +45,8 @@ const doSearch = async () => {
   }
 }
 
-const handleJump = (idx: number) => {
-  emit('jump', idx)
+const handleJump = (result: SearchResult) => {
+  emit('jump', result)
 }
 </script>
 
@@ -92,7 +60,7 @@ const handleJump = (idx: number) => {
     <div v-if="searchResults.length > 0" class="search-count">找到 {{ searchResults.length }} 个结果</div>
     <div v-else-if="searchQuery && !searching" class="search-count empty">未找到匹配内容</div>
     <div class="search-list">
-      <button v-for="sr in searchResults" :key="`${sr.chapterIndex}-${sr.matchIndex}`" @click="handleJump(sr.chapterIndex)" class="search-item">
+      <button v-for="sr in searchResults" :key="`${sr.chapterIndex}-${sr.matchIndex}`" @click="handleJump(sr)" class="search-item">
         <span class="sr-ch">{{ sr.chapterTitle }}</span>
         <span class="sr-snip">{{ sr.snippet }}</span>
       </button>

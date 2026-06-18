@@ -5,6 +5,9 @@ import { useDataStore } from '../composables/useDataStore'
 import { useSync } from '../composables/useSync'
 import BookCover from './common/BookCover.vue'
 import { perfLog, perfNow } from '../utils/perf'
+import { matchesBookshelfFilters } from '../utils/bookshelfManagement'
+import { normalizeTags, type ReadingStatus } from '../utils/bookMetadata'
+import type { BatchClassificationOperation } from '../types/entities'
 
 interface BookDisplay {
   id: number
@@ -18,6 +21,9 @@ interface BookDisplay {
   pinned: boolean
   currentChapterTitle: string
   chapterCount: number
+  tags: string[]
+  series: string
+  readingStatus: ReadingStatus
 }
 
 const emit = defineEmits<{ (e: 'open-book', bookId: number): void }>()
@@ -32,6 +38,12 @@ const books = ref<BookDisplay[]>([])
 const loading = ref(true)
 const importing = ref(false)
 const progressSyncStatus = ref('')
+const managementMode = ref(false)
+const selectedBookIds = ref<Set<number>>(new Set())
+const selectedTag = ref('')
+const selectedSeries = ref('')
+const selectedStatus = ref('')
+const batchWorking = ref(false)
 
 const searchQuery = ref('')
 let progressPrefetchRun = 0
@@ -43,13 +55,23 @@ const invalidateDataStore = () => {
 }
 
 const filteredBooks = computed(() => {
-  if (!searchQuery.value) return books.value
-  const q = searchQuery.value.toLowerCase()
-  return books.value.filter(b => b.title.toLowerCase().includes(q) || (b.author && b.author.toLowerCase().includes(q)))
+  return books.value.filter(book => matchesBookshelfFilters(book, {
+    query: searchQuery.value,
+    tag: selectedTag.value,
+    series: selectedSeries.value,
+    status: selectedStatus.value,
+  }))
 })
 
+const availableTags = computed(() => Array.from(new Set(books.value.flatMap(book => book.tags || []))).sort((a, b) => a.localeCompare(b, 'zh-CN')))
+const availableSeries = computed(() => Array.from(new Set(books.value.map(book => book.series).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-CN')))
+const hasActiveFilters = computed(() => Boolean(selectedTag.value || selectedSeries.value || selectedStatus.value))
+const selectedCount = computed(() => selectedBookIds.value.size)
+
 const bookshelfStatusText = computed(() => (
-  progressSyncStatus.value || `共 ${filteredBooks.value.length} 本书籍`
+  progressSyncStatus.value || (hasActiveFilters.value
+    ? `筛选结果 ${filteredBooks.value.length} 本，共 ${books.value.length} 本`
+    : `共 ${filteredBooks.value.length} 本书籍`)
 ))
 
 const sortBooks = (items: BookDisplay[]) => [...items].sort((a, b) => {
@@ -136,20 +158,117 @@ const fetchBooks = async () => {
   if (fetched) void prefetchBookshelfProgress()
 }
 
+const importSelectedFile = async (filePath: string, allowDuplicate = false) => {
+  const result = await window.electronAPI.library.importBook(filePath, allowDuplicate)
+  if (result.status === 'duplicate') {
+    const reason = result.matchType === 'exact_content' ? '内容完全相同' : '书名和作者相同'
+    if (confirm(`发现重复书籍（${reason}）：《${result.title}》\n\n确定仍然导入吗？`)) {
+      return importSelectedFile(filePath, true)
+    }
+    return false
+  }
+  console.log(`Imported ${result.chapterCount} chapters`)
+  return true
+}
+
 const addBook = async () => {
   const filePath = await window.electronAPI.dialog.openFile()
   if (!filePath) return
   try {
     importing.value = true
-    const result = await window.electronAPI.library.importBook(filePath)
-    console.log(`Imported ${result.chapterCount} chapters`)
-    invalidateDataStore()
-    await fetchBooks()
+    const imported = await importSelectedFile(filePath)
+    if (imported) {
+      invalidateDataStore()
+      await fetchBooks()
+    }
   } catch (error) {
     console.error('Failed to add book:', error)
     alert('导入失败: ' + (error as Error).message)
   } finally {
     importing.value = false
+  }
+}
+
+const setManagementMode = (enabled: boolean) => {
+  managementMode.value = enabled
+  if (!enabled) selectedBookIds.value = new Set()
+}
+
+const toggleBookSelection = (bookId: number) => {
+  const next = new Set(selectedBookIds.value)
+  if (next.has(bookId)) next.delete(bookId)
+  else next.add(bookId)
+  selectedBookIds.value = next
+}
+
+const handleBookClick = (bookId: number) => {
+  if (managementMode.value) toggleBookSelection(bookId)
+  else emit('open-book', bookId)
+}
+
+const clearFilters = () => {
+  selectedTag.value = ''
+  selectedSeries.value = ''
+  selectedStatus.value = ''
+}
+
+const refreshAfterBatch = async () => {
+  invalidateDataStore()
+  await fetchBooks()
+}
+
+const batchClassify = async () => {
+  if (!selectedCount.value) return
+  const action = prompt('批量分类：输入 1 添加标签、2 移除标签、3 设置系列、4 清除系列、5 设置阅读状态')?.trim()
+  if (!action) return
+  let operation: BatchClassificationOperation | null = null
+  if (action === '1' || action === '2') {
+    const tags = normalizeTags(prompt(action === '1' ? '输入要添加的标签（逗号分隔）' : '输入要移除的标签（逗号分隔）') || '')
+    if (!tags.length) return
+    operation = { type: action === '1' ? 'addTags' : 'removeTags', tags }
+  } else if (action === '3') {
+    const series = prompt('输入系列名称')
+    if (series === null) return
+    operation = { type: 'setSeries', series }
+  } else if (action === '4') {
+    operation = { type: 'setSeries', series: '' }
+  } else if (action === '5') {
+    const status = prompt('输入阅读状态：未读 / 阅读中 / 已读完')?.trim()
+    const map: Record<string, ReadingStatus> = { '未读': 'unread', '阅读中': 'reading', '已读完': 'finished' }
+    if (!status || !map[status]) return
+    operation = { type: 'setReadingStatus', status: map[status] }
+  }
+  if (!operation) return
+  try {
+    batchWorking.value = true
+    await window.electronAPI.library.batchClassifyBooks(Array.from(selectedBookIds.value), operation)
+    await refreshAfterBatch()
+  } finally {
+    batchWorking.value = false
+  }
+}
+
+const batchDelete = async () => {
+  if (!selectedCount.value || !confirm(`确定删除选中的 ${selectedCount.value} 本书吗？\n将同时删除章节、书签和本地文件。`)) return
+  try {
+    batchWorking.value = true
+    const result = await window.electronAPI.library.deleteBooks(Array.from(selectedBookIds.value))
+    selectedBookIds.value = new Set()
+    await refreshAfterBatch()
+    alert(`已删除 ${result.deleted} 本书籍`)
+  } finally {
+    batchWorking.value = false
+  }
+}
+
+const batchExport = async () => {
+  if (!selectedCount.value) return
+  try {
+    batchWorking.value = true
+    const result = await window.electronAPI.library.exportBooks(Array.from(selectedBookIds.value))
+    if (!result.canceled) alert(result.failed ? `导出完成：成功 ${result.success}，失败 ${result.failed}` : `已导出 ${result.success} 本书籍`)
+  } finally {
+    batchWorking.value = false
   }
 }
 
@@ -245,11 +364,37 @@ onUnmounted(() => {
           <button @click="viewMode = 'list'; saveSetting('viewMode', 'list')" :class="viewMode === 'list' ? 'app-button-primary' : ''" class="app-button p-1.5 leading-none" title="列表视图">☰</button>
         </div>
         
-        <button v-if="bookshelfShowAddEntry" @click="addBook" :disabled="importing" class="app-button app-button-primary group px-4 py-2 shrink-0 disabled:opacity-45 disabled:hover:translate-y-0 flex justify-center items-center gap-1.5">
+        <button @click="setManagementMode(!managementMode)" class="app-button px-4 py-2 shrink-0 text-[13px] font-semibold">
+          {{ managementMode ? '完成' : '管理' }}
+        </button>
+
+        <button v-if="bookshelfShowAddEntry && !managementMode" @click="addBook" :disabled="importing" class="app-button app-button-primary group px-4 py-2 shrink-0 disabled:opacity-45 disabled:hover:translate-y-0 flex justify-center items-center gap-1.5">
           <span class="text-lg leading-none">{{ importing ? '⏳' : '+' }}</span>
           <span class="text-[13px] whitespace-nowrap">{{ importing ? '导入...' : '添加' }}</span>
         </button>
       </div>
+    </div>
+
+    <div v-if="managementMode" class="app-card mb-6 p-3 flex flex-wrap items-center gap-2">
+      <select v-model="selectedTag" class="app-input px-3 py-2 text-[12px] min-w-[8rem]">
+        <option value="">全部标签</option>
+        <option v-for="tag in availableTags" :key="tag" :value="tag">{{ tag }}</option>
+      </select>
+      <select v-model="selectedSeries" class="app-input px-3 py-2 text-[12px] min-w-[8rem]">
+        <option value="">全部系列</option>
+        <option v-for="series in availableSeries" :key="series" :value="series">{{ series }}</option>
+      </select>
+      <select v-model="selectedStatus" class="app-input px-3 py-2 text-[12px] min-w-[8rem]">
+        <option value="">全部状态</option>
+        <option value="unread">未读</option>
+        <option value="reading">阅读中</option>
+        <option value="finished">已读完</option>
+      </select>
+      <button @click="clearFilters" :disabled="!hasActiveFilters" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">清除筛选</button>
+      <span class="app-muted text-[12px] ml-auto">已选 {{ selectedCount }} 本</span>
+      <button @click="batchClassify" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">分类</button>
+      <button @click="batchExport" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">导出</button>
+      <button @click="batchDelete" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] text-red-500 disabled:opacity-40">删除</button>
     </div>
 
     <!-- Empty/Loading State -->
@@ -264,22 +409,22 @@ onUnmounted(() => {
       <button v-if="bookshelfShowAddEntry" @click="addBook" class="app-button app-button-primary px-8 py-2.5 text-[14px]">开启阅读之旅</button>
     </div>
     <div v-else-if="filteredBooks.length === 0" class="text-center py-28 mx-auto max-w-lg">
-      <p class="text-lg app-muted mb-3">没有搜索到与 "{{ searchQuery }}" 匹配的书籍</p>
+      <p class="text-lg app-muted mb-3">没有找到匹配的书籍</p>
     </div>
 
     <!-- GRID VIEW -->
     <div v-if="!loading && filteredBooks.length > 0 && viewMode === 'grid'" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8 pb-10">
       <div v-for="(book, index) in filteredBooks" :key="book.id" class="relative group cursor-pointer bookshelf-card flex flex-col"
-           :style="{ animationDelay: `${index * 30}ms` }" @click="emit('open-book', book.id)">
+           :style="{ animationDelay: `${index * 30}ms` }" @click="handleBookClick(book.id)">
         <div class="app-card app-card-hover aspect-[3/4.2] overflow-hidden relative"
-             :class="{'ring-2 ring-[var(--app-accent)]': book.pinned}">
+             :class="{'ring-2 ring-[var(--app-accent)]': book.pinned || selectedBookIds.has(book.id), 'bookshelf-selected': selectedBookIds.has(book.id)}">
           <div class="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#111111]/90 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10 pointer-events-none"></div>
 
           <div v-if="book.pinned" class="app-badge is-active absolute top-2 left-2 z-20 text-[10px] font-bold px-1.5 py-0.5">置顶</div>
 
           <BookCover class="w-full h-full rounded-xl bookshelf-grid-cover" :cover-path="book.coverFile" :title="book.title" />
 
-          <div class="absolute top-2 right-2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-20">
+          <div v-if="!managementMode" class="absolute top-2 right-2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-20">
             <button @click.stop="togglePin(book)" class="p-1.5 rounded-md backdrop-blur-md transition-colors border shadow-sm"
                     :class="book.pinned ? 'app-button-primary border-transparent' : 'bg-black/60 text-white/70 hover:bg-black/90 hover:text-white border-black/10 dark:border-white/10'" :title="book.pinned ? '取消置顶' : '置顶'">
               <span class="text-sm leading-none block">📌</span>
@@ -307,7 +452,7 @@ onUnmounted(() => {
       </div>
 
       <button
-        v-if="bookshelfShowAddEntry"
+        v-if="bookshelfShowAddEntry && !managementMode"
         @click="addBook"
         :disabled="importing"
         class="app-card app-card-hover aspect-[3/4.2] flex flex-col items-center justify-center gap-3 text-center disabled:opacity-50"
@@ -321,7 +466,8 @@ onUnmounted(() => {
     <div v-if="!loading && filteredBooks.length > 0 && viewMode === 'list'" class="flex flex-col gap-2 pb-10">
       <div v-for="(book, index) in filteredBooks" :key="'list-'+book.id"
            class="bookshelf-list-row app-card app-card-hover group p-2 cursor-pointer bookshelf-card"
-           :style="{ animationDelay: `${index * 20}ms` }" @click="emit('open-book', book.id)">
+           :class="{ 'bookshelf-selected': selectedBookIds.has(book.id) }"
+           :style="{ animationDelay: `${index * 20}ms` }" @click="handleBookClick(book.id)">
         <div class="bookshelf-list-cover w-12 h-16 rounded-[var(--app-radius-button)] overflow-hidden shadow relative" :class="{'ring-1 ring-[var(--app-accent)]': book.pinned}">
             <BookCover class="w-full h-full" :cover-path="book.coverFile" :title="book.title" />
             <div v-if="book.pinned" class="absolute -top-1 -right-1 z-10 text-[8px] bg-[var(--app-accent)] text-[var(--app-text-on-primary)] px-1 rounded-sm">★</div>
@@ -340,7 +486,7 @@ onUnmounted(() => {
               <p class="bookshelf-list-value font-mono app-muted truncate">{{ formatDate(book.lastReadAt) || '未读' }}</p>
           </div>
         </div>
-        <div class="bookshelf-list-actions">
+        <div v-if="!managementMode" class="bookshelf-list-actions">
             <button @click.stop="togglePin(book)" class="bookshelf-list-action app-icon-button" :class="book.pinned ? 'app-accent-text' : ''" title="置顶"><span class="block leading-none">📌</span></button>
             <button @click.stop="setCover(book.id)" class="bookshelf-list-action app-icon-button" title="设置封面"><span class="block leading-none">🖼️</span></button>
             <button
@@ -353,7 +499,7 @@ onUnmounted(() => {
         </div>
       </div>
       <button
-        v-if="bookshelfShowAddEntry"
+        v-if="bookshelfShowAddEntry && !managementMode"
         @click="addBook"
         :disabled="importing"
         class="app-card app-card-hover flex items-center justify-center gap-2 p-4 text-[13px] app-title font-semibold disabled:opacity-50"
@@ -371,6 +517,12 @@ onUnmounted(() => {
   opacity: 0;
   transform: translateY(15px);
   animation: cardFadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.bookshelf-selected {
+  border-color: var(--app-accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 58%, transparent),
+    0 14px 34px color-mix(in srgb, var(--app-accent) 16%, transparent) !important;
 }
 
 .bookshelf-list-row {

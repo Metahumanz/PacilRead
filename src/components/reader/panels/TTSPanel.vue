@@ -1,21 +1,66 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
 import { MIMO_TTS_VOICES } from '../../../data/mimoTts'
+import { ttsMsToPrecise, ttsPreciseToMs, ttsSliderProgressToMs } from '../../../utils/ttsSleepTimer'
 
-defineProps<{
+const props = defineProps<{
   ttsActive: boolean
+  ttsPaused: boolean
   edgeVoices: any[]
   systemVoices: any[]
+  sleepDurationMs: number
+  sleepRemainingMs: number
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'close'): void
   (e: 'start'): void
+  (e: 'pause'): void
+  (e: 'resume'): void
   (e: 'stop'): void
+  (e: 'timer-change', durationMs: number): void
 }>()
 
 const settings = useSettings()
-const { ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoVoice, saveTtsSettings } = settings
+const { ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoVoice, ttsTimerMode, saveTtsSettings } = settings
+
+const timerDurationMs = ref(props.sleepDurationMs)
+watch(() => props.sleepDurationMs, value => { timerDurationMs.value = value })
+watch(timerDurationMs, value => emit('timer-change', Math.max(0, Math.floor(value || 0))))
+
+const sliderStep = computed({
+  get: () => Math.round(timerDurationMs.value / (5 * 60 * 1000)),
+  set: value => { timerDurationMs.value = ttsSliderProgressToMs(Number(value)) },
+})
+const preciseParts = computed(() => {
+  const [hours, minutes, seconds] = ttsMsToPrecise(timerDurationMs.value)
+  return { hours, minutes, seconds }
+})
+const setPrecisePart = (part: 'hours' | 'minutes' | 'seconds', value: string | number) => {
+  const next = { ...preciseParts.value, [part]: Number(value) || 0 }
+  timerDurationMs.value = ttsPreciseToMs(next.hours, next.minutes, next.seconds)
+}
+const handlePreciseInput = (part: 'hours' | 'minutes' | 'seconds', event: Event) => {
+  setPrecisePart(part, (event.currentTarget as HTMLInputElement).value)
+}
+const timerLabel = computed(() => {
+  if (!timerDurationMs.value) return '关闭'
+  const { hours, minutes, seconds } = preciseParts.value
+  return [hours ? `${hours}小时` : '', minutes ? `${minutes}分` : '', seconds ? `${seconds}秒` : ''].filter(Boolean).join('')
+})
+const remainingLabel = computed(() => {
+  const seconds = Math.ceil(props.sleepRemainingMs / 1000)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  return `${hours ? `${hours}:` : ''}${String(minutes).padStart(hours ? 2 : 1, '0')}:${String(rest).padStart(2, '0')}`
+})
+
+const setTimerMode = (mode: 'slider' | 'precise') => {
+  ttsTimerMode.value = mode
+  saveTtsSettings()
+}
 </script>
 
 <template>
@@ -52,14 +97,33 @@ const { ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoVoice, saveTtsSetti
       <label>高亮颜色</label>
       <input type="color" v-model="highlightColor" @change="saveTtsSettings" class="sc"><input type="text" v-model="highlightColor" @change="saveTtsSettings" class="sn w72">
     </div>
+    <div class="timer-head">
+      <label>睡眠定时</label>
+      <div class="timer-modes">
+        <button :class="{active: ttsTimerMode==='slider'}" @click="setTimerMode('slider')">滑块</button>
+        <button :class="{active: ttsTimerMode==='precise'}" @click="setTimerMode('precise')">精确</button>
+      </div>
+    </div>
+    <div v-if="ttsTimerMode==='slider'" class="timer-row">
+      <input type="range" min="0" max="36" step="1" v-model.number="sliderStep" class="sl">
+      <span class="timer-value">{{ timerLabel }}</span>
+    </div>
+    <div v-else class="precise-timer">
+      <label><input type="number" min="0" max="23" :value="preciseParts.hours" @input="handlePreciseInput('hours', $event)"><span>时</span></label>
+      <label><input type="number" min="0" max="59" :value="preciseParts.minutes" @input="handlePreciseInput('minutes', $event)"><span>分</span></label>
+      <label><input type="number" min="0" max="59" :value="preciseParts.seconds" @input="handlePreciseInput('seconds', $event)"><span>秒</span></label>
+    </div>
+    <div v-if="ttsActive && sleepRemainingMs > 0" class="timer-remaining">剩余 {{ remainingLabel }}</div>
     <div class="sp-divider"></div>
     <div class="flex justify-center mt-4 mb-2">
       <button @click="$emit('start')" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 hover:text-violet-300 border border-violet-500/30" v-if="!ttsActive">
         ▶ 开始听书
       </button>
-      <button @click="$emit('stop')" class="px-8 py-3 rounded-xl font-bold transition-all shadow-lg bg-red-500/20 text-red-500 hover:bg-red-500/30" v-else>
-        ⏹ 停止听书
-      </button>
+      <div v-else class="playback-actions">
+        <button v-if="ttsPaused" @click="$emit('resume')" class="control-button resume">▶ 继续</button>
+        <button v-else @click="$emit('pause')" class="control-button pause">⏸ 暂停</button>
+        <button @click="$emit('stop')" class="control-button stop">⏹ 停止</button>
+      </div>
     </div>
   </div>
 </template>
@@ -84,4 +148,20 @@ const { ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoVoice, saveTtsSetti
 .btn-group button { flex:1; padding:6px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:white; font-size:12px; cursor:pointer; transition:all .2s; }
 .btn-group button:hover { background:rgba(255,255,255,0.1); }
 .btn-group button.active { background:#3b82f6; border-color:#3b82f6; font-weight:700; }
+.timer-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:2px; }
+.timer-head>label { font-size:12px; font-weight:600; opacity:.6; }
+.timer-modes { display:flex; gap:4px; padding:3px; background:rgba(255,255,255,.05); border-radius:8px; }
+.timer-modes button { border:0; border-radius:6px; padding:4px 9px; color:rgba(255,255,255,.55); background:transparent; cursor:pointer; font-size:11px; }
+.timer-modes button.active { color:white; background:rgba(59,130,246,.85); }
+.timer-row { display:flex; align-items:center; gap:12px; margin-top:10px; }
+.timer-value { width:76px; text-align:right; font-size:11px; color:rgba(255,255,255,.65); white-space:nowrap; }
+.precise-timer { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
+.precise-timer label { display:flex; align-items:center; gap:4px; }
+.precise-timer input { width:100%; min-width:0; color:white; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); border-radius:8px; padding:7px 5px; text-align:center; outline:none; }
+.precise-timer span { font-size:11px; opacity:.45; }
+.timer-remaining { margin-top:9px; text-align:right; color:#a78bfa; font-size:11px; font-variant-numeric:tabular-nums; }
+.playback-actions { display:flex; gap:10px; }
+.control-button { padding:10px 20px; border:1px solid transparent; border-radius:12px; font-weight:700; cursor:pointer; transition:.2s; }
+.control-button.resume,.control-button.pause { color:#a78bfa; background:rgba(124,58,237,.18); border-color:rgba(139,92,246,.28); }
+.control-button.stop { color:#ef4444; background:rgba(239,68,68,.15); }
 </style>

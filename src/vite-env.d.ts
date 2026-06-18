@@ -12,8 +12,11 @@ export interface ElectronAPI {
     writeEntity: (entityType: string, data: unknown) => Promise<void>
   }
   library: {
-    importBook: (filePath: string) => Promise<{ bookId: number; chapterCount: number }>
+    importBook: (filePath: string, allowDuplicate?: boolean) => Promise<ImportBookResult>
     deleteBook: (bookId: number) => Promise<{ success: boolean }>
+    deleteBooks: (bookIds: number[]) => Promise<{ deleted: number }>
+    batchClassifyBooks: (bookIds: number[], operation: BatchClassificationOperation) => Promise<{ updated: number }>
+    exportBooks: (bookIds: number[]) => Promise<{ canceled: boolean; success: number; failed: number }>
     getSize: () => Promise<{ sizeBytes: number; chapterTextBytes: number; jsonDataBytes: number; totalBytes: number }>
     getBookshelfBooks: () => Promise<BookSummary[]>
     getBookSummary: (bookId: number) => Promise<BookSummary | null>
@@ -25,6 +28,8 @@ export interface ElectronAPI {
     hasBookChapterTextFiles: (bookId: number) => Promise<boolean>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
     extractBookChapterTextZip: (zipPath: string) => Promise<number>
+    isSearchIndexReady: (bookId: number) => Promise<boolean>
+    searchBook: (bookId: number, query: string) => Promise<BookSearchResult[]>
   }
   dialog: {
     openFile: () => Promise<string | null>
@@ -39,6 +44,9 @@ export interface ElectronAPI {
       dataUrl: string
       filters?: Array<{ name: string; extensions: string[] }>
     }) => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>
+  }
+  clipboard: {
+    writeImage: (dataUrl: string) => Promise<{ success: boolean }>
   }
   snapshot: {
     create: (reason?: string) => Promise<SnapshotManifest>
@@ -84,6 +92,7 @@ export interface ElectronAPI {
   tts: {
     getEdgeVoices: () => Promise<any[]>
     synthesize: (text: string, voice?: string, rate?: number) => Promise<{ success: boolean; audioBuffer?: Uint8Array; error?: string }>
+    synthesizeMimo: (text: string, apiKey: string, voice?: string) => Promise<{ success: boolean; audioBuffer?: Uint8Array; error?: string }>
     startMimo: (text: string, apiKey: string, voice?: string) => Promise<void>
     stopMimo: () => Promise<void>
     onMimoChunk: (cb: (chunk: Uint8Array) => void) => () => void
@@ -112,6 +121,24 @@ export interface BookSummary {
   sourceFile: string | null
   createdAt: number
   updatedAt: number
+  sourceDisplayName?: string
+  contentSha256?: string
+}
+
+export type ImportBookResult =
+  | { status: 'imported'; bookId: number; chapterCount: number }
+  | { status: 'duplicate'; matchType: 'exact_content' | 'same_title_author'; title: string; author: string | null }
+
+export type BatchClassificationOperation =
+  | { type: 'addTags' | 'removeTags'; tags: string[] }
+  | { type: 'setSeries'; series: string }
+  | { type: 'setReadingStatus'; status: 'unread' | 'reading' | 'finished' }
+
+export interface BookSearchResult {
+  chapterIndex: number
+  chapterTitle: string
+  snippet: string
+  charOffset: number
 }
 
 export interface SnapshotManifest {

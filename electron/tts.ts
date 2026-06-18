@@ -215,3 +215,30 @@ export async function synthesizeMimoStreaming(
     }
   }
 }
+
+export function synthesizeMimoBuffered(
+  text: string,
+  apiKey: string,
+  voice?: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    const onAbort = () => reject(new Error('MiMo synthesis aborted'))
+    if (signal?.aborted) { onAbort(); return }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    const finish = (callback: () => void) => {
+      signal?.removeEventListener('abort', onAbort)
+      callback()
+    }
+    void synthesizeMimoStreaming(
+      text,
+      apiKey,
+      voice,
+      chunk => chunks.push(chunk),
+      () => finish(() => resolve(Buffer.concat(chunks))),
+      error => finish(() => reject(error)),
+      signal,
+    )
+  })
+}

@@ -6,8 +6,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     writeEntity: (entityType: string, data: unknown) => ipcRenderer.invoke('data:writeEntity', entityType, data),
   },
   library: {
-    importBook: (filePath: string) => ipcRenderer.invoke('library:importBook', filePath),
+    importBook: (filePath: string, allowDuplicate?: boolean) => ipcRenderer.invoke('library:importBook', filePath, allowDuplicate),
     deleteBook: (bookId: number) => ipcRenderer.invoke('library:deleteBook', bookId),
+    deleteBooks: (bookIds: number[]) => ipcRenderer.invoke('library:deleteBooks', bookIds),
+    batchClassifyBooks: (bookIds: number[], operation: Record<string, unknown>) => ipcRenderer.invoke('library:batchClassifyBooks', bookIds, operation),
+    exportBooks: (bookIds: number[]) => ipcRenderer.invoke('library:exportBooks', bookIds),
     getSize: () => ipcRenderer.invoke('library:getSize'),
     getBookshelfBooks: () => ipcRenderer.invoke('library:getBookshelfBooks'),
     getBookSummary: (bookId: number) => ipcRenderer.invoke('library:getBookSummary', bookId),
@@ -19,6 +22,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     hasBookChapterTextFiles: (bookId: number) => ipcRenderer.invoke('library:hasBookChapterTextFiles', bookId),
     createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('library:createBookChapterTextZip', bookId),
     extractBookChapterTextZip: (zipPath: string) => ipcRenderer.invoke('library:extractBookChapterTextZip', zipPath),
+    isSearchIndexReady: (bookId: number) => ipcRenderer.invoke('library:isSearchIndexReady', bookId),
+    searchBook: (bookId: number, query: string) => ipcRenderer.invoke('library:searchBook', bookId, query),
   },
   dialog: {
     openFile: () => ipcRenderer.invoke('dialog:openFile'),
@@ -29,6 +34,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveBinaryFile: (options: { defaultPath: string; dataUrl: string; filters?: Array<{ name: string; extensions: string[] }> }) => (
       ipcRenderer.invoke('dialog:saveBinaryFile', options)
     )
+  },
+  clipboard: {
+    writeImage: (dataUrl: string) => ipcRenderer.invoke('clipboard:writeImage', dataUrl),
   },
   snapshot: {
     create: (reason?: string) => ipcRenderer.invoke('snapshot:create', reason),
@@ -90,6 +98,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tts: {
     getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
     synthesize: (text: string, voice?: string, rate?: number) => ipcRenderer.invoke('tts:synthesize', { text, voice, rate }),
+    synthesizeMimo: (text: string, apiKey: string, voice?: string) => ipcRenderer.invoke('tts:synthesize-mimo', { text, apiKey, voice }),
     startMimo: (text: string, apiKey: string, voice?: string) => ipcRenderer.invoke('tts:start-mimo', { text, apiKey, voice }),
     stopMimo: () => ipcRenderer.invoke('tts:stop-mimo'),
     onMimoChunk: (cb: (chunk: Uint8Array) => void) => {

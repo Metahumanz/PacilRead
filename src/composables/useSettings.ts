@@ -153,6 +153,7 @@ const ttsRate = ref(1.0)
 const highlightColor = ref('#3b82f6')
 const ttsMiMoApiKey = ref('')
 const ttsMiMoVoice = ref(MIMO_TTS_DEFAULT_VOICE)
+const ttsTimerMode = ref<'slider' | 'precise'>('slider')
 
 // Navigation keys
 const nextKeys = ref<string[]>([...DEFAULT_NEXT_KEYS])
@@ -279,6 +280,7 @@ function resetSettingsState() {
   highlightColor.value = '#3b82f6'
   ttsMiMoApiKey.value = ''
   ttsMiMoVoice.value = MIMO_TTS_DEFAULT_VOICE
+  ttsTimerMode.value = 'slider'
 
   nextKeys.value = [...DEFAULT_NEXT_KEYS]
   prevKeys.value = [...DEFAULT_PREV_KEYS]
@@ -366,6 +368,7 @@ export function useSettings() {
         const mv = v('reader_ttsMiMoVoice')!
         ttsMiMoVoice.value = isMimoTtsVoiceId(mv) ? mv : MIMO_TTS_DEFAULT_VOICE
       }
+      if (v('reader_ttsTimerMode') !== undefined) ttsTimerMode.value = v('reader_ttsTimerMode') === 'precise' ? 'precise' : 'slider'
       if (v('reader_pageMode') !== undefined) pageMode.value = (v('reader_pageMode')! === 'double' ? 'double' : 'single')
       if (v('reader_double_page_enabled') !== undefined) pageMode.value = (v('reader_double_page_enabled')! === 'true' ? 'double' : 'single')
       if (v('reader_doublePageStep') !== undefined) doublePageStep.value = (parseInt(v('reader_doublePageStep')!) === 1 ? 1 : 2)
@@ -522,6 +525,7 @@ export function useSettings() {
       reader_highlightColor: highlightColor.value,
       reader_ttsMiMoApiKey: ttsMiMoApiKey.value,
       reader_ttsMiMoVoice: ttsMiMoVoice.value,
+      reader_ttsTimerMode: ttsTimerMode.value,
     })
   }
 
@@ -535,7 +539,7 @@ export function useSettings() {
     // Auto-page
     autoPageSpeed,
     // TTS
-    ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice,
+    ttsEngine, ttsVoice, ttsRate, highlightColor, ttsMiMoApiKey, ttsMiMoVoice, ttsTimerMode,
     // Keys
     nextKeys, prevKeys,
     // UI

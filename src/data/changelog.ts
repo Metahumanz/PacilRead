@@ -7,6 +7,20 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.3.0',
+    date: '2026-06-18',
+    changes: [
+      'Bookshelf Management（书架管理）：新增紧凑管理模式，可按标签、系列、阅读状态与书名作者组合筛选，并支持无复选框批量选择',
+      'Batch Actions（批量操作）：支持批量添加或移除标签、设置系列与阅读状态、删除书籍及按原文件名导出，删除前统一创建自动快照',
+      'Duplicate Detection（重复检测）：导入前自动计算 SHA-256，优先按内容摘要、其次按标准化书名与作者识别重复书籍，并兼容旧书摘要回填',
+      'Quote Sharing（引用分享）：新增与移动端一致的 1080px 引用卡、完整预览、PNG 复制与保存，修复暗色配色、弹窗滚轮翻页及章节标题混入正文',
+      'Full-text Search（全文搜索）：新增持久化 Bloom 全文索引，返回同章全部及重叠命中，并按字符偏移准确跳转到目标分页',
+      'TTS Playback（听书播放）：新增滑块与时分秒两种睡眠定时、播放暂停继续停止状态、下一句与跨页跨章预取，以及 MiMo 独立缓冲缓存',
+      'Background Media（后台媒体）：窗口失焦或最小化后继续朗读，并通过 Chromium Media Session 提供书名章节信息及系统播放控制',
+      'Tests（测试）：补充组合筛选、重复检测、导出重名、搜索重叠命中、索引失效、引用上下文与睡眠定时逻辑覆盖',
+    ]
+  },
+  {
     version: '1.2.4',
     date: '2026-06-16',
     changes: [
