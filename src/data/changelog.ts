@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.3.2',
+    date: '2026-06-18',
+    changes: [
+      'Cloud Progress（云端进度）：阅读器改为本地优先启动，云端进度在首屏显示后后台检查，不再阻塞进入书籍',
+      'Progress Suggestion（进度提示）：检测到不同的云端位置后，在顶部横栏展示章节与内容摘要，由用户选择留在本地或跳转',
+      'Sync Safety（同步保护）：等待用户选择期间暂缓本地进度上传，相近位置静默忽略，并以流式摘要读取避免大章节造成额外阻塞',
+    ]
+  },
+  {
     version: '1.3.1',
     date: '2026-06-18',
     changes: [
