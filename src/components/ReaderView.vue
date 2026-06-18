@@ -18,6 +18,8 @@ import { usePageFlipScheduler } from '../composables/usePageFlipScheduler'
 import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks'
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
+import { toPng } from 'html-to-image'
+import { quoteContextExcerpt, quoteTextFromPageLines } from '../utils/quoteShare'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -33,7 +35,7 @@ import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 import PageSliceView from './reader/PageSliceView.vue'
 import PageFlipOuterBook from './reader/PageFlipOuterBook.vue'
 import type { PageSlice, PagingTarget } from '../types/pagination'
-import type { ReaderBook, ReaderChapter } from '../types/entities'
+import type { BookSearchResult, ReaderBook, ReaderChapter } from '../types/entities'
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
 const emit = defineEmits<{
@@ -59,6 +61,12 @@ const showReaderOptions = ref(false)
 const showBookmarks = ref(false)
 const showCopyModal = ref(false)
 const selectedText = ref('')
+const selectedContextBefore = ref('')
+const selectedContextAfter = ref('')
+const shareCardRef = ref<HTMLElement | null>(null)
+const shareCardDataUrl = ref('')
+const shareCardGenerating = ref(false)
+const showSharePreview = ref(false)
 const bookmarkPanelVersion = ref(0)
 const bookmarkStatus = ref('')
 
@@ -698,17 +706,30 @@ const incomingHudProps = computed(() => {
 })
 
 // ---- TTS (composable) ----
+const ttsSleepDurationMs = ref(0)
+const getFollowingSentenceText = () => {
+  const nextSlice = currentPages.value[currentPage.value + 1]
+  if (nextSlice?.text?.trim()) return nextSlice.text
+  return chapters.value[currentChapterIndex.value + 1]?.body_text || null
+}
 const tts = useTTS({
   contentRef, containerWidth,
   ttsEngine, ttsVoice, ttsRate, highlightColor,
   flipDurationMs: computed(() => flipDurationMap.value.ms),
   ttsMiMoApiKey, ttsMiMoVoice,
+  bookTitle: computed(() => book.value?.title || ''),
+  chapterTitle: computed(() => currentChapterData.value?.title || ''),
   nextPage: trackedNextPage, slideToNextChapter: trackedSlideToNextChapter,
+  getFollowingSentenceText,
 })
-const { ttsActive, edgeVoices, systemVoices, stopTts, handleTtsClick, loadVoices, injectHighlightStyles } = tts
+const {
+  ttsActive, ttsPaused, sleepRemainingMs, edgeVoices, systemVoices,
+  stopTts, pauseTts, resumeTts, setSleepTimer,
+  handleTtsClick, loadVoices, injectHighlightStyles,
+} = tts
 
 const startTts = () => {
-  const res = tts.startTts()
+  const res = tts.startTts(ttsSleepDurationMs.value)
   if (res === 'MIMO_KEY_MISSING') {
     if (confirm('尚未配置小米 MiMo API Key，是否立即前往设置？')) {
       showMenu.value = true
@@ -793,10 +814,77 @@ const handlePointerCancel = (e: PointerEvent) => {
 const handleContextMenu = (e: MouseEvent) => {
   if (showMenu.value) return
   const t = e.target as HTMLElement; const p = t.closest('.page-slice') || t.closest('.page-line')
-  if (p && p.textContent && p.textContent.trim().length > 0) { selectedText.value = p.textContent.trim(); showCopyModal.value = true }
+  if (p && p.textContent && p.textContent.trim().length > 0) {
+    const pageElement = p.closest('.page-slice') as HTMLElement | null
+    const pageIndex = Number(pageElement?.dataset.pageIndex || currentPage.value)
+    const slice = pagesResult.value?.slices?.[pageIndex]
+    const renderedBodyText = Array.from(pageElement?.querySelectorAll('.page-line-body') || [])
+      .map(line => line.textContent || '')
+      .join('')
+    selectedText.value = quoteTextFromPageLines(slice?.lines, renderedBodyText)
+    if (!selectedText.value) return
+    const chapterText = applyReplacements(currentChapterData.value?.body_text || '')
+    const start = Math.max(0, slice?.startChar || 0)
+    const end = Math.max(start, slice?.endChar || start + selectedText.value.length)
+    const excerpt = quoteContextExcerpt(chapterText, start, end)
+    selectedContextBefore.value = excerpt.before
+    selectedContextAfter.value = excerpt.after
+    showCopyModal.value = true
+  }
+}
+
+const updateTtsSleepTimer = (durationMs: number) => {
+  ttsSleepDurationMs.value = durationMs
+  if (ttsActive.value) setSleepTimer(durationMs)
 }
 const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false }
+
+const quoteFontSize = computed(() => {
+  const length = selectedText.value.length
+  if (length > 900) return 34
+  if (length > 600) return 40
+  if (length > 360) return 46
+  return 56
+})
+
+const generateShareCard = async () => {
+  if (!selectedText.value.trim()) return
+  shareCardGenerating.value = true
+  try {
+    await nextTick()
+    if (!shareCardRef.value) throw new Error('分享卡尚未就绪')
+    shareCardDataUrl.value = await toPng(shareCardRef.value, {
+      width: 1080,
+      pixelRatio: 1,
+      cacheBust: true,
+      backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--app-surface').trim() || '#f9fbfd',
+    })
+    showCopyModal.value = false
+    showSharePreview.value = true
+  } catch (error) {
+    alert(`生成分享卡失败: ${(error as Error).message}`)
+  } finally {
+    shareCardGenerating.value = false
+  }
+}
+
+const copyShareCard = async () => {
+  if (!shareCardDataUrl.value) return
+  await window.electronAPI.clipboard.writeImage(shareCardDataUrl.value)
+  bookmarkStatus.value = '分享图片已复制'
+  window.setTimeout(() => { bookmarkStatus.value = '' }, 1800)
+}
+
+const saveShareCard = async () => {
+  if (!shareCardDataUrl.value) return
+  await window.electronAPI.dialog.saveBinaryFile({
+    defaultPath: 'PacilRead-引用分享.png',
+    dataUrl: shareCardDataUrl.value,
+    filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+  })
+}
 const handleWheel = (e: WheelEvent) => {
+  if (showCopyModal.value || showSharePreview.value) return
   if (showMenu.value) return
   if (Math.abs(e.deltaY) < 10) return
   e.preventDefault()
@@ -849,7 +937,18 @@ const openPanel = (panel: string) => {
   showBookmarks.value = panel === 'bookmarks' ? !showBookmarks.value : false
 }
 
-const jumpToSearchResult = (idx: number) => { trackedGoToChapter(idx, true) }
+const jumpToSearchResult = (result: BookSearchResult) => {
+  recordReadingActivity()
+  const nextIndex = Math.max(0, Math.min(chapters.value.length - 1, result.chapterIndex))
+  pendingWebdavPos.value = Math.max(0, result.charOffset)
+  const prewarm = prewarmChapterAt(nextIndex, {
+    mode: 'partial',
+    targetOffset: pendingWebdavPos.value,
+    extraPagesAfterTarget: 2,
+  })
+  if (nextIndex !== currentChapterIndex.value) goToChapter(nextIndex, true)
+  else prewarm.then(() => recalc())
+}
 
 const handleWindowBlur = () => {
   flushProgress().catch((error) => {
@@ -1154,27 +1253,76 @@ onUnmounted(async () => {
           @go-to-chapter="(idx) => trackedGoToChapter(idx, true)"
           @slider-input="(val) => { if(sliderMode==='book') trackedGoToChapter(val, true); else trackedSetCurrentPage(val); }"
         >
-          <Transition name="sf"><SearchPanel v-if="showSearch" :book-id="props.bookId" :chapters="chapters" @close="showSearch=false" @jump="(idx) => { jumpToSearchResult(idx); showSearch=false; showMenu=false; }" /></Transition>
+          <Transition name="sf"><SearchPanel v-if="showSearch" :book-id="props.bookId" :chapters="chapters" @close="showSearch=false" @jump="(result) => { jumpToSearchResult(result); showSearch=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
           <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
           <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
-          <Transition name="sf"><TTSPanel v-if="showTts" :ttsActive="ttsActive" :edgeVoices="edgeVoices" :systemVoices="systemVoices" @close="showTts=false" @start="startTts" @stop="stopTts" /></Transition>
+          <Transition name="sf"><TTSPanel
+            v-if="showTts"
+            :ttsActive="ttsActive"
+            :ttsPaused="ttsPaused"
+            :edgeVoices="edgeVoices"
+            :systemVoices="systemVoices"
+            :sleepDurationMs="ttsSleepDurationMs"
+            :sleepRemainingMs="sleepRemainingMs"
+            @close="showTts=false"
+            @start="startTts"
+            @pause="pauseTts"
+            @resume="resumeTts"
+            @stop="stopTts"
+            @timer-change="updateTtsSleepTimer"
+          /></Transition>
           <Transition name="sf"><OptionsPanel v-if="showReaderOptions" :book="book" @close="showReaderOptions=false" @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }" /></Transition>
         </ReaderMenu>
       </Transition>
 
       <!-- Copy Modal -->
       <Transition name="fade">
-        <div v-if="showCopyModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6" @click.stop="showCopyModal = false">
-          <div class="copy-modal bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 shadow-2xl flex flex-col gap-4 max-h-[80vh]" @click.stop>
+        <div v-if="showCopyModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6" @click.stop="showCopyModal = false" @wheel.stop>
+          <div class="copy-modal bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 shadow-2xl flex flex-col gap-4 max-h-[80vh]" @click.stop @wheel.stop>
             <div class="flex items-center justify-between"><h3 class="text-slate-200 font-bold">文字提取与复制</h3><button @click="showCopyModal = false" class="text-slate-400 hover:text-white px-2">✕</button></div>
             <textarea v-model="selectedText" class="w-full flex-1 min-h-[150px] bg-slate-800 text-slate-300 resize-none rounded-xl p-4 outline-none border border-slate-700/50 focus:border-blue-500" style="user-select: text;"></textarea>
-            <div class="flex justify-end gap-3 mt-2"><button @click="showCopyModal = false" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-medium">取消</button><button @click="copyToClipboard" class="px-5 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 font-bold shadow-lg shadow-blue-500/20">复制全文</button></div>
+            <div class="flex justify-end gap-3 mt-2">
+              <button @click="showCopyModal = false" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-medium">取消</button>
+              <button @click="copyToClipboard" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-200 hover:bg-slate-700 font-medium">复制全文</button>
+              <button @click="generateShareCard" :disabled="shareCardGenerating" class="px-5 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 font-bold shadow-lg shadow-blue-500/20 disabled:opacity-50">{{ shareCardGenerating ? '生成中…' : '分享' }}</button>
+            </div>
           </div>
         </div>
       </Transition>
+
+      <Transition name="fade">
+        <div v-if="showSharePreview" class="share-preview-backdrop fixed inset-0 z-[110] flex items-center justify-center p-6" @click.stop="showSharePreview = false" @wheel.stop>
+          <div class="share-preview-panel w-full max-w-3xl p-6 flex flex-col gap-4 max-h-[90vh]" @click.stop @wheel.stop>
+            <div class="flex items-center justify-between">
+              <div><h3 class="share-preview-title text-xl font-bold">分享图片预览</h3><p class="share-preview-detail text-xs mt-1">完整图片 · 1080px 宽 PNG</p></div>
+              <button @click="showSharePreview = false" class="share-preview-close px-2">✕</button>
+            </div>
+            <div class="share-preview-scroll flex-1 min-h-0 overflow-auto p-3" @wheel.stop>
+              <img :src="shareCardDataUrl" alt="引用分享卡预览" class="w-full h-auto rounded-lg" />
+            </div>
+            <div class="share-preview-actions">
+              <button @click="saveShareCard" class="app-button">保存到本地</button>
+              <button @click="copyShareCard" class="app-button app-button-primary">复制图片</button>
+            </div>
+            <button @click="showSharePreview = false" class="app-button share-preview-dismiss">关闭</button>
+          </div>
+        </div>
+      </Transition>
+
+      <div class="quote-render-host" aria-hidden="true">
+        <div ref="shareCardRef" class="quote-share-card">
+          <div class="quote-mark-row"><span class="quote-accent"></span><span class="quote-mark">“</span></div>
+          <div v-if="selectedContextBefore" class="quote-context">{{ selectedContextBefore }}</div>
+          <div class="quote-body" :style="{ fontSize: `${quoteFontSize}px` }">{{ selectedText }}</div>
+          <div v-if="selectedContextAfter" class="quote-context">{{ selectedContextAfter }}</div>
+          <div class="quote-divider"></div>
+          <div class="quote-source">《{{ book?.title || '未命名书籍' }}》</div>
+          <div class="quote-meta">{{ [currentChapterData?.title, book?.author].filter(Boolean).join('  ·  ') }}</div>
+        </div>
+      </div>
       </template>
     </template>
   </div>
@@ -1182,6 +1330,26 @@ onUnmounted(async () => {
 
 <style scoped>
 .reader-root { position:fixed; inset:0; overflow:hidden; user-select:none; display:flex; flex-direction:column; color:white; color-scheme:only light; }
+.quote-render-host { position:fixed; left:-20000px; top:0; width:1080px; pointer-events:none; }
+.quote-share-card { width:1080px; box-sizing:border-box; padding:92px 96px 72px; background:var(--app-surface); color:var(--app-text); font-family:"Noto Serif SC","Source Han Serif SC","Microsoft YaHei",serif; }
+.quote-mark-row { height:130px; display:flex; align-items:flex-start; gap:28px; color:var(--app-accent); }
+.quote-accent { width:10px; height:104px; flex:none; background:var(--app-accent); }
+.quote-mark { font:700 112px/0.9 Arial,sans-serif; }
+.quote-context { color:color-mix(in srgb, var(--app-text-muted) 34%, var(--app-surface)); font-size:36px; line-height:1.32; white-space:pre-wrap; margin-bottom:34px; }
+.quote-body { line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; }
+.quote-body + .quote-context { margin-top:34px; margin-bottom:0; }
+.quote-divider { height:2px; margin:88px 0 42px; background:var(--app-border); }
+.quote-source { color:var(--app-text-secondary); font:700 34px/1.2 var(--app-font-body,"Microsoft YaHei",sans-serif); }
+.quote-meta { margin-top:24px; color:var(--app-text-muted); font:400 26px/1.2 var(--app-font-body,"Microsoft YaHei",sans-serif); }
+.share-preview-backdrop { background:var(--app-scrim); }
+.share-preview-panel { color:var(--app-text); background:var(--app-surface); border:1px solid var(--app-border); border-radius:var(--app-radius-dialog); box-shadow:var(--app-shadow-hover); }
+.share-preview-title { color:var(--app-text); }
+.share-preview-detail,.share-preview-close { color:var(--app-text-muted); }
+.share-preview-close { border:0; background:transparent; cursor:pointer; }
+.share-preview-close:hover { color:var(--app-text); }
+.share-preview-scroll { background:var(--app-surface-secondary); border:1px solid var(--app-border); border-radius:var(--app-radius-card); overscroll-behavior:contain; }
+.share-preview-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.share-preview-actions .app-button,.share-preview-dismiss { min-height:48px; justify-content:center; }
 .bookmark-toast { position:absolute; left:50%; top:86px; transform:translateX(-50%); z-index:70; padding:8px 14px; border-radius:999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.12); color:white; font-size:13px; font-weight:700; box-shadow:0 12px 32px rgba(0,0,0,0.35); backdrop-filter:blur(16px); }
 .load { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; color:rgba(255,255,255,0.5); z-index:1; }
 .spinner { width:40px; height:40px; border:2px solid rgba(59,130,246,0.2); border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }

@@ -1,4 +1,5 @@
-import { ref, watch, type Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
+import { ttsDeadlineFrom, ttsRemaining } from '../utils/ttsSleepTimer'
 
 declare class Highlight { constructor(...ranges: Range[]) }
 
@@ -14,381 +15,370 @@ export function useTTS(opts: {
   flipDurationMs: Ref<number>
   ttsMiMoApiKey: Ref<string>
   ttsMiMoVoice: Ref<string>
+  bookTitle: Ref<string>
+  chapterTitle: Ref<string>
   nextPage: () => boolean | void
   slideToNextChapter: () => boolean | void
+  getFollowingSentenceText?: () => string | null
 }) {
   const ttsActive = ref(false)
+  const ttsPaused = ref(false)
+  const ttsState = computed<'playing' | 'paused' | 'stopped'>(() => (
+    !ttsActive.value ? 'stopped' : ttsPaused.value ? 'paused' : 'playing'
+  ))
+  const sleepRemainingMs = ref(0)
   let isPlayingTts = false
   let ttsAudio: HTMLAudioElement | null = null
+  let mimoSource: AudioBufferSourceNode | null = null
+  let audioCtx: AudioContext | null = null
   let ttsGeneration = 0
-  const ttsPrefetchCache = new Map<number, Promise<string | null>>()
+  let activeSentences: SentenceItem[] = []
+  let currentSentenceIndex = 0
+  let sleepDeadline = 0
+  let sleepTimeout: number | null = null
+  let sleepTicker: number | null = null
 
+  const edgeCache = new Map<string, Promise<string | null>>()
+  const mimoCache = new Map<string, Promise<Uint8Array | null>>()
+  const systemCache = new Map<string, SpeechSynthesisUtterance>()
   const edgeVoices = ref<any[]>([])
   const systemVoices = ref<SpeechSynthesisVoice[]>([])
 
-  let audioCtx: AudioContext | null = null
-  let nextChunkTime = 0
+  const sentenceTexts = (text: string): string[] => text.match(/[^ \n\t。！？.!?,，;；、]+[。！？.!?,，;；、]*/g)?.filter(Boolean) || []
 
-  let activeSentences: SentenceItem[] = []
-  let currentSentenceIndex = 0
-
-  // ---- Sentence extraction ----
   const getSentencesFromNode = (node: Node, sentences: SentenceItem[]) => {
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node.nodeValue || ''
       const regex = /[^ \n\t。！？.!?,，;；、]+[。！？.!?,，;；、]*/g
-      let match
+      let match: RegExpExecArray | null
       while ((match = regex.exec(text)) !== null) {
-        if (match[0].trim().length > 0) {
-          const r = new Range()
-          try {
-            r.setStart(node, match.index)
-            r.setEnd(node, match.index + match[0].length)
-            sentences.push({ text: match[0], range: r })
-          } catch (_) { }
-        }
+        if (!match[0].trim()) continue
+        const range = new Range()
+        try {
+          range.setStart(node, match.index)
+          range.setEnd(node, match.index + match[0].length)
+          sentences.push({ text: match[0], range })
+        } catch {}
       }
-    } else {
-      for (let i = 0; i < node.childNodes.length; i++) {
-        if ((node.childNodes[i] as HTMLElement).tagName?.toLowerCase() === 'rt') continue
-        getSentencesFromNode(node.childNodes[i], sentences)
-      }
+      return
+    }
+    for (const child of Array.from(node.childNodes)) {
+      if ((child as HTMLElement).tagName?.toLocaleLowerCase() !== 'rt') getSentencesFromNode(child, sentences)
     }
   }
 
-  // ---- Highlight ----
   const clearHighlight = () => {
     if ('highlights' in CSS) {
-      // @ts-ignore
+      // @ts-ignore Chromium CSS Highlight API
       CSS.highlights.delete('tts-highlight')
     }
   }
 
-  const highlightRange = (r: Range) => {
+  const highlightRange = (range: Range) => {
     if ('highlights' in CSS) {
-      const highlight = new Highlight(r)
-      // @ts-ignore
-      CSS.highlights.set('tts-highlight', highlight)
+      // @ts-ignore Chromium CSS Highlight API
+      CSS.highlights.set('tts-highlight', new Highlight(range))
     }
   }
 
   const injectHighlightStyles = () => {
-    let styleEl = document.getElementById('tts-style') as HTMLStyleElement
-    if (!styleEl) {
-      styleEl = document.createElement('style')
-      styleEl.id = 'tts-style'
-      document.head.appendChild(styleEl)
+    let style = document.getElementById('tts-style') as HTMLStyleElement | null
+    if (!style) {
+      style = document.createElement('style')
+      style.id = 'tts-style'
+      document.head.appendChild(style)
     }
-    styleEl.innerHTML = `::highlight(tts-highlight) { background-color: ${opts.highlightColor.value}40; color: ${opts.highlightColor.value}; border-radius: 4px; }`
+    style.innerHTML = `::highlight(tts-highlight) { background-color: ${opts.highlightColor.value}40; color: ${opts.highlightColor.value}; border-radius: 4px; }`
   }
-
   watch(() => opts.highlightColor.value, injectHighlightStyles)
 
-  // ---- IPC buffer conversion ----
-  const ipcBufferToUint8Array = (buf: any): Uint8Array | null => {
-    if (buf instanceof Uint8Array || buf instanceof ArrayBuffer) {
-      return new Uint8Array(buf)
-    } else if (buf && typeof buf === 'object') {
-      return new Uint8Array(Object.values(buf) as number[])
-    }
+  const ipcBytes = (value: unknown): Uint8Array | null => {
+    if (value instanceof Uint8Array) return value
+    if (value instanceof ArrayBuffer) return new Uint8Array(value)
+    if (value && typeof value === 'object') return new Uint8Array(Object.values(value) as number[])
     return null
   }
 
-  // ---- Synthesize ----
-  const synthesizeToUrl = async (text: string): Promise<string | null> => {
-    if (!text.trim()) return null
+  const cacheKey = (engine: string, text: string) => [
+    engine,
+    engine === 'mimo' ? opts.ttsMiMoVoice.value : opts.ttsVoice.value,
+    opts.ttsRate.value,
+    text,
+  ].join('\u0000')
+
+  const synthesizeEdgeUrl = async (text: string): Promise<string | null> => {
     try {
-      const res = await (window as any).electronAPI.tts.synthesize(text, opts.ttsVoice.value || undefined, opts.ttsRate.value)
-      if (res.success && res.audioBuffer) {
-        const audioData = ipcBufferToUint8Array(res.audioBuffer)
-        if (!audioData || audioData.length === 0) return null
-        const blob = new Blob([audioData.buffer.slice(audioData.byteOffset, audioData.byteOffset + audioData.byteLength) as ArrayBuffer], { type: 'audio/mpeg' })
-        return URL.createObjectURL(blob)
-      }
-    } catch (e) {
-      console.error('Edge TTS synthesis error', e)
-    }
-    return null
-  }
-
-  const prefetchAhead = (fromIndex: number, count: number = 2) => {
-    if (opts.ttsEngine.value !== 'edge') return
-    for (let i = fromIndex; i < Math.min(fromIndex + count, activeSentences.length); i++) {
-      if (!ttsPrefetchCache.has(i)) {
-        ttsPrefetchCache.set(i, synthesizeToUrl(activeSentences[i].text))
-      }
+      const response = await window.electronAPI.tts.synthesize(text, opts.ttsVoice.value || undefined, opts.ttsRate.value)
+      const bytes = response.success ? ipcBytes(response.audioBuffer) : null
+      if (!bytes?.length) return null
+      const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+      return URL.createObjectURL(new Blob([data], { type: 'audio/mpeg' }))
+    } catch (error) {
+      console.error('Edge TTS synthesis error', error)
+      return null
     }
   }
 
-  // ---- Playback ----
-  const playSystemTTS = (text: string) => {
-    return new Promise<void>((resolve) => {
-      if (!window.speechSynthesis) { resolve(); return }
-      const u = new SpeechSynthesisUtterance(text)
-      if (opts.ttsVoice.value && opts.ttsEngine.value === 'system') {
-        const v = systemVoices.value.find(x => x.name === opts.ttsVoice.value)
-        if (v) u.voice = v
+  const synthesizeMimoPcm = async (text: string): Promise<Uint8Array | null> => {
+    try {
+      const response = await window.electronAPI.tts.synthesizeMimo(text, opts.ttsMiMoApiKey.value, opts.ttsMiMoVoice.value)
+      return response.success ? ipcBytes(response.audioBuffer) : null
+    } catch (error) {
+      console.error('MiMo TTS synthesis error', error)
+      return null
+    }
+  }
+
+  const createSystemUtterance = (text: string) => {
+    const utterance = new SpeechSynthesisUtterance(text)
+    const voice = systemVoices.value.find(item => item.name === opts.ttsVoice.value)
+    if (voice) utterance.voice = voice
+    utterance.rate = opts.ttsRate.value
+    return utterance
+  }
+
+  const prefetchText = (text: string | null | undefined) => {
+    const value = text?.trim()
+    if (!value) return
+    if (opts.ttsEngine.value === 'system') {
+      const key = cacheKey('system', value)
+      if (!systemCache.has(key)) systemCache.set(key, createSystemUtterance(value))
+    } else if (opts.ttsEngine.value === 'edge') {
+      const key = cacheKey('edge', value)
+      if (!edgeCache.has(key)) edgeCache.set(key, synthesizeEdgeUrl(value))
+    } else if (opts.ttsEngine.value === 'mimo' && opts.ttsMiMoApiKey.value) {
+      const key = cacheKey('mimo', value)
+      if (!mimoCache.has(key)) mimoCache.set(key, synthesizeMimoPcm(value))
+    }
+  }
+
+  const nextText = () => activeSentences[currentSentenceIndex + 1]?.text
+    || sentenceTexts(opts.getFollowingSentenceText?.() || '')[0]
+    || null
+
+  const playSystem = (text: string) => new Promise<void>(resolve => {
+    if (!window.speechSynthesis) { resolve(); return }
+    const key = cacheKey('system', text)
+    const utterance = systemCache.get(key) || createSystemUtterance(text)
+    systemCache.delete(key)
+    utterance.onend = () => resolve()
+    utterance.onerror = () => resolve()
+    window.speechSynthesis.speak(utterance)
+  })
+
+  const playEdge = async (text: string) => {
+    const key = cacheKey('edge', text)
+    const promise = edgeCache.get(key) || synthesizeEdgeUrl(text)
+    edgeCache.delete(key)
+    const url = await promise
+    if (!url || !isPlayingTts) return
+    ttsAudio = new Audio(url)
+    await new Promise<void>(resolve => {
+      const done = () => {
+        URL.revokeObjectURL(url)
+        ttsAudio = null
+        resolve()
       }
-      u.rate = opts.ttsRate.value
-      u.onend = () => resolve()
-      u.onerror = () => resolve()
-      window.speechSynthesis.speak(u)
+      ttsAudio!.onended = done
+      ttsAudio!.onerror = done
+      void ttsAudio!.play().catch(done)
     })
   }
 
-  const playEdgeTTS = async (text: string, sentenceIdx: number) => {
-    if (!text.trim()) return
-    try {
-      let url: string | null = null
-      const cached = ttsPrefetchCache.get(sentenceIdx)
-      if (cached) {
-        url = await cached
-        ttsPrefetchCache.delete(sentenceIdx)
-      } else {
-        url = await synthesizeToUrl(text)
-      }
-      if (!url) return
-
-      ttsAudio = new Audio(url)
-      return new Promise<void>((resolve) => {
-        ttsAudio!.onended = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
-        ttsAudio!.onerror = () => { URL.revokeObjectURL(url!); ttsAudio = null; resolve() }
-        ttsAudio!.play().catch(() => resolve())
-      })
-    } catch (e) {
-      console.error('Edge TTS ERR', e)
-    }
-  }
-
-  const playMimoTTS = async (sentences: SentenceItem[]) => {
-    if (sentences.length === 0) return
-    const originalText = sentences.map(s => s.text).join('')
-    if (!originalText.trim()) return
-    if (!opts.ttsMiMoApiKey.value) return 
-
-    return new Promise<void>((resolve, reject) => {
-      if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      if (audioCtx.state === 'suspended') audioCtx.resume()
-
-      let playbackStartedAt = 0
-      nextChunkTime = audioCtx.currentTime
-
-      let offChunk: () => void
-      let offDone: () => void
-      let offError: () => void
-      const highlightTimers: any[] = []
-
-      const cleanup = () => {
-        if (offChunk) offChunk()
-        if (offDone) offDone()
-        if (offError) offError()
-        highlightTimers.forEach(t => clearTimeout(t))
-      }
-
-      offChunk = (window as any).electronAPI.tts.onMimoChunk((uint8: Uint8Array) => {
-        if (!isPlayingTts || !audioCtx) return
-
-        const pcm16 = new Int16Array(uint8.buffer, uint8.byteOffset, uint8.byteLength / 2)
-        const float32 = new Float32Array(pcm16.length)
-        for (let i = 0; i < pcm16.length; i++) {
-          float32[i] = pcm16[i] / 32768
-        }
-
-        const audioBuffer = audioCtx.createBuffer(1, float32.length, 24000)
-        audioBuffer.copyToChannel(float32, 0)
-
-        const source = audioCtx.createBufferSource()
-        source.buffer = audioBuffer
-        source.playbackRate.value = opts.ttsRate.value
-        source.connect(audioCtx.destination)
-
-        const startTime = Math.max(audioCtx.currentTime, nextChunkTime)
-        if (playbackStartedAt === 0) playbackStartedAt = startTime
-        source.start(startTime)
-        nextChunkTime = startTime + (audioBuffer.duration / opts.ttsRate.value)
-      })
-
-      offDone = (window as any).electronAPI.tts.onMimoDone(() => {
-        if (!audioCtx) { cleanup(); resolve(); return }
-        const totalDuration = nextChunkTime - playbackStartedAt
-        if (totalDuration > 0) {
-          const totalLength = originalText.length
-          let cumulativeLength = 0
-          
-          for (let i = 1; i < sentences.length; i++) {
-            cumulativeLength += sentences[i - 1].text.length
-            const delay = (cumulativeLength / totalLength) * totalDuration * 1000
-            const timer = setTimeout(() => {
-              if (isPlayingTts) {
-                highlightRange(sentences[i].range)
-              }
-            }, delay)
-            highlightTimers.push(timer)
-          }
-        }
-
-        const waitTime = (nextChunkTime - audioCtx.currentTime) * 1000
-        setTimeout(() => {
-          cleanup()
-          resolve()
-        }, Math.max(0, waitTime))
-      })
-
-      offError = (window as any).electronAPI.tts.onMimoError((err: string) => {
-        cleanup()
-        reject(new Error(err))
-      })
-
-      const cleanedText = originalText.replace(/[\(\)\[\]（））【】]/g, '"')
-      ;(window as any).electronAPI.tts.startMimo(cleanedText, opts.ttsMiMoApiKey.value, opts.ttsMiMoVoice.value)
+  const playMimo = async (text: string) => {
+    const key = cacheKey('mimo', text)
+    const promise = mimoCache.get(key) || synthesizeMimoPcm(text)
+    mimoCache.delete(key)
+    const bytes = await promise
+    if (!bytes?.length || !isPlayingTts) return
+    if (!audioCtx) audioCtx = new AudioContext()
+    if (audioCtx.state === 'suspended' && !ttsPaused.value) await audioCtx.resume()
+    const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2))
+    const floats = new Float32Array(pcm.length)
+    for (let index = 0; index < pcm.length; index++) floats[index] = pcm[index] / 32768
+    const buffer = audioCtx.createBuffer(1, floats.length, 24000)
+    buffer.copyToChannel(floats, 0)
+    mimoSource = audioCtx.createBufferSource()
+    mimoSource.buffer = buffer
+    mimoSource.playbackRate.value = opts.ttsRate.value
+    mimoSource.connect(audioCtx.destination)
+    await new Promise<void>(resolve => {
+      mimoSource!.onended = () => { mimoSource = null; resolve() }
+      mimoSource!.start()
     })
   }
 
   const buildSentences = () => {
     activeSentences = []
     currentSentenceIndex = 0
-    ttsPrefetchCache.clear()
     if (opts.contentRef.value) getSentencesFromNode(opts.contentRef.value, activeSentences)
-
-    if (activeSentences.length > 0) {
-      for (let i = 0; i < activeSentences.length; i++) {
-        const rect = activeSentences[i].range.getBoundingClientRect()
-        if (rect.right > 20 && rect.width > 0) {
-          currentSentenceIndex = i
-          break
-        }
-      }
-    }
+    const visible = activeSentences.findIndex(item => {
+      const rect = item.range.getBoundingClientRect()
+      return rect.right > 20 && rect.width > 0
+    })
+    if (visible >= 0) currentSentenceIndex = visible
   }
 
-  const isFullSentenceEnd = (text: string) => /.*[。！？!?]$/.test(text.trim())
+  const updateMediaSession = () => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.metadata = ttsActive.value
+      ? new MediaMetadata({ title: opts.bookTitle.value || 'PacilRead 听书', artist: opts.chapterTitle.value, album: 'PacilRead' })
+      : null
+    navigator.mediaSession.playbackState = !ttsActive.value ? 'none' : ttsPaused.value ? 'paused' : 'playing'
+  }
+
+  const clearSleepTimer = () => {
+    if (sleepTimeout !== null) window.clearTimeout(sleepTimeout)
+    if (sleepTicker !== null) window.clearInterval(sleepTicker)
+    sleepTimeout = null
+    sleepTicker = null
+    sleepDeadline = 0
+    sleepRemainingMs.value = 0
+  }
+
+  const stopTts = () => {
+    ttsGeneration++
+    ttsActive.value = false
+    ttsPaused.value = false
+    isPlayingTts = false
+    if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
+    if (mimoSource) { try { mimoSource.stop() } catch {}; mimoSource = null }
+    if (window.speechSynthesis) window.speechSynthesis.cancel()
+    void window.electronAPI.tts.stopMimo()
+    clearHighlight()
+    clearSleepTimer()
+    for (const promise of edgeCache.values()) void promise.then(url => { if (url) URL.revokeObjectURL(url) })
+    edgeCache.clear()
+    mimoCache.clear()
+    systemCache.clear()
+    updateMediaSession()
+  }
+
+  const setSleepTimer = (durationMs: number) => {
+    if (sleepTimeout !== null) window.clearTimeout(sleepTimeout)
+    if (sleepTicker !== null) window.clearInterval(sleepTicker)
+    sleepTimeout = null
+    sleepTicker = null
+    const duration = Math.max(0, Math.floor(durationMs || 0))
+    sleepDeadline = ttsDeadlineFrom(performance.now(), duration)
+    sleepRemainingMs.value = duration
+    if (!duration || !ttsActive.value) return
+    sleepTimeout = window.setTimeout(stopTts, duration)
+    sleepTicker = window.setInterval(() => {
+      sleepRemainingMs.value = ttsRemaining(performance.now(), sleepDeadline)
+    }, 1000)
+  }
 
   const playNextSentence = async () => {
-    if (!isPlayingTts) return
-    if (activeSentences.length === 0 || currentSentenceIndex >= activeSentences.length) {
-      const turnedPage = opts.nextPage()
-      if (turnedPage === false) opts.slideToNextChapter()
-      setTimeout(() => {
+    const generation = ttsGeneration
+    if (!isPlayingTts || ttsPaused.value) return
+    if (!activeSentences.length || currentSentenceIndex >= activeSentences.length) {
+      const turned = opts.nextPage()
+      if (turned === false) opts.slideToNextChapter()
+      window.setTimeout(() => {
+        if (!isPlayingTts || generation !== ttsGeneration) return
         buildSentences()
-        playNextSentence()
+        void playNextSentence()
       }, opts.flipDurationMs.value * 2)
       return
     }
 
-    prefetchAhead(currentSentenceIndex + 1, 2)
-
     const item = activeSentences[currentSentenceIndex]
+    prefetchText(nextText())
     const rect = item.range.getBoundingClientRect()
-
-    const w = opts.containerWidth.value || window.innerWidth
-    if (rect.left > w - 20) {
+    const width = opts.containerWidth.value || window.innerWidth
+    if (rect.left > width - 20) {
       opts.nextPage()
-      await new Promise(res => setTimeout(res, opts.flipDurationMs.value + 50))
+      await new Promise(resolve => window.setTimeout(resolve, opts.flipDurationMs.value + 50))
     }
-
-    if (!isPlayingTts) return
-
+    if (!isPlayingTts || ttsPaused.value || generation !== ttsGeneration) return
     highlightRange(item.range)
-
-    const myGen = ++ttsGeneration
-
-    if (opts.ttsEngine.value === 'system') {
-      await playSystemTTS(item.text)
-      if (myGen === ttsGeneration && isPlayingTts) {
-        currentSentenceIndex++
-        playNextSentence()
-      }
-    } else if (opts.ttsEngine.value === 'edge') {
-      await playEdgeTTS(item.text, currentSentenceIndex)
-      if (myGen === ttsGeneration && isPlayingTts) {
-        currentSentenceIndex++
-        playNextSentence()
-      }
-    } else if (opts.ttsEngine.value === 'mimo') {
-      const group: SentenceItem[] = [activeSentences[currentSentenceIndex]]
-      let nextIdx = currentSentenceIndex + 1
-      while (nextIdx < activeSentences.length) {
-        if (isFullSentenceEnd(activeSentences[nextIdx - 1].text)) break
-        group.push(activeSentences[nextIdx])
-        nextIdx++
-      }
-      
-      await playMimoTTS(group)
-      
-      if (myGen === ttsGeneration && isPlayingTts) {
-        currentSentenceIndex += group.length
-        playNextSentence()
-      }
+    if (opts.ttsEngine.value === 'system') await playSystem(item.text)
+    else if (opts.ttsEngine.value === 'edge') await playEdge(item.text)
+    else await playMimo(item.text)
+    if (isPlayingTts && !ttsPaused.value && generation === ttsGeneration) {
+      currentSentenceIndex++
+      void playNextSentence()
     }
   }
 
-  // ---- Public API ----
-  const startTts = () => {
+  const pauseTts = () => {
+    if (!ttsActive.value || ttsPaused.value) return
+    ttsPaused.value = true
+    if (ttsAudio) ttsAudio.pause()
+    if (window.speechSynthesis) window.speechSynthesis.pause()
+    if (audioCtx?.state === 'running') void audioCtx.suspend()
+    updateMediaSession()
+  }
+
+  const resumeTts = () => {
+    if (!ttsActive.value || !ttsPaused.value) return
+    ttsPaused.value = false
+    if (ttsAudio) void ttsAudio.play()
+    if (window.speechSynthesis) window.speechSynthesis.resume()
+    if (audioCtx?.state === 'suspended') void audioCtx.resume()
+    updateMediaSession()
+    if (!ttsAudio && !window.speechSynthesis.speaking && !mimoSource) void playNextSentence()
+  }
+
+  const configureMediaSession = () => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.setActionHandler('play', resumeTts)
+    navigator.mediaSession.setActionHandler('pause', pauseTts)
+    navigator.mediaSession.setActionHandler('stop', stopTts)
+  }
+
+  const startTts = (sleepDurationMs = 0) => {
     if (ttsActive.value) { stopTts(); return }
-    if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) {
-      return 'MIMO_KEY_MISSING'
-    }
+    if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) return 'MIMO_KEY_MISSING'
+    ttsGeneration++
     ttsActive.value = true
+    ttsPaused.value = false
     isPlayingTts = true
     buildSentences()
-    prefetchAhead(currentSentenceIndex, 2)
-    playNextSentence()
-  }
-
-  const stopTts = () => {
-    ttsActive.value = false
-    isPlayingTts = false
-    if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
-    if (window.speechSynthesis) window.speechSynthesis.cancel()
-    if (opts.ttsEngine.value === 'mimo') {
-      ; (window as any).electronAPI.tts.stopMimo()
-    }
-    clearHighlight()
-    for (const [, p] of ttsPrefetchCache) {
-      p.then(url => { if (url) URL.revokeObjectURL(url) })
-    }
-    ttsPrefetchCache.clear()
+    prefetchText(activeSentences[currentSentenceIndex + 1]?.text || nextText())
+    setSleepTimer(sleepDurationMs)
+    configureMediaSession()
+    updateMediaSession()
+    void playNextSentence()
   }
 
   const handleTtsClick = (x: number, y: number): boolean => {
     if (!ttsActive.value) return false
-    let found = -1
-    for (let i = 0; i < activeSentences.length; i++) {
-      const rects = activeSentences[i].range.getClientRects()
-      for (let r = 0; r < rects.length; r++) {
-        const rect = rects[r]
-        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-          found = i; break
-        }
-      }
-      if (found >= 0) break
-    }
-    if (found >= 0) {
-      currentSentenceIndex = found
-      if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
-      if (window.speechSynthesis) window.speechSynthesis.cancel()
-      playNextSentence()
-      return true
-    }
-    return false
+    const found = activeSentences.findIndex(item => Array.from(item.range.getClientRects()).some(rect => (
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    )))
+    if (found < 0) return false
+    ttsGeneration++
+    currentSentenceIndex = found
+    if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
+    if (mimoSource) { try { mimoSource.stop() } catch {}; mimoSource = null }
+    if (window.speechSynthesis) window.speechSynthesis.cancel()
+    void playNextSentence()
+    return true
   }
 
   const loadVoices = async () => {
-    try { edgeVoices.value = await (window as any).electronAPI.tts.getEdgeVoices() } catch (e) { }
-
-    const setSysVoices = () => { systemVoices.value = window.speechSynthesis.getVoices() }
-    if (window.speechSynthesis) {
-      systemVoices.value = window.speechSynthesis.getVoices()
-      window.speechSynthesis.onvoiceschanged = setSysVoices
-    }
+    try { edgeVoices.value = await window.electronAPI.tts.getEdgeVoices() } catch {}
+    const loadSystem = () => { systemVoices.value = window.speechSynthesis?.getVoices() || [] }
+    loadSystem()
+    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = loadSystem
   }
+
+  watch([opts.bookTitle, opts.chapterTitle], updateMediaSession)
 
   return {
     ttsActive,
+    ttsPaused,
+    ttsState,
+    sleepRemainingMs,
     edgeVoices,
     systemVoices,
     startTts,
     stopTts,
+    pauseTts,
+    resumeTts,
+    setSleepTimer,
     handleTtsClick,
     loadVoices,
     injectHighlightStyles,

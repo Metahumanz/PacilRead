@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen, clipboard, nativeImage } from 'electron'
 import { dirname, join, extname, isAbsolute } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, renameSync, rmSync } from 'fs'
@@ -6,12 +6,22 @@ import { gzipSync, gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
 import AdmZip from 'adm-zip'
 import { parseTxt, parseEpub, parsePdf, type Chapter } from './parsers'
-import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoStreaming } from './tts'
+import { synthesizeEdgeTTS, EDGE_VOICES, synthesizeMimoBuffered, synthesizeMimoStreaming } from './tts'
 import { autoUpdater } from 'electron-updater'
 import { normalizeBookMetadata, normalizeBookPatch } from '../src/utils/bookMetadata'
+import {
+  addBookTags,
+  detectDuplicates,
+  removeBookTags,
+  sanitizeExportFileName,
+  uniqueExportFileName,
+  type DuplicateMatchType,
+} from '../src/utils/bookshelfManagement'
+import { PersistentBookSearchIndex, type SearchIndexChapter, type SearchIndexRule } from './searchIndex'
 
 let mainWindow: BrowserWindow | null = null
 let mimoAbortController: AbortController | null = null
+const mimoBufferedControllers = new Set<AbortController>()
 
 const MIN_DISPLAY_REFRESH_RATE = 24
 const MAX_DISPLAY_REFRESH_RATE = 360
@@ -19,6 +29,7 @@ const DEFAULT_DISPLAY_REFRESH_RATE = 60
 const CHAPTER_TEXT_DIR = 'chapter_text'
 const DATA_DIR = join(app.getPath('userData'), 'data')
 const SNAPSHOT_DIR = join(app.getPath('userData'), 'snapshots')
+const SEARCH_INDEX_DIR = join(app.getPath('userData'), 'search_index')
 const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
 
 const JSON_FILES: Record<string, string> = {
@@ -53,6 +64,7 @@ interface SnapshotBundle {
 
 const jsonEntityCache = new Map<JsonEntityType, unknown>()
 let chaptersByBookIdCache: Map<number, any[]> | null = null
+const bookSearchIndex = new PersistentBookSearchIndex(SEARCH_INDEX_DIR)
 
 function perfLog(label: string, startedAt: number, extra = ''): void {
   if (!is.dev && process.env.PACILREAD_PERF !== '1') return
@@ -288,7 +300,8 @@ function createWindow(): void {
       preload: join(__dirname, 'preload.js'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false,
     }
   })
   // mainWindow.on('ready-to-show', () => mainWindow?.show())
@@ -764,7 +777,37 @@ function copyImportedBookSource(bookId: number, filePath: string): string {
   return filename
 }
 
-async function importBookJson(filePath: string): Promise<{ bookId: number; chapterCount: number }> {
+type ImportBookResult =
+  | { status: 'imported'; bookId: number; chapterCount: number }
+  | { status: 'duplicate'; matchType: DuplicateMatchType; title: string; author: string | null }
+
+function importedSourceAbsolutePath(book: any): string | null {
+  if (!book?.sourceFile) return null
+  const target = join(app.getPath('userData'), 'books', safeAssetFileName(String(book.sourceFile)))
+  return existsSync(target) ? target : null
+}
+
+function sha256File(filePath: string): string {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex')
+}
+
+function backfillBookContentHashes(books: any[]): boolean {
+  let changed = false
+  for (const book of books) {
+    if (String(book.contentSha256 || '').trim()) continue
+    const sourcePath = importedSourceAbsolutePath(book)
+    if (!sourcePath) continue
+    try {
+      book.contentSha256 = sha256File(sourcePath)
+      changed = true
+    } catch (error) {
+      console.warn('[Library] Failed to backfill source hash:', book.id, error)
+    }
+  }
+  return changed
+}
+
+async function importBookJson(filePath: string, allowDuplicate = false): Promise<ImportBookResult> {
   let bookId = 0
   try {
     const ext = extname(filePath).toLowerCase()
@@ -773,6 +816,21 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
     const title = parsed.title || fileName.replace(/\.[^/.]+$/, '')
     const author = parsed.author
     const readingStatsKey = buildReadingStatsKey(title, author)
+    const contentSha256 = sha256File(filePath)
+    const books = readJsonEntity('books', []) as any[]
+    if (backfillBookContentHashes(books)) writeJsonEntity('books', books)
+    const duplicate = detectDuplicates(
+      books.map(book => ({
+        key: `existing-${book.id}`,
+        title: book.title,
+        author: book.author,
+        contentSha256: book.contentSha256,
+      })),
+      [{ key: 'incoming', title, author, contentSha256 }],
+    ).get('incoming')
+    if (duplicate && !allowDuplicate) {
+      return { status: 'duplicate', matchType: duplicate, title, author }
+    }
     let parsedChapters: Chapter[]
     let coverBuffer: Buffer | undefined
     let coverExtension: string | undefined
@@ -790,7 +848,6 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
       throw new Error(`Unsupported: ${ext}`)
     }
 
-    const books = readJsonEntity('books', []) as any[]
     const chapters = readJsonEntity('chapters', []) as any[]
     const now = Date.now()
     bookId = nextJsonId(books)
@@ -839,11 +896,17 @@ async function importBookJson(filePath: string): Promise<{ bookId: number; chapt
       updatedAt: now,
       coverFile,
       sourceFile,
+      sourceDisplayName: fileName,
+      contentSha256,
     })
 
     writeJsonEntity('books', books)
     writeJsonEntity('chapters', [...chapters, ...chapterRows])
-    return { bookId, chapterCount: chapterRows.length }
+    const result: ImportBookResult = { status: 'imported', bookId, chapterCount: chapterRows.length }
+    setTimeout(() => {
+      try { warmBookSearchIndex(bookId) } catch (error) { console.warn('[Search] Import warmup failed:', error) }
+    }, 0)
+    return result
   } catch (error) {
     if (bookId > 0) {
       rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
@@ -905,6 +968,8 @@ function bookRowToSummary(book: any) {
     chapterCount,
     coverFile: book.coverFile === undefined || book.coverFile === null ? null : String(book.coverFile),
     sourceFile: book.sourceFile === undefined || book.sourceFile === null ? null : String(book.sourceFile),
+    sourceDisplayName: book.sourceDisplayName === undefined ? undefined : String(book.sourceDisplayName),
+    contentSha256: book.contentSha256 === undefined ? undefined : String(book.contentSha256),
     createdAt: Number(book.createdAt || 0),
     updatedAt: Number(book.updatedAt || 0),
   }
@@ -955,6 +1020,50 @@ function getMostRecentBookJson() {
   return result
 }
 
+function getSearchIndexRules(bookId: number): SearchIndexRule[] {
+  return (readJsonEntity('rules', []) as any[])
+    .filter(rule => rule.scope === 'global' || (rule.scope === 'book' && Number(rule.bookId) === bookId))
+    .sort((a, b) => Number(a.id || 0) - Number(b.id || 0))
+    .map(rule => ({
+      id: Number(rule.id || 0),
+      updatedAt: Number(rule.updatedAt || 0),
+      active: Boolean(rule.active),
+      regex: Boolean(rule.regex),
+      pattern: String(rule.pattern || ''),
+      replacement: String(rule.replacement || ''),
+    }))
+}
+
+function getSearchIndexChapters(bookId: number): SearchIndexChapter[] {
+  return getChapterRowsForBook(bookId).map((chapter, index) => {
+    const bodyTextPath = String(chapter.bodyTextPath || '')
+    const resolvedPath = bodyTextPath ? resolveChapterTextPath(bodyTextPath, app.getPath('userData')) : null
+    const stats = resolvedPath && existsSync(resolvedPath) ? statSync(resolvedPath) : null
+    const text = chapterRowTextStorage(chapter) === 'file_gzip' && bodyTextPath
+      ? (readChapterTextGzip(bodyTextPath) || '')
+      : String(chapter.bodyText || '')
+    return {
+      id: Number(chapter.id),
+      title: String(chapter.title || `第 ${index + 1} 章`),
+      orderIndex: Number(chapter.orderIndex || index),
+      fingerprint: `${chapter.bodyTextSize || text.length}|${bodyTextPath}|${stats?.size || 0}|${stats?.mtimeMs || 0}`,
+      text,
+    }
+  })
+}
+
+function warmBookSearchIndex(bookId: number): void {
+  bookSearchIndex.build(bookId, getSearchIndexChapters(bookId), getSearchIndexRules(bookId))
+}
+
+function isBookSearchIndexReady(bookId: number): boolean {
+  return bookSearchIndex.isReady(bookId, getSearchIndexChapters(bookId), getSearchIndexRules(bookId))
+}
+
+function searchBookJson(bookId: number, query: string) {
+  return bookSearchIndex.search(bookId, getSearchIndexChapters(bookId), getSearchIndexRules(bookId), query)
+}
+
 function updateBookJson(bookId: number, fields: Record<string, unknown>) {
   const startedAt = performance.now()
   const allowedFields = new Set([
@@ -991,19 +1100,89 @@ function updateBookJson(bookId: number, fields: Record<string, unknown>) {
   return result
 }
 
-function deleteBookJson(bookId: number): { success: boolean } {
-  createLocalSnapshot('删除书籍前自动快照')
+type BatchClassificationOperation =
+  | { type: 'addTags' | 'removeTags'; tags: string[] }
+  | { type: 'setSeries'; series: string }
+  | { type: 'setReadingStatus'; status: 'unread' | 'reading' | 'finished' }
+
+function batchClassifyBooksJson(bookIds: number[], operation: BatchClassificationOperation): { updated: number } {
+  const ids = new Set(bookIds.map(Number).filter(Number.isFinite))
   const books = readJsonEntity('books', []) as any[]
-  const target = books.find(book => Number(book.id) === bookId)
-  writeJsonEntity('books', books.filter(book => Number(book.id) !== bookId))
-  writeJsonEntity('chapters', (readJsonEntity('chapters', []) as any[]).filter(chapter => Number(chapter.bookId) !== bookId))
-  writeJsonEntity('rules', (readJsonEntity('rules', []) as any[]).filter(rule => Number(rule.bookId) !== bookId))
-  writeJsonEntity('bookmarks', (readJsonEntity('bookmarks', []) as any[]).filter(bookmark => Number(bookmark.bookId) !== bookId))
-  rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
-  if (target?.sourceFile) {
-    rmSync(join(app.getPath('userData'), 'books', safeAssetFileName(String(target.sourceFile))), { force: true })
+  let updated = 0
+  const next = books.map(book => {
+    if (!ids.has(Number(book.id))) return book
+    const value = { ...book, updatedAt: Date.now() }
+    if (operation.type === 'addTags') value.tags = addBookTags(value.tags, operation.tags)
+    else if (operation.type === 'removeTags') value.tags = removeBookTags(value.tags, operation.tags)
+    else if (operation.type === 'setSeries') value.series = String(operation.series || '').trim()
+    else if (operation.type === 'setReadingStatus') value.readingStatus = operation.status
+    updated++
+    return normalizeBookMetadata(value)
+  })
+  if (updated > 0) writeJsonEntity('books', next)
+  return { updated }
+}
+
+function deleteBooksJson(bookIds: number[]): { deleted: number } {
+  const ids = new Set(bookIds.map(Number).filter(Number.isFinite))
+  if (ids.size === 0) return { deleted: 0 }
+  createLocalSnapshot(ids.size > 1 ? '批量删除书籍前自动快照' : '删除书籍前自动快照')
+  const books = readJsonEntity('books', []) as any[]
+  const targets = books.filter(book => ids.has(Number(book.id)))
+  writeJsonEntity('books', books.filter(book => !ids.has(Number(book.id))))
+  writeJsonEntity('chapters', (readJsonEntity('chapters', []) as any[]).filter(chapter => !ids.has(Number(chapter.bookId))))
+  writeJsonEntity('rules', (readJsonEntity('rules', []) as any[]).filter(rule => !ids.has(Number(rule.bookId))))
+  writeJsonEntity('bookmarks', (readJsonEntity('bookmarks', []) as any[]).filter(bookmark => !ids.has(Number(bookmark.bookId))))
+  for (const target of targets) {
+    const bookId = Number(target.id)
+    rmSync(getBookChapterTextDir(bookId), { recursive: true, force: true })
+    const source = importedSourceAbsolutePath(target)
+    if (source) rmSync(source, { force: true })
+    bookSearchIndex.delete(bookId)
   }
+  return { deleted: targets.length }
+}
+
+function deleteBookJson(bookId: number): { success: boolean } {
+  deleteBooksJson([bookId])
   return { success: true }
+}
+
+function exportExtension(book: any): string {
+  const sourceName = String(book.sourceDisplayName || book.sourceFile || '')
+  const sourceExt = extname(sourceName).toLocaleLowerCase()
+  if (sourceExt) return sourceExt
+  if (String(book.bookType).toLocaleLowerCase() === 'epub') return '.epub'
+  if (String(book.bookType).toLocaleLowerCase() === 'pdf') return '.pdf'
+  return '.txt'
+}
+
+async function exportBooksJson(bookIds: number[]) {
+  const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'] })
+  if (result.canceled || !result.filePaths[0]) return { canceled: true, success: 0, failed: 0 }
+  const directory = result.filePaths[0]
+  const ids = new Set(bookIds.map(Number).filter(Number.isFinite))
+  const books = (readJsonEntity('books', []) as any[]).filter(book => ids.has(Number(book.id)))
+  const usedNames = new Set(readdirSync(directory))
+  let success = 0
+  let failed = 0
+  for (const book of books) {
+    try {
+      const source = importedSourceAbsolutePath(book)
+      if (!source) throw new Error('原文件不存在')
+      const extension = exportExtension(book)
+      const prefixedFallback = String(book.sourceFile || '').replace(new RegExp(`^book_${Number(book.id)}_`), '')
+      const preferred = String(book.sourceDisplayName || prefixedFallback || '').trim()
+        || `${sanitizeExportFileName(book.title || '未命名书籍')}${book.author ? ` - ${sanitizeExportFileName(book.author)}` : ''}${extension}`
+      const filename = uniqueExportFileName(preferred, extension, usedNames)
+      copyFileSync(source, join(directory, filename))
+      success++
+    } catch (error) {
+      failed++
+      console.warn('[Library] Export failed:', book.id, error)
+    }
+  }
+  return { canceled: false, success, failed }
 }
 
 function getChaptersByBookIdMap(): Map<number, any[]> {
@@ -1172,6 +1351,15 @@ ipcMain.handle('dialog:saveBinaryFile', async (_, options: {
   return { success: true, filePath: r.filePath }
 })
 
+ipcMain.handle('clipboard:writeImage', async (_, dataUrl: string) => {
+  const pngDataUrl = String(dataUrl || '')
+  if (!pngDataUrl.startsWith('data:image/png;base64,')) throw new Error('仅支持生成的 PNG 图片数据')
+  const image = nativeImage.createFromDataURL(pngDataUrl)
+  if (image.isEmpty()) throw new Error('无效的图片数据')
+  clipboard.writeImage(image)
+  return { success: true }
+})
+
 ipcMain.handle('win:setAspectRatio', async (_, ratio: number) => {
   // We explicitly do not call setAspectRatio(ratio) to avoid locking the window.
   // We only resize it to match the ratio once upon user request.
@@ -1231,8 +1419,11 @@ ipcMain.handle('app:getVersion', async () => app.getVersion())
 ipcMain.handle('app:getPath', async (_, name: any) => app.getPath(name))
 ipcMain.handle('app:quit', async () => app.quit())
 
-ipcMain.handle('library:importBook', async (_, filePath: string) => importBookJson(filePath))
+ipcMain.handle('library:importBook', async (_, filePath: string, allowDuplicate?: boolean) => importBookJson(filePath, allowDuplicate === true))
 ipcMain.handle('library:deleteBook', async (_, bookId: number) => deleteBookJson(bookId))
+ipcMain.handle('library:deleteBooks', async (_, bookIds: number[]) => deleteBooksJson(bookIds))
+ipcMain.handle('library:batchClassifyBooks', async (_, bookIds: number[], operation: BatchClassificationOperation) => batchClassifyBooksJson(bookIds, operation))
+ipcMain.handle('library:exportBooks', async (_, bookIds: number[]) => exportBooksJson(bookIds))
 ipcMain.handle('library:getBookshelfBooks', async () => getBookshelfBooksJson())
 ipcMain.handle('library:getBookSummary', async (_, bookId: number) => getBookSummaryJson(bookId))
 ipcMain.handle('library:getMostRecentBook', async () => getMostRecentBookJson())
@@ -1244,6 +1435,8 @@ ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsW
 ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))
 ipcMain.handle('library:createBookChapterTextZip', async (_, bookId: number) => createBookChapterTextZip(bookId))
 ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string) => extractBookChapterTextZip(zipPath))
+ipcMain.handle('library:isSearchIndexReady', async (_, bookId: number) => isBookSearchIndexReady(bookId))
+ipcMain.handle('library:searchBook', async (_, bookId: number, query: string) => searchBookJson(bookId, query))
 
 ipcMain.handle('snapshot:create', async (_, reason?: string) => createLocalSnapshot(reason || '手动创建'))
 ipcMain.handle('snapshot:list', async () => listLocalSnapshots())
@@ -1348,11 +1541,26 @@ ipcMain.handle('tts:start-mimo', async (event, args: { text: string; apiKey: str
   )
 })
 
+ipcMain.handle('tts:synthesize-mimo', async (_, args: { text: string; apiKey: string; voice?: string }) => {
+  const controller = new AbortController()
+  mimoBufferedControllers.add(controller)
+  try {
+    const buffer = await synthesizeMimoBuffered(args.text, args.apiKey, args.voice, controller.signal)
+    return { success: true, audioBuffer: new Uint8Array(buffer) }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  } finally {
+    mimoBufferedControllers.delete(controller)
+  }
+})
+
 ipcMain.handle('tts:stop-mimo', async () => {
   if (mimoAbortController) {
     mimoAbortController.abort()
     mimoAbortController = null
   }
+  for (const controller of mimoBufferedControllers) controller.abort()
+  mimoBufferedControllers.clear()
 })
 
 // ---- v8 JSON data IPC handlers ----

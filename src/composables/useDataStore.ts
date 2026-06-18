@@ -23,6 +23,8 @@ export interface Book {
   updatedAt: number
   coverFile: string | null
   sourceFile: string | null
+  sourceDisplayName?: string
+  contentSha256?: string
 }
 
 export interface Chapter {

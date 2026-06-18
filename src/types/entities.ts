@@ -5,6 +5,18 @@ export type LibraryBook = Book
 export type LibraryChapter = Chapter
 export type ReplacementRule = Rule
 
+export type BatchClassificationOperation =
+  | { type: 'addTags' | 'removeTags'; tags: string[] }
+  | { type: 'setSeries'; series: string }
+  | { type: 'setReadingStatus'; status: ReadingStatus }
+
+export interface BookSearchResult {
+  chapterIndex: number
+  chapterTitle: string
+  snippet: string
+  charOffset: number
+}
+
 export interface ReaderBook {
   id: number
   title: string
