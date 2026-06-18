@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import ts from 'typescript'
@@ -9,8 +10,11 @@ import ts from 'typescript'
 const require = createRequire(import.meta.url)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-function loadTsModule(relativePath) {
+const tsModuleCache = new Map()
+
+function loadTsModule(relativePath, baseDir = rootDir) {
   const filename = resolve(rootDir, relativePath)
+  if (tsModuleCache.has(filename)) return tsModuleCache.get(filename).exports
   const source = readFileSync(filename, 'utf8')
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: {
@@ -21,10 +25,20 @@ function loadTsModule(relativePath) {
     fileName: filename,
   })
   const module = { exports: {} }
+  tsModuleCache.set(filename, module)
+  const localRequire = (specifier) => {
+    if (!specifier.startsWith('.')) return require(specifier)
+    const target = resolve(dirname(filename), specifier)
+    const tsTarget = target.endsWith('.ts') ? target : `${target}.ts`
+    if (existsSync(tsTarget)) return loadTsModule(tsTarget, baseDir)
+    return require(target)
+  }
   const sandbox = {
     module,
     exports: module.exports,
-    require,
+    require: localRequire,
+    __filename: filename,
+    __dirname: dirname(filename),
     console,
     Buffer,
     URL,
@@ -244,6 +258,73 @@ const slices = [
 assert.equal(pagination.findPageForOffsetInSlices(slices, 15), 1)
 assert.equal(pagination.findPageForOffsetInSlices(slices, 99), 2)
 assert.equal(pagination.findPageForOffsetInSlices([], 5), 0)
+
+const bookshelfManagement = loadTsModule('src/utils/bookshelfManagement.ts')
+const managedBook = { title: '银河漫游指南', author: 'Douglas Adams', tags: ['科幻', '喜剧'], series: '银河', readingStatus: 'reading' }
+assert.equal(bookshelfManagement.matchesBookshelfFilters(managedBook, {
+  query: 'douglas', tag: '科幻', series: '银河', status: 'reading',
+}), true)
+assert.equal(bookshelfManagement.matchesBookshelfFilters(managedBook, {
+  query: 'douglas', tag: '科幻', series: '银河', status: 'finished',
+}), false)
+assert.deepEqual(plain(bookshelfManagement.addBookTags(['科幻'], [' 科幻 ', '', '长篇', '长篇'])), ['科幻', '长篇'])
+assert.deepEqual(plain(bookshelfManagement.removeBookTags(['科幻', '长篇'], [' 科幻 '])), ['长篇'])
+const duplicateMatches = bookshelfManagement.detectDuplicates([
+  { key: 'existing-a', title: '同名书', author: '作者', contentSha256: 'hash-a' },
+  { key: 'existing-b', title: '另一册', author: '另一人', contentSha256: 'hash-b' },
+], [
+  { key: 'exact-first', title: '同名书', author: '作者', contentSha256: 'hash-b' },
+  { key: 'metadata', title: '  同名书 ', author: '作者', contentSha256: 'hash-c' },
+  { key: 'same-batch', title: '新书', author: '新作者', contentSha256: 'hash-new' },
+  { key: 'same-batch-copy', title: '新书', author: '新作者', contentSha256: 'hash-other' },
+])
+assert.equal(duplicateMatches.get('exact-first'), 'exact_content')
+assert.equal(duplicateMatches.get('metadata'), 'same_title_author')
+assert.equal(duplicateMatches.get('same-batch-copy'), 'same_title_author')
+const exportNames = new Set(['原书名.txt'])
+assert.equal(bookshelfManagement.uniqueExportFileName('原书名.txt', '.txt', exportNames), '原书名 (2).txt')
+assert.equal(bookshelfManagement.uniqueExportFileName('原书名.txt', '.txt', exportNames), '原书名 (3).txt')
+
+const searchText = loadTsModule('src/utils/searchText.ts')
+assert.deepEqual(plain(searchText.findAllSearchMatches('AaAa', 'aa')), [0, 1, 2])
+assert.deepEqual(plain(searchText.findAllSearchMatches('中文中文', '中文')), [0, 2])
+
+const quoteShare = loadTsModule('src/utils/quoteShare.ts')
+assert.equal(quoteShare.quoteTextFromPageLines([
+  { kind: 'title', text: '第一章 标题' },
+  { kind: 'body', text: '正文第一句。' },
+  { kind: 'body', text: '正文第二句。' },
+]), '正文第一句。正文第二句。')
+const quoteSource = `${'前'.repeat(50)}选中文字${'后'.repeat(50)}`
+assert.deepEqual(plain(quoteShare.quoteContextExcerpt(quoteSource, 50, 54)), {
+  before: '前'.repeat(40), after: '后'.repeat(40),
+})
+assert.deepEqual(plain(quoteShare.quoteContextExcerpt('开头选中结尾', 0, 4)), { before: '', after: '结尾' })
+
+const sleepTimer = loadTsModule('src/utils/ttsSleepTimer.ts')
+assert.equal(sleepTimer.ttsSliderProgressToMs(36), 180 * 60_000)
+assert.equal(sleepTimer.ttsPreciseToMs(23, 59, 59), 86_399_000)
+assert.deepEqual(plain(sleepTimer.ttsMsToPrecise(3_661_000)), [1, 1, 1])
+assert.equal(sleepTimer.ttsRemaining(12_000, sleepTimer.ttsDeadlineFrom(10_000, 5_000)), 3_000)
+assert.equal(sleepTimer.ttsRemaining(20_000, 15_000), 0)
+
+const searchIndex = loadTsModule('electron/searchIndex.ts')
+const searchIndexDir = mkdtempSync(resolve(tmpdir(), 'pacilread-search-test-'))
+try {
+  const index = new searchIndex.PersistentBookSearchIndex(searchIndexDir)
+  const indexedChapters = [
+    { id: 1, title: '第一章', orderIndex: 0, fingerprint: 'v1', text: 'AaAa 与 中文中文' },
+  ]
+  assert.equal(index.isReady(7, indexedChapters, []), false)
+  const searchResults = index.search(7, indexedChapters, [], 'aa')
+  assert.deepEqual(plain(searchResults.map(item => item.charOffset)), [0, 1, 2])
+  assert.equal(index.isReady(7, indexedChapters, []), true)
+  assert.equal(index.isReady(7, [{ ...indexedChapters[0], fingerprint: 'v2' }], []), false)
+  assert.equal(index.isReady(7, indexedChapters, [{ id: 1, updatedAt: 2, active: true, regex: false, pattern: 'Aa', replacement: 'B' }]), false)
+  assert.deepEqual(plain(index.search(8, indexedChapters, [], '中文').map(item => item.charOffset)), [7, 9])
+} finally {
+  rmSync(searchIndexDir, { recursive: true, force: true })
+}
 
 const parsers = loadTsModule('electron/parsers.ts')
 const chapters = parsers.splitTextIntoChapters('开头说明\n\n第一章：开始\n这里是正文\n\n第二章 继续\n更多正文')
