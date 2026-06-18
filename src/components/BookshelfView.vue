@@ -44,6 +44,11 @@ const selectedTag = ref('')
 const selectedSeries = ref('')
 const selectedStatus = ref('')
 const batchWorking = ref(false)
+const showBatchClassification = ref(false)
+const classificationStep = ref<'actions' | 'input' | 'status'>('actions')
+const classificationAction = ref<'addTags' | 'removeTags' | 'setSeries' | null>(null)
+const classificationValue = ref('')
+const classificationError = ref('')
 
 const searchQuery = ref('')
 let progressPrefetchRun = 0
@@ -191,7 +196,10 @@ const addBook = async () => {
 
 const setManagementMode = (enabled: boolean) => {
   managementMode.value = enabled
-  if (!enabled) selectedBookIds.value = new Set()
+  if (!enabled) {
+    selectedBookIds.value = new Set()
+    showBatchClassification.value = false
+  }
 }
 
 const toggleBookSelection = (bookId: number) => {
@@ -217,35 +225,68 @@ const refreshAfterBatch = async () => {
   await fetchBooks()
 }
 
-const batchClassify = async () => {
+const openBatchClassification = () => {
   if (!selectedCount.value) return
-  const action = prompt('批量分类：输入 1 添加标签、2 移除标签、3 设置系列、4 清除系列、5 设置阅读状态')?.trim()
-  if (!action) return
-  let operation: BatchClassificationOperation | null = null
-  if (action === '1' || action === '2') {
-    const tags = normalizeTags(prompt(action === '1' ? '输入要添加的标签（逗号分隔）' : '输入要移除的标签（逗号分隔）') || '')
-    if (!tags.length) return
-    operation = { type: action === '1' ? 'addTags' : 'removeTags', tags }
-  } else if (action === '3') {
-    const series = prompt('输入系列名称')
-    if (series === null) return
-    operation = { type: 'setSeries', series }
-  } else if (action === '4') {
-    operation = { type: 'setSeries', series: '' }
-  } else if (action === '5') {
-    const status = prompt('输入阅读状态：未读 / 阅读中 / 已读完')?.trim()
-    const map: Record<string, ReadingStatus> = { '未读': 'unread', '阅读中': 'reading', '已读完': 'finished' }
-    if (!status || !map[status]) return
-    operation = { type: 'setReadingStatus', status: map[status] }
-  }
-  if (!operation) return
+  classificationStep.value = 'actions'
+  classificationAction.value = null
+  classificationValue.value = ''
+  classificationError.value = ''
+  showBatchClassification.value = true
+}
+
+const closeBatchClassification = () => {
+  if (batchWorking.value) return
+  showBatchClassification.value = false
+}
+
+const applyBatchClassification = async (operation: BatchClassificationOperation) => {
+  if (!selectedCount.value) return
   try {
     batchWorking.value = true
     await window.electronAPI.library.batchClassifyBooks(Array.from(selectedBookIds.value), operation)
     await refreshAfterBatch()
+    showBatchClassification.value = false
+  } catch (error) {
+    console.error('Batch classification failed:', error)
+    classificationError.value = '分类更新失败，请重试'
   } finally {
     batchWorking.value = false
   }
+}
+
+const chooseClassificationAction = (action: 'addTags' | 'removeTags' | 'setSeries' | 'clearSeries' | 'setStatus') => {
+  classificationError.value = ''
+  if (action === 'clearSeries') {
+    void applyBatchClassification({ type: 'setSeries', series: '' })
+    return
+  }
+  if (action === 'setStatus') {
+    classificationStep.value = 'status'
+    return
+  }
+  classificationAction.value = action
+  classificationValue.value = ''
+  classificationStep.value = 'input'
+}
+
+const submitClassificationInput = () => {
+  const action = classificationAction.value
+  if (!action) return
+  classificationError.value = ''
+  if (action === 'setSeries') {
+    void applyBatchClassification({ type: 'setSeries', series: classificationValue.value.trim() })
+    return
+  }
+  const tags = normalizeTags(classificationValue.value)
+  if (!tags.length) {
+    classificationError.value = '请输入至少一个标签'
+    return
+  }
+  void applyBatchClassification({ type: action, tags })
+}
+
+const submitClassificationStatus = (status: ReadingStatus) => {
+  void applyBatchClassification({ type: 'setReadingStatus', status })
 }
 
 const batchDelete = async () => {
@@ -392,10 +433,61 @@ onUnmounted(() => {
       </select>
       <button @click="clearFilters" :disabled="!hasActiveFilters" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">清除筛选</button>
       <span class="app-muted text-[12px] ml-auto">已选 {{ selectedCount }} 本</span>
-      <button @click="batchClassify" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">分类</button>
+      <button @click="openBatchClassification" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">分类</button>
       <button @click="batchExport" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] disabled:opacity-40">导出</button>
       <button @click="batchDelete" :disabled="!selectedCount || batchWorking" class="app-button px-3 py-2 text-[12px] text-red-500 disabled:opacity-40">删除</button>
     </div>
+
+    <Transition name="fade">
+      <div v-if="showBatchClassification" class="classification-backdrop" @click="closeBatchClassification" @wheel.stop>
+        <div class="classification-panel" role="dialog" aria-modal="true" aria-labelledby="classification-title" @click.stop>
+          <div class="classification-header">
+            <div>
+              <h3 id="classification-title">批量分类</h3>
+              <p>将应用到已选的 {{ selectedCount }} 本书</p>
+            </div>
+            <button class="classification-close" :disabled="batchWorking" @click="closeBatchClassification">✕</button>
+          </div>
+
+          <div v-if="classificationStep === 'actions'" class="classification-actions">
+            <button @click="chooseClassificationAction('addTags')">添加标签</button>
+            <button @click="chooseClassificationAction('removeTags')">移除标签</button>
+            <button @click="chooseClassificationAction('setSeries')">设置系列</button>
+            <button @click="chooseClassificationAction('clearSeries')">清除系列</button>
+            <button @click="chooseClassificationAction('setStatus')">设置阅读状态</button>
+          </div>
+
+          <div v-else-if="classificationStep === 'input'" class="classification-form">
+            <label>{{ classificationAction === 'setSeries' ? '系列名称' : '标签，用逗号分隔' }}</label>
+            <input
+              v-model="classificationValue"
+              class="app-input"
+              autofocus
+              :placeholder="classificationAction === 'setSeries' ? '输入系列名称' : '例如：科幻, 长篇'"
+              @keydown.enter="submitClassificationInput"
+            />
+            <p v-if="classificationError" class="classification-error">{{ classificationError }}</p>
+            <div class="classification-footer">
+              <button class="app-button" :disabled="batchWorking" @click="classificationStep = 'actions'">返回</button>
+              <button class="app-button app-button-primary" :disabled="batchWorking" @click="submitClassificationInput">{{ batchWorking ? '处理中…' : '确定' }}</button>
+            </div>
+          </div>
+
+          <div v-else class="classification-form">
+            <label>阅读状态</label>
+            <div class="classification-statuses">
+              <button :disabled="batchWorking" @click="submitClassificationStatus('unread')">未读</button>
+              <button :disabled="batchWorking" @click="submitClassificationStatus('reading')">阅读中</button>
+              <button :disabled="batchWorking" @click="submitClassificationStatus('finished')">已读完</button>
+            </div>
+            <p v-if="classificationError" class="classification-error">{{ classificationError }}</p>
+            <div class="classification-footer">
+              <button class="app-button" :disabled="batchWorking" @click="classificationStep = 'actions'">返回</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- Empty/Loading State -->
     <div v-if="loading" class="flex flex-col items-center justify-center py-32 gap-4">
@@ -524,6 +616,58 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 58%, transparent),
     0 14px 34px color-mix(in srgb, var(--app-accent) 16%, transparent) !important;
 }
+
+.classification-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--app-scrim);
+}
+
+.classification-panel {
+  width: min(420px, 100%);
+  padding: 20px;
+  color: var(--app-text);
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-dialog);
+  box-shadow: var(--app-shadow-hover);
+}
+
+.classification-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.classification-header h3 { font-size: 17px; font-weight: 750; }
+.classification-header p { margin-top: 3px; color: var(--app-text-muted); font-size: 12px; }
+.classification-close { border: 0; background: transparent; color: var(--app-text-muted); cursor: pointer; }
+.classification-actions { display: grid; gap: 7px; }
+.classification-actions button,.classification-statuses button {
+  min-height: 42px;
+  padding: 9px 12px;
+  color: var(--app-text);
+  background: var(--app-surface-secondary);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-button);
+  cursor: pointer;
+  text-align: left;
+}
+.classification-actions button:hover,.classification-statuses button:hover { border-color: var(--app-accent); background: var(--app-accent-soft); }
+.classification-form { display: grid; gap: 12px; }
+.classification-form>label { color: var(--app-text-secondary); font-size: 12px; font-weight: 700; }
+.classification-form .app-input { width: 100%; padding: 10px 12px; }
+.classification-statuses { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.classification-statuses button { text-align: center; }
+.classification-error { color: var(--app-danger); font-size: 12px; }
+.classification-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .bookshelf-list-row {
   position: relative;

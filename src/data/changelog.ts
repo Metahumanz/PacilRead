@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.3.1',
+    date: '2026-06-18',
+    changes: [
+      'Batch Classification（批量分类）：修复 Electron 不支持原生输入提示导致分类按钮点击无响应的问题，改为与移动端一致的紧凑分类面板',
+      'Classification Actions（分类操作）：分类面板支持添加或移除标签、设置或清除系列，以及设置未读、阅读中、已读完状态',
+      'Snapshots（恢复点）：移除应用启动时每日自动创建恢复点的行为，保留手动创建、删除书籍前和恢复前的安全快照',
+    ]
+  },
+  {
     version: '1.3.0',
     date: '2026-06-18',
     changes: [
