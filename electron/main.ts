@@ -1,8 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen, clipboard, nativeImage } from 'electron'
 import { dirname, join, extname, isAbsolute } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, renameSync, rmSync } from 'fs'
-import { gzipSync, gunzipSync } from 'zlib'
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, mkdirSync, renameSync, rmSync, createReadStream } from 'fs'
+import { gzipSync, gunzipSync, createGunzip } from 'zlib'
 import { createHash } from 'crypto'
 import AdmZip from 'adm-zip'
 import { parseTxt, parseEpub, parsePdf, type Chapter } from './parsers'
@@ -18,6 +18,7 @@ import {
   type DuplicateMatchType,
 } from '../src/utils/bookshelfManagement'
 import { PersistentBookSearchIndex, type SearchIndexChapter, type SearchIndexRule } from './searchIndex'
+import { buildRemoteProgressExcerpt } from '../src/utils/remoteProgress'
 
 let mainWindow: BrowserWindow | null = null
 let mimoAbortController: AbortController | null = null
@@ -559,6 +560,62 @@ function readChapterTextGzip(bodyTextPath: string): string | null {
     console.error('[Library] Failed to read chapter text file:', resolvedPath, error)
     return null
   }
+}
+
+async function getChapterTextExcerptJson(
+  bookId: number,
+  chapterId: number,
+  charOffset: number,
+  requestedMaxChars = 64,
+): Promise<string> {
+  const chapter = getChapterRowsForBook(bookId).find(row => Number(row.id) === Number(chapterId))
+  if (!chapter) return ''
+
+  const maxChars = Math.max(16, Math.min(240, Math.floor(Number(requestedMaxChars) || 64)))
+  const knownLength = Math.max(0, Number(chapter.bodyTextSize || 0))
+  const offset = Math.max(0, Math.min(Math.floor(Number(charOffset) || 0), knownLength || Number.MAX_SAFE_INTEGER))
+
+  if (chapterRowTextStorage(chapter) !== 'file_gzip') {
+    return buildRemoteProgressExcerpt(String(chapter.bodyText || ''), offset, maxChars)
+  }
+
+  const bodyTextPath = String(chapter.bodyTextPath || '')
+  const resolvedPath = bodyTextPath ? resolveChapterTextPath(bodyTextPath, app.getPath('userData')) : null
+  if (!resolvedPath) return ''
+
+  const start = Math.max(0, offset - Math.max(1, Math.floor(maxChars / 3)))
+  const stream = createReadStream(resolvedPath).pipe(createGunzip())
+  stream.setEncoding('utf8')
+  let consumed = 0
+  let excerpt = ''
+  let hasTrailingText = false
+
+  try {
+    for await (const value of stream) {
+      const chunk = String(value)
+      const chunkStart = consumed
+      const chunkEnd = chunkStart + chunk.length
+      consumed = chunkEnd
+      if (chunkEnd <= start) continue
+
+      const localStart = Math.max(0, start - chunkStart)
+      const remaining = maxChars - excerpt.length
+      if (remaining > 0) excerpt += chunk.slice(localStart, localStart + remaining)
+      if (chunk.length - localStart > remaining || excerpt.length >= maxChars) {
+        hasTrailingText = true
+        break
+      }
+    }
+  } catch (error) {
+    console.error('[Library] Failed to stream chapter excerpt:', resolvedPath, error)
+    return ''
+  } finally {
+    stream.destroy()
+  }
+
+  const normalized = excerpt.replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  return `${start > 0 ? '…' : ''}${normalized}${hasTrailingText ? '…' : ''}`
 }
 
 function directorySizeBytes(dirPath: string): number {
@@ -1420,6 +1477,9 @@ ipcMain.handle('library:getMostRecentBook', async () => getMostRecentBookJson())
 ipcMain.handle('library:updateBook', async (_, bookId: number, fields: Record<string, unknown>) => updateBookJson(bookId, fields))
 ipcMain.handle('library:getBookChapterList', async (_, bookId: number) => getBookChapterListJson(bookId))
 ipcMain.handle('library:getChapterContentBatch', async (_, bookId: number, chapterIds: number[]) => getChapterContentBatchJson(bookId, chapterIds))
+ipcMain.handle('library:getChapterTextExcerpt', async (_, bookId: number, chapterId: number, charOffset: number, maxChars?: number) => (
+  getChapterTextExcerptJson(bookId, chapterId, charOffset, maxChars)
+))
 ipcMain.handle('library:getSize', async () => getStorageSizeInfo())
 ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsWithFileGzipChapters())
 ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))

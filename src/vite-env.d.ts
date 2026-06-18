@@ -24,6 +24,7 @@ export interface ElectronAPI {
     updateBook: (bookId: number, fields: Partial<BookSummary>) => Promise<BookSummary | null>
     getBookChapterList: (bookId: number) => Promise<ChapterMeta[]>
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => Promise<ChapterContent[]>
+    getChapterTextExcerpt: (bookId: number, chapterId: number, charOffset: number, maxChars?: number) => Promise<string>
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
     hasBookChapterTextFiles: (bookId: number) => Promise<boolean>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
