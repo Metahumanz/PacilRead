@@ -8,6 +8,8 @@ import { perfLog, perfNow } from '../utils/perf'
 import { matchesBookshelfFilters } from '../utils/bookshelfManagement'
 import { normalizeTags, type ReadingStatus } from '../utils/bookMetadata'
 import type { BatchClassificationOperation } from '../types/entities'
+import { notifyError, notifySuccess } from '../composables/useNotifications'
+import { getErrorMessage } from '../utils/errorMessage'
 
 interface BookDisplay {
   id: number
@@ -249,6 +251,7 @@ const applyBatchClassification = async (operation: BatchClassificationOperation)
   } catch (error) {
     console.error('Batch classification failed:', error)
     classificationError.value = '分类更新失败，请重试'
+    notifyError(getErrorMessage(error, '分类更新失败，请重试'))
   } finally {
     batchWorking.value = false
   }
@@ -296,7 +299,10 @@ const batchDelete = async () => {
     const result = await window.electronAPI.library.deleteBooks(Array.from(selectedBookIds.value))
     selectedBookIds.value = new Set()
     await refreshAfterBatch()
-    alert(`已删除 ${result.deleted} 本书籍`)
+    notifySuccess(`已删除 ${result.deleted} 本书籍`)
+  } catch (error) {
+    console.error('Batch delete failed:', error)
+    notifyError(getErrorMessage(error, '批量删除失败，请重试'))
   } finally {
     batchWorking.value = false
   }
@@ -307,7 +313,13 @@ const batchExport = async () => {
   try {
     batchWorking.value = true
     const result = await window.electronAPI.library.exportBooks(Array.from(selectedBookIds.value))
-    if (!result.canceled) alert(result.failed ? `导出完成：成功 ${result.success}，失败 ${result.failed}` : `已导出 ${result.success} 本书籍`)
+    if (!result.canceled) {
+      if (result.failed) notifyError(`导出完成：成功 ${result.success}，失败 ${result.failed}`)
+      else notifySuccess(`已导出 ${result.success} 本书籍`)
+    }
+  } catch (error) {
+    console.error('Batch export failed:', error)
+    notifyError(getErrorMessage(error, '批量导出失败，请重试'))
   } finally {
     batchWorking.value = false
   }
@@ -319,8 +331,10 @@ const deleteBook = async (bookId: number) => {
     await window.electronAPI.library.deleteBook(bookId)
     invalidateDataStore()
     await fetchBooks()
+    notifySuccess('书籍已删除')
   } catch (error) {
     console.error('Failed to delete book:', error)
+    notifyError(getErrorMessage(error, '删除书籍失败，请重试'))
   }
 }
 
@@ -335,7 +349,7 @@ const setCover = async (bookId: number) => {
     await fetchBooks()
   } catch (error) {
     console.error('Failed to set cover:', error)
-    alert('设置封面失败: ' + (error as Error).message)
+    notifyError(getErrorMessage(error, '设置封面失败，请重试'))
   }
 }
 
@@ -346,6 +360,7 @@ const removeCover = async (bookId: number) => {
     await fetchBooks()
   } catch (error) {
     console.error('Failed to remove cover:', error)
+    notifyError(getErrorMessage(error, '移除封面失败，请重试'))
   }
 }
 
@@ -356,6 +371,7 @@ const togglePin = async (book: BookDisplay) => {
     await fetchBooks()
   } catch (error) {
     console.error('Failed to toggle pin:', error)
+    notifyError(getErrorMessage(error, '更新置顶状态失败，请重试'))
   }
 }
 

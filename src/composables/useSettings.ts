@@ -8,6 +8,7 @@ import {
   clampGlassOpacity,
   clampHudMargin,
 } from '../utils/settingsSchema'
+import { normalizeShortcutBindings } from '../utils/keyboardShortcuts'
 
 export {
   DEFAULT_BOOKSHELF_PROGRESS_PREFETCH_LIMIT,
@@ -381,8 +382,25 @@ export function useSettings() {
         isAlwaysOnTop.value = (v('reader_alwaysOnTop')! === 'true')
         window.electronAPI.win.setAlwaysOnTop(isAlwaysOnTop.value)
       }
-      if (v('reader_nextKeys') !== undefined) { try { nextKeys.value = JSON.parse(v('reader_nextKeys')!) } catch (_) {} }
-      if (v('reader_prevKeys') !== undefined) { try { prevKeys.value = JSON.parse(v('reader_prevKeys')!) } catch (_) {} }
+      let loadedNextKeys: unknown = DEFAULT_NEXT_KEYS
+      let loadedPrevKeys: unknown = DEFAULT_PREV_KEYS
+      if (v('reader_nextKeys') !== undefined) {
+        try { loadedNextKeys = JSON.parse(v('reader_nextKeys')!) } catch (_) {}
+      }
+      if (v('reader_prevKeys') !== undefined) {
+        try { loadedPrevKeys = JSON.parse(v('reader_prevKeys')!) } catch (_) {}
+      }
+      const normalizedShortcuts = normalizeShortcutBindings(loadedNextKeys, loadedPrevKeys)
+      nextKeys.value = normalizedShortcuts.nextKeys
+      prevKeys.value = normalizedShortcuts.previousKeys
+      const normalizedNextJson = JSON.stringify(nextKeys.value)
+      const normalizedPrevJson = JSON.stringify(prevKeys.value)
+      if (v('reader_nextKeys') !== undefined && v('reader_nextKeys') !== normalizedNextJson) {
+        await saveSetting('reader_nextKeys', normalizedNextJson)
+      }
+      if (v('reader_prevKeys') !== undefined && v('reader_prevKeys') !== normalizedPrevJson) {
+        await saveSetting('reader_prevKeys', normalizedPrevJson)
+      }
       if (v('reader_blurAmount') !== undefined) blurAmount.value = parseInt(v('reader_blurAmount')!) || 0
       if (v('reader_textAlign') !== undefined) textAlign.value = v('reader_textAlign')! === 'justify' ? 'justify' : 'left'
       if (v('reader_alignBottom') !== undefined) alignBottom.value = v('reader_alignBottom')! === 'true'

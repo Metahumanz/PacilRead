@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useSettings } from '../../composables/useSettings'
+import { formatShortcutKey } from '../../utils/keyboardShortcuts'
 
 const {
   toggleKeyHints,
@@ -7,7 +8,8 @@ const {
   addNextKey,
   removeNextKey,
   addPrevKey,
-  removePrevKey
+  removePrevKey,
+  shortcutMessage,
 } = defineProps<{
   toggleKeyHints: () => void
   toggleAutoOpenLastRead: () => void
@@ -15,6 +17,7 @@ const {
   removeNextKey: (k: string) => void
   addPrevKey: (e: KeyboardEvent) => void
   removePrevKey: (k: string) => void
+  shortcutMessage: string
 }>()
 
 const settings = useSettings()
@@ -77,27 +80,28 @@ const toggleBookshelfAddEntry = async () => {
           <span class="text-xl opacity-80 mt-0.5">⌨️</span>
           <div class="flex-1">
             <div class="text-[14px] font-medium app-title">翻页按键绑定</div>
-            <div class="text-[12px] app-muted mt-0.5 mb-3">自定义全局控制按键组合（点击下方已绑按键可移除）</div>
+            <div class="text-[12px] app-muted mt-0.5 mb-3">自定义全局翻页按键（点击下方已绑按键可移除）</div>
             <div class="grid grid-cols-2 gap-6">
               <div>
                 <label class="block text-[12px] app-muted mb-2 font-medium">下一页 / 下一章绑定</label>
                 <div class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]">
-                  <span v-for="k in nextKeys" :key="k" @click="removeNextKey(k)" class="app-badge px-2 py-0.5 text-[11px] font-mono cursor-pointer hover:text-[var(--app-danger)] transition-colors">
-                    {{ k === ' ' ? 'Space' : k }} &times;
-                  </span>
+                  <button v-for="k in nextKeys" :key="k" type="button" @click="removeNextKey(k)" class="app-badge px-2 py-0.5 text-[11px] font-mono cursor-pointer hover:text-[var(--app-danger)] transition-colors" :aria-label="`移除 ${formatShortcutKey(k)} 绑定`">
+                    {{ formatShortcutKey(k) }} &times;
+                  </button>
                 </div>
                 <input type="text" placeholder="按下按键录入..." @keydown.prevent="addNextKey" class="app-input w-full px-3 py-1.5 text-[12px]" />
               </div>
               <div>
                 <label class="block text-[12px] app-muted mb-2 font-medium">上一页 / 上一章绑定</label>
                 <div class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]">
-                  <span v-for="k in prevKeys" :key="k" @click="removePrevKey(k)" class="app-badge px-2 py-0.5 text-[11px] font-mono cursor-pointer hover:text-[var(--app-danger)] transition-colors">
-                    {{ k === ' ' ? 'Space' : k }} &times;
-                  </span>
+                  <button v-for="k in prevKeys" :key="k" type="button" @click="removePrevKey(k)" class="app-badge px-2 py-0.5 text-[11px] font-mono cursor-pointer hover:text-[var(--app-danger)] transition-colors" :aria-label="`移除 ${formatShortcutKey(k)} 绑定`">
+                    {{ formatShortcutKey(k) }} &times;
+                  </button>
                 </div>
                 <input type="text" placeholder="按下按键录入..." @keydown.prevent="addPrevKey" class="app-input w-full px-3 py-1.5 text-[12px]" />
               </div>
             </div>
+            <p v-if="shortcutMessage" class="mt-3 text-[12px] text-[var(--app-danger)]" role="alert">{{ shortcutMessage }}</p>
           </div>
         </div>
       </div>

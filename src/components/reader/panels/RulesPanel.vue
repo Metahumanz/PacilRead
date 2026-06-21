@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { useDataStore } from '../../../composables/useDataStore'
 import type { ReplacementRuleView } from '../../../types/entities'
+import { notifyError } from '../../../composables/useNotifications'
+import { getErrorMessage } from '../../../utils/errorMessage'
 
 const props = defineProps<{
   rules: ReplacementRuleView[]
@@ -17,10 +19,15 @@ const newPattern = ref('')
 const newReplacement = ref('')
 const newScope = ref<'book' | 'global'>('book')
 const newIsRegex = ref(false)
+const operationError = ref('')
+const adding = ref(false)
+const busyRuleIds = ref<number[]>([])
 
 const addRule = async () => {
   if (!newPattern.value.trim()) return
   try {
+    adding.value = true
+    operationError.value = ''
     const { addRule: add } = useDataStore()
     await add({
       pattern: newPattern.value,
@@ -32,23 +39,39 @@ const addRule = async () => {
     })
     newPattern.value = ''; newReplacement.value = ''; newIsRegex.value = false
     emit('refresh')
-  } catch (e) { console.error(e) }
+  } catch (e) {
+    console.error(e)
+    operationError.value = getErrorMessage(e, '添加规则失败，请重试')
+    notifyError(operationError.value)
+  } finally { adding.value = false }
 }
 
 const deleteRule = async (id: number) => {
   try {
+    busyRuleIds.value = [...busyRuleIds.value, id]
+    operationError.value = ''
     const { deleteRule: del } = useDataStore()
     await del(id)
     emit('refresh')
-  } catch (e) { console.error(e) }
+  } catch (e) {
+    console.error(e)
+    operationError.value = getErrorMessage(e, '删除规则失败，请重试')
+    notifyError(operationError.value)
+  } finally { busyRuleIds.value = busyRuleIds.value.filter(ruleId => ruleId !== id) }
 }
 
 const toggleRuleActive = async (rule: ReplacementRuleView) => {
   try {
+    busyRuleIds.value = [...busyRuleIds.value, rule.id]
+    operationError.value = ''
     const { updateRule } = useDataStore()
     await updateRule(rule.id, { active: !rule.active })
     emit('refresh')
-  } catch (e) { console.error(e) }
+  } catch (e) {
+    console.error(e)
+    operationError.value = getErrorMessage(e, '更新规则状态失败，请重试')
+    notifyError(operationError.value)
+  } finally { busyRuleIds.value = busyRuleIds.value.filter(ruleId => ruleId !== rule.id) }
 }
 </script>
 
@@ -63,8 +86,9 @@ const toggleRuleActive = async (rule: ReplacementRuleView) => {
         <label class="rule-scope-opt"><input type="radio" value="book" v-model="newScope" /> 本书</label>
         <label class="rule-scope-opt"><input type="radio" value="global" v-model="newScope" /> 全局</label>
         <label class="rule-regex-opt"><input type="checkbox" v-model="newIsRegex" /> 正则</label>
-        <button @click="addRule" class="rule-add-btn" :disabled="!newPattern.trim()">+ 添加</button>
+        <button @click="addRule" class="rule-add-btn" :disabled="!newPattern.trim() || adding">{{ adding ? '添加中…' : '+ 添加' }}</button>
       </div>
+      <p v-if="operationError" class="rule-error" role="alert">{{ operationError }}</p>
     </div>
     <!-- Rules list -->
     <div class="rules-list">
@@ -78,8 +102,8 @@ const toggleRuleActive = async (rule: ReplacementRuleView) => {
         <div class="rule-meta">
           <span class="rule-badge" :class="rule.scope">{{ rule.scope === 'global' ? '全局' : '本书' }}</span>
           <span v-if="rule.regex" class="rule-badge regex">正则</span>
-          <button @click="toggleRuleActive(rule)" class="rule-toggle">{{ rule.active ? '✓' : '○' }}</button>
-          <button @click="deleteRule(rule.id)" class="rule-del">✕</button>
+          <button @click="toggleRuleActive(rule)" class="rule-toggle" :disabled="busyRuleIds.includes(rule.id)">{{ rule.active ? '✓' : '○' }}</button>
+          <button @click="deleteRule(rule.id)" class="rule-del" :disabled="busyRuleIds.includes(rule.id)">✕</button>
         </div>
       </div>
     </div>
@@ -97,6 +121,7 @@ const toggleRuleActive = async (rule: ReplacementRuleView) => {
 .rule-add-btn { margin-left:auto; padding:6px 16px; border-radius:8px; font-size:12px; font-weight:700; background:#3b82f6; border:none; color:white; cursor:pointer; transition:all .2s; }
 .rule-add-btn:hover { background:#2563eb; }
 .rule-add-btn:disabled { opacity:0.3; cursor:default; }
+.rule-error { margin:0; color:#fca5a5; font-size:11px; line-height:1.5; }
 .rules-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
 .rules-list::-webkit-scrollbar { width:4px; }
 .rules-list::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }

@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useSettings } from './composables/useSettings'
 import { useAppTheme } from './composables/useAppTheme'
-import { hasReadingStatsHistory } from './composables/useReadingStats'
+import { hasReadingStatsHistory } from './utils/readingStatsAvailability'
 import type { BookmarkTarget } from './composables/useBookmarks'
 import BookshelfView from './components/BookshelfView.vue'
-import ReaderView from './components/ReaderView.vue'
-import SettingsView from './components/SettingsView.vue'
-import ReadingStatsView from './components/ReadingStatsView.vue'
-import BookmarksView from './components/BookmarksView.vue'
+import AsyncViewLoading from './components/common/AsyncViewLoading.vue'
+import AppToastHost from './components/common/AppToastHost.vue'
+
+const ReaderView = defineAsyncComponent({ loader: () => import('./components/ReaderView.vue'), loadingComponent: AsyncViewLoading, delay: 120 })
+const SettingsView = defineAsyncComponent({ loader: () => import('./components/SettingsView.vue'), loadingComponent: AsyncViewLoading, delay: 120 })
+const ReadingStatsView = defineAsyncComponent({ loader: () => import('./components/ReadingStatsView.vue'), loadingComponent: AsyncViewLoading, delay: 120 })
+const BookmarksView = defineAsyncComponent({ loader: () => import('./components/BookmarksView.vue'), loadingComponent: AsyncViewLoading, delay: 120 })
 
 type View = 'bookshelf' | 'reader' | 'settings' | 'stats' | 'bookmarks'
 type NonStatsView = Exclude<View, 'stats'>
@@ -297,6 +300,7 @@ watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
       ? 'min-h-screen bg-transparent text-slate-800 dark:text-white selection:bg-blue-500/30 overflow-hidden font-sans'
       : 'app-shell'"
   >
+    <AppToastHost />
     <!-- Quit Confirmation Modal -->
     <Transition name="fade">
       <div v-if="showQuitConfirm" class="fixed inset-0 app-modal-backdrop z-[200] flex items-center justify-center" @click.self="cancelQuit">

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { perfLog, perfNow } from '../../../utils/perf'
 import type { BookSearchResult, ReaderChapter } from '../../../types/entities'
+import { notifyError } from '../../../composables/useNotifications'
 
 interface SearchResult extends BookSearchResult { matchIndex: number }
 
@@ -18,14 +19,16 @@ const emit = defineEmits<{
 const searchQuery = ref('')
 const searchResults = ref<SearchResult[]>([])
 const searching = ref(false)
+const searchError = ref('')
 let searchRunId = 0
 
 const doSearch = async () => {
   const runId = ++searchRunId
   const q = searchQuery.value.trim()
-  if (!q) { searchResults.value = []; searching.value = false; return }
+  if (!q) { searchResults.value = []; searchError.value = ''; searching.value = false; return }
   const startedAt = perfNow()
   searching.value = true
+  searchError.value = ''
   try {
     const results = await window.electronAPI.library.searchBook(props.bookId, q)
     if (runId !== searchRunId) return
@@ -37,6 +40,10 @@ const doSearch = async () => {
     })
   } catch (e) {
     console.error(e)
+    if (runId !== searchRunId) return
+    searchResults.value = []
+    searchError.value = '搜索失败，请检查后重试。'
+    notifyError(searchError.value)
   } finally {
     if (runId === searchRunId) {
       searching.value = false
@@ -57,8 +64,12 @@ const handleJump = (result: SearchResult) => {
       <input type="text" v-model="searchQuery" @keydown.enter="doSearch" placeholder="输入关键词..." class="search-input" />
       <button @click="doSearch" class="search-go" :disabled="searching">{{ searching ? '...' : '搜索' }}</button>
     </div>
-    <div v-if="searchResults.length > 0" class="search-count">找到 {{ searchResults.length }} 个结果</div>
-    <div v-else-if="searchQuery && !searching" class="search-count empty">未找到匹配内容</div>
+    <div v-if="searchError && !searching" class="search-error" role="alert">
+      <span>{{ searchError }}</span>
+      <button type="button" @click="doSearch">重试</button>
+    </div>
+    <div v-else-if="searchResults.length > 0" class="search-count">找到 {{ searchResults.length }} 个结果</div>
+    <div v-else-if="searchQuery.trim() && !searching" class="search-count empty">未找到匹配内容</div>
     <div class="search-list">
       <button v-for="sr in searchResults" :key="`${sr.chapterIndex}-${sr.matchIndex}`" @click="handleJump(sr)" class="search-item">
         <span class="sr-ch">{{ sr.chapterTitle }}</span>
@@ -83,6 +94,8 @@ const handleJump = (result: SearchResult) => {
 .search-go:disabled { opacity:0.5; }
 .search-count { font-size:11px; color:rgba(255,255,255,0.4); margin-bottom:8px; font-weight:600; }
 .search-count.empty { color:rgba(255,255,255,0.25); }
+.search-error { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; color:#fca5a5; font-size:11px; }
+.search-error button { flex-shrink:0; border:1px solid rgba(248,113,113,.35); border-radius:7px; padding:3px 9px; color:#fecaca; background:rgba(239,68,68,.12); cursor:pointer; }
 .search-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
 .search-list::-webkit-scrollbar { width:4px; }
 .search-list::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }

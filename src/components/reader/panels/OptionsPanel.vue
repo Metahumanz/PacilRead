@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { useSettings } from '../../../composables/useSettings'
 import type { FlipMode, SimulationDoublePageTurnMode } from '../../../types/pagination'
 import type { ReaderBook } from '../../../types/entities'
+import { notifyError } from '../../../composables/useNotifications'
+import { getErrorMessage } from '../../../utils/errorMessage'
 
 const props = defineProps<{
   book: Pick<ReaderBook, 'id' | 'title' | 'author'> | null
+  effectivePageMode: 'single' | 'double'
 }>()
 
 const emit = defineEmits<{
@@ -15,7 +18,7 @@ const emit = defineEmits<{
 
 const settings = useSettings()
 const {
-  sliderMode, flipMode, pageMode, simulationDoublePageTurnMode, saveSetting, saveAllStyling,
+  sliderMode, flipMode, simulationDoublePageTurnMode, saveSetting, saveAllStyling,
   readerAutoNightEnabled, readerAutoNightCustomPolicy,
   hudTopLeft, hudTopCenter, hudTopRight,
   hudBottomLeft, hudBottomCenter, hudBottomRight, hudFollowPage,
@@ -26,6 +29,8 @@ const {
 const editTitle = ref('')
 const editAuthor = ref('')
 let saveTimer: any = null
+const bookInfoStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const bookInfoError = ref('')
 
 // Init from props
 watch(() => props.book, (b) => {
@@ -35,20 +40,40 @@ watch(() => props.book, (b) => {
   }
 }, { immediate: true })
 
+const persistBookInfo = async () => {
+  if (!props.book) return
+  const title = editTitle.value.trim() || '未命名'
+  const author = editAuthor.value.trim()
+  bookInfoStatus.value = 'saving'
+  bookInfoError.value = ''
+  try {
+    await window.electronAPI.library.updateBook(props.book.id, { title, author: author || null })
+    emit('update-book', { title, author })
+    bookInfoStatus.value = 'saved'
+  } catch (e) {
+    console.error('Save book info failed:', e)
+    bookInfoStatus.value = 'error'
+    bookInfoError.value = getErrorMessage(e, '保存书籍信息失败，请重试')
+    notifyError(bookInfoError.value)
+  }
+}
+
 const saveBookInfo = () => {
   if (!props.book) return
   if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(async () => {
-    const title = editTitle.value.trim() || '未命名'
-    const author = editAuthor.value.trim()
-    try {
-      await window.electronAPI.library.updateBook(props.book!.id, { title, author: author || null })
-      emit('update-book', { title, author })
-    } catch (e) {
-      console.error('Save book info failed:', e)
-    }
-  }, 600)
+  bookInfoStatus.value = 'saving'
+  bookInfoError.value = ''
+  saveTimer = setTimeout(() => { saveTimer = null; void persistBookInfo() }, 600)
 }
+
+const closePanel = () => {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; void persistBookInfo() }
+  emit('close')
+}
+
+onBeforeUnmount(() => {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; void persistBookInfo() }
+})
 
 const hudOptions = [
   { value: 'none', label: '隐藏' },
@@ -81,7 +106,7 @@ const saveAutoNight = () => {
 
 <template>
   <div class="reader-options-p" @click.stop @wheel.stop>
-    <div class="ph"><span class="pt">阅读选项</span><button @click="$emit('close')" class="px">✕</button></div>
+    <div class="ph"><span class="pt">阅读选项</span><button @click="closePanel" class="px">✕</button></div>
 
     <!-- Book info editing -->
     <div class="book-info-section">
@@ -93,6 +118,9 @@ const saveAutoNight = () => {
         <label>作者</label>
         <input v-model="editAuthor" @input="saveBookInfo" class="info-input" placeholder="输入作者名" />
       </div>
+      <p v-if="bookInfoError" class="book-info-status error" role="alert">{{ bookInfoError }}</p>
+      <p v-else-if="bookInfoStatus === 'saving'" class="book-info-status">正在保存…</p>
+      <p v-else-if="bookInfoStatus === 'saved'" class="book-info-status">已保存</p>
     </div>
 
     <div class="sp-divider"></div>
@@ -116,7 +144,7 @@ const saveAutoNight = () => {
       </div>
     </div>
 
-    <div class="sr" v-if="flipMode === 'simulation' && pageMode === 'double'">
+    <div class="sr" v-if="flipMode === 'simulation' && effectivePageMode === 'double'">
       <label>双页仿真方式</label>
       <div class="btn-group">
         <button @click="setSimulationDoublePageTurnMode('outerPage')" :class="{active: simulationDoublePageTurnMode==='outerPage'}">外侧单页</button>
@@ -229,6 +257,8 @@ const saveAutoNight = () => {
 .info-input { flex: 1; height: 32px; font-size: 13px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: white; padding: 0 10px; outline: none; transition: border-color 0.2s; }
 .info-input:focus { border-color: #3b82f6; }
 .info-input::placeholder { color: rgba(255,255,255,0.25); }
+.book-info-status { margin:0; text-align:right; font-size:10px; color:rgba(255,255,255,.4); }
+.book-info-status.error { color:#fca5a5; }
 
 .hud-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.4; margin-bottom: 10px; }
 .hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

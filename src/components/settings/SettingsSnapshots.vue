@@ -93,7 +93,7 @@ onMounted(() => {
       <div class="flex items-start justify-between gap-4 mb-4">
         <div>
           <div class="text-[14px] font-medium app-title">自动快照与恢复</div>
-          <div class="text-[12px] app-muted mt-1">每日启动、WebDAV 恢复、删除书籍和批量编辑前都会保留本地恢复点。</div>
+          <div class="text-[12px] app-muted mt-1">可手动创建恢复点；删除书籍、WebDAV 恢复及差异应用前会自动保留。</div>
         </div>
         <button
           @click="createSnapshot"

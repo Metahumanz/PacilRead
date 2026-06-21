@@ -1,3 +1,5 @@
+import { useDataStore } from './useDataStore'
+
 export interface BookmarkRecord {
   uuid: string
   bookId: number | null
@@ -126,7 +128,6 @@ async function readBookmarkRows(): Promise<any[]> {
 }
 
 async function writeBookmarkRows(bookmarks: any[]): Promise<void> {
-  const { useDataStore } = await import('./useDataStore')
   const store = useDataStore()
   if (store.dataLoaded.value) {
     store.bookmarks.value = bookmarks as any
