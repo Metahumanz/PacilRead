@@ -7,6 +7,16 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.3.3',
+    date: '2026-06-21',
+    changes: [
+      'Settings Navigation（设置导航）：设置页改为五类分组导航，分类按需加载并保留已访问状态，窄屏下自动切换为横向分类栏',
+      'Reader Layout（阅读排版）：排版滑块保持即时预览，但延迟写盘并节流分页；双页模式在竖屏时自动回退单页，返回横屏后恢复原偏好',
+      'Feedback & Shortcuts（反馈与快捷键）：新增全局 Toast 通知与搜索失败重试，补齐书籍、规则和书籍信息保存失败提示，快捷键按当前绑定显示并自动去重防冲突',
+      'Startup Performance（启动性能）：阅读、设置、统计和书签顶层视图改为按需加载，图片导出依赖延迟到实际导出时载入，显著缩小首页入口包',
+    ]
+  },
+  {
     version: '1.3.2',
     date: '2026-06-18',
     changes: [
