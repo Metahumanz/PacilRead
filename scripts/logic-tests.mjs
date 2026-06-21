@@ -82,6 +82,26 @@ assert.deepEqual(
   { b: '2' },
 )
 
+const keyboardShortcuts = loadTsModule('src/utils/keyboardShortcuts.ts')
+assert.equal(keyboardShortcuts.normalizeShortcutKey('A'), 'a')
+assert.equal(keyboardShortcuts.normalizeShortcutKey('Spacebar'), ' ')
+assert.equal(keyboardShortcuts.normalizeShortcutKey('Control'), null)
+assert.deepEqual(plain(keyboardShortcuts.normalizeShortcutList(['A', 'a', ' ', 'Space', 'Shift'])), ['a', ' '])
+assert.deepEqual(
+  plain(keyboardShortcuts.normalizeShortcutBindings(['D', ' ', 'Spacebar'], ['d', 'A', 'a'])),
+  { nextKeys: ['d', ' '], previousKeys: ['a'] },
+)
+assert.equal(keyboardShortcuts.addShortcutBinding([' '], [], 'Space').status, 'duplicate')
+assert.equal(keyboardShortcuts.addShortcutBinding([], ['A'], 'a').status, 'conflict')
+assert.equal(keyboardShortcuts.formatShortcutKey('PageDown'), 'PgDn')
+assert.equal(keyboardShortcuts.formatShortcutKey('w'), 'W')
+
+const readerPageMode = loadTsModule('src/utils/readerPageMode.ts')
+assert.equal(readerPageMode.resolveReaderPageMode('double', 1280, 720), 'double')
+assert.equal(readerPageMode.resolveReaderPageMode('double', 720, 1280), 'single')
+assert.equal(readerPageMode.resolveReaderPageMode('double', 800, 800), 'single')
+assert.equal(readerPageMode.resolveReaderPageMode('single', 1280, 720), 'single')
+
 const readingStats = loadTsModule('src/utils/readingStats.ts')
 const splitRows = readingStats.splitRangeByDate(
   new Date(2026, 0, 1, 23, 59, 30).getTime(),

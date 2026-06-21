@@ -19,8 +19,10 @@ import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
 import { isSimilarRemoteProgress } from '../utils/remoteProgress'
-import { toPng } from 'html-to-image'
 import { quoteContextExcerpt, quoteTextFromPageLines } from '../utils/quoteShare'
+import { formatShortcutKey, shortcutEventKeys } from '../utils/keyboardShortcuts'
+import { createThrottledTask } from '../utils/taskScheduler'
+import { isDoublePageAvailable, resolveReaderPageMode } from '../utils/readerPageMode'
 
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
@@ -80,6 +82,7 @@ interface RemoteProgressSuggestion {
 const remoteProgressSuggestion = ref<RemoteProgressSuggestion | null>(null)
 const remoteProgressChecking = ref(false)
 let readerDisposed = false
+const viewportSize = ref({ width: window.innerWidth, height: window.innerHeight })
 
 let lastFirstReadableLoggedBookId = -1
 
@@ -107,6 +110,14 @@ const {
   loadAllSettings, saveAllStyling, saveSetting,
   sliderMode, pIndent, pSpacing
 } = settings
+const doublePageAvailable = computed(() => isDoublePageAvailable(viewportSize.value.width, viewportSize.value.height))
+const effectivePageMode = computed(() => resolveReaderPageMode(
+  pageMode.value,
+  viewportSize.value.width,
+  viewportSize.value.height,
+))
+const nextKeyLabels = computed(() => nextKeys.value.map(formatShortcutKey).filter(Boolean))
+const previousKeyLabels = computed(() => prevKeys.value.map(formatShortcutKey).filter(Boolean))
 
 const { rules, fetchRules, applyReplacements } = useRules()
 const { effectiveRefreshRate } = useDisplayRefreshRate()
@@ -144,7 +155,7 @@ const readingTimeTracker = useReadingTimeTracker({
     const right = currentRightSlice.value?.charCount || 0
     return left + right
   },
-  getReadingPositionKey: () => `${currentChapterIndex.value}:${currentPage.value}:${pageMode.value}`,
+  getReadingPositionKey: () => `${currentChapterIndex.value}:${currentPage.value}:${effectivePageMode.value}`,
 })
 
 const toggleAlwaysOnTop = () => {
@@ -236,7 +247,7 @@ const {
 // ---- Reader Paginator (async prewarm + cache) ----
 const paginator = useReaderPaginator({
   containerRef, fontSize, lineHeight, letterSpacing, fontWeight, fontFamily,
-  textAlign, chapterTitleDisplay, marginX, marginTop: layoutMarginTop, marginBottom: layoutMarginBottom, pageMode, pIndent, pSpacing,
+  textAlign, chapterTitleDisplay, marginX, marginTop: layoutMarginTop, marginBottom: layoutMarginBottom, pageMode: effectivePageMode, pIndent, pSpacing,
 })
 
 const {
@@ -260,7 +271,7 @@ const pagesResult = computed(() => {
 const currentPages = computed(() => pagesResult.value?.slices ?? [])
 const currentPagesComplete = computed(() => pagesResult.value?.complete ?? false)
 const currentSlice = computed(() => currentPages.value[currentPage.value] ?? null)
-const currentRightSlice = computed(() => pageMode.value === 'double'
+const currentRightSlice = computed(() => effectivePageMode.value === 'double'
   ? currentPages.value[currentPage.value + 1] ?? null
   : null
 )
@@ -277,7 +288,7 @@ const readerPaperImage = computed(() => (
 // ---- Pagination (composable) ----
 const pagination = usePagination({
   contentRef, containerRef, prevContentRef, prevContainerRef,
-  pageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor: readerPaperColor,
+  pageMode: effectivePageMode, doublePageStep, flipMode, flipSpeed, marginX, coverColor: readerPaperColor,
   chapters, currentChapterIndex, saveProgress,
   precomputedPages: computed(() => pagesResult.value?.slices ?? null),
   precomputedPagesComplete: currentPagesComplete,
@@ -325,7 +336,7 @@ const incomingSlice = computed(() => {
 })
 const incomingRightSlice = computed(() => {
   const target = incomingTarget.value
-  if (!target || pageMode.value !== 'double') return null
+  if (!target || effectivePageMode.value !== 'double') return null
   return incomingPages.value[target.pageIndex + 1] ?? null
 })
 
@@ -361,13 +372,13 @@ const nextPageFlipPages = computed(() => {
 })
 
 const pageFlipTurnMode = computed<'single' | 'outerPage' | 'spread'>(() => (
-  pageMode.value === 'single' ? 'single' : simulationDoublePageTurnMode.value
+  effectivePageMode.value === 'single' ? 'single' : simulationDoublePageTurnMode.value
 ))
 const pageFlipSimulationEnabled = computed(() => (
   flipMode.value === 'simulation'
   && (
-    pageMode.value === 'single'
-    || (pageMode.value === 'double' && (simulationDoublePageTurnMode.value === 'outerPage' || simulationDoublePageTurnMode.value === 'spread'))
+    effectivePageMode.value === 'single'
+    || (effectivePageMode.value === 'double' && (simulationDoublePageTurnMode.value === 'outerPage' || simulationDoublePageTurnMode.value === 'spread'))
   )
 ))
 const pageFlipBookRef = ref<InstanceType<typeof PageFlipOuterBook> | null>(null)
@@ -593,7 +604,7 @@ const readerPageBgScrim = computed(() => {
 const readerPageMetrics = computed(() => computeReaderPageMetrics({
   containerWidth: containerWidth.value || containerRef.value?.clientWidth || window.innerWidth,
   containerHeight: containerHeight.value || containerRef.value?.clientHeight || window.innerHeight,
-  pageMode: pageMode.value,
+  pageMode: effectivePageMode.value,
   marginX: marginX.value,
   marginTop: layoutMarginTop.value,
   marginBottom: layoutMarginBottom.value,
@@ -622,10 +633,10 @@ const textStyle = computed(() => ({
 const pageSpreadStyle = computed<CSSProperties>(() => ({
   ...textStyle.value,
   display: 'grid',
-  gridTemplateColumns: pageMode.value === 'double'
+  gridTemplateColumns: effectivePageMode.value === 'double'
     ? `${readerPageMetrics.value.pageWidth}px ${readerPageMetrics.value.pageWidth}px`
     : `${readerPageMetrics.value.pageWidth}px`,
-  width: pageMode.value === 'double'
+  width: effectivePageMode.value === 'double'
     ? `${readerPageMetrics.value.pageWidth * 2}px`
     : `${readerPageMetrics.value.pageWidth}px`,
   height: `${readerPageMetrics.value.pageGridHeight}px`,
@@ -935,6 +946,7 @@ const generateShareCard = async () => {
   try {
     await nextTick()
     if (!shareCardRef.value) throw new Error('分享卡尚未就绪')
+    const { toPng } = await import('html-to-image')
     shareCardDataUrl.value = await toPng(shareCardRef.value, {
       width: 1080,
       pixelRatio: 1,
@@ -975,7 +987,7 @@ const handleWheel = (e: WheelEvent) => {
   else trackedPrevPage()
 }
 const handleKeydown = (e: KeyboardEvent) => {
-  const k = e.key, c = e.code
+  const k = e.key
   if (k === 'Escape') {
     e.stopPropagation(); e.stopImmediatePropagation()
     if (props.isImmersive) { toggleImmersiveMode(); return }
@@ -985,8 +997,9 @@ const handleKeydown = (e: KeyboardEvent) => {
     handleGoBack(); return
   }
   if (showMenu.value) return
-  if (nextKeys.value.includes(k) || nextKeys.value.includes(c)) { e.preventDefault(); trackedNextPage() }
-  else if (prevKeys.value.includes(k) || prevKeys.value.includes(c)) { e.preventDefault(); trackedPrevPage() }
+  const eventKeys = shortcutEventKeys(e)
+  if (eventKeys.some(key => nextKeys.value.includes(key))) { e.preventDefault(); trackedNextPage() }
+  else if (eventKeys.some(key => prevKeys.value.includes(key))) { e.preventDefault(); trackedPrevPage() }
 }
 const toggleImmersiveMode = () => {
   emit('toggle-immersive', !props.isImmersive)
@@ -1054,15 +1067,40 @@ const handleVisibilityChange = () => {
   })
 }
 
-const handleResize = () => {
+let paginationLayoutRun = 0
+const refreshPaginationLayout = () => {
+  const runId = ++paginationLayoutRun
+  const targetOffset = pendingWebdavPos.value >= 0 ? pendingWebdavPos.value : undefined
   paginator.clearCache()
-  prewarmChapterAt(currentChapterIndex.value, { mode: 'partial', targetPageIndex: currentPage.value, extraPagesAfterTarget: 2 })
+  prewarmChapterAt(currentChapterIndex.value, {
+    mode: 'partial',
+    targetPageIndex: targetOffset === undefined ? currentPage.value : undefined,
+    targetOffset,
+    extraPagesAfterTarget: 2,
+  })
     .then(() => {
+      if (runId !== paginationLayoutRun || readerDisposed) return
       recalc()
       prewarmChapterAt(currentChapterIndex.value)
     })
   prewarmNearbyChapters()
 }
+const styleLayoutScheduler = createThrottledTask(refreshPaginationLayout, 100)
+const resizeLayoutScheduler = createThrottledTask(refreshPaginationLayout, 120)
+let viewportResizeInProgress = false
+const handleResize = () => {
+  if (pendingWebdavPos.value < 0) pendingWebdavPos.value = getChapterOffset()
+  viewportResizeInProgress = true
+  viewportSize.value = { width: window.innerWidth, height: window.innerHeight }
+  viewportResizeInProgress = false
+  resizeLayoutScheduler.schedule()
+}
+
+watch(effectivePageMode, (mode, previousMode) => {
+  if (mode === previousMode) return
+  pendingWebdavPos.value = getChapterOffset()
+  if (!viewportResizeInProgress) styleLayoutScheduler.schedule()
+}, { flush: 'sync' })
 
 watch(currentChapterIndex, (index) => {
   flushProgress().catch((error) => console.error('Flush progress on chapter change failed:', error))
@@ -1075,16 +1113,10 @@ watch(currentChapterIndex, (index) => {
 })
 watch([
   fontSize, lineHeight, letterSpacing, marginX, marginTop, marginBottom, fontFamily, fontWeight,
-  textAlign, pageMode, doublePageStep, pIndent, pSpacing, chapterTitleDisplay,
+  textAlign, doublePageStep, pIndent, pSpacing, chapterTitleDisplay,
   hudTopMargin, hudBottomMargin, hudTopLeft, hudTopCenter, hudTopRight, hudBottomLeft, hudBottomCenter, hudBottomRight,
 ], () => {
-  paginator.clearCache()
-  prewarmChapterAt(currentChapterIndex.value, { mode: 'partial', targetPageIndex: currentPage.value, extraPagesAfterTarget: 2 })
-    .then(() => {
-      recalc()
-      prewarmChapterAt(currentChapterIndex.value)
-    })
-  prewarmNearbyChapters()
+  styleLayoutScheduler.schedule()
 })
 watch([pageFlipSimulationEnabled, pageFlipTurnMode, currentPage], () => {
   if (!pageFlipSimulationEnabled.value || pageFlipTurnMode.value !== 'spread') return
@@ -1146,6 +1178,8 @@ onMounted(async () => {
   injectHighlightStyles()
 })
 onUnmounted(async () => {
+  styleLayoutScheduler.cancel()
+  resizeLayoutScheduler.cancel()
   readerDisposed = true
   remoteProgressSuggestion.value = null
   remoteProgressChecking.value = false
@@ -1258,7 +1292,7 @@ onUnmounted(async () => {
               <div class="pg-page-slot">
                 <PageSliceView v-if="currentSlice" :slice="currentSlice" :justify="textAlign === 'justify'" />
               </div>
-              <div v-if="pageMode === 'double'" class="pg-page-slot">
+              <div v-if="effectivePageMode === 'double'" class="pg-page-slot">
                 <PageSliceView v-if="currentRightSlice" :slice="currentRightSlice" :justify="textAlign === 'justify'" />
               </div>
             </div>
@@ -1272,7 +1306,7 @@ onUnmounted(async () => {
               <div class="pg-page-slot">
                 <PageSliceView v-if="incomingSlice" :slice="incomingSlice" :justify="textAlign === 'justify'" />
               </div>
-              <div v-if="pageMode === 'double'" class="pg-page-slot">
+              <div v-if="effectivePageMode === 'double'" class="pg-page-slot">
                 <PageSliceView v-if="incomingRightSlice" :slice="incomingRightSlice" :justify="textAlign === 'justify'" />
               </div>
             </div>
@@ -1306,8 +1340,8 @@ onUnmounted(async () => {
           <div class="glass-dark p-8 rounded-3xl w-full max-w-md shadow-2xl border border-white/10 animate-scale-up">
             <h3 class="text-2xl font-bold mb-6 flex items-center gap-3">⌨️ 快捷键指南</h3>
             <div class="space-y-4 mb-8">
-              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">上一页</span><div class="flex gap-1"><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">←</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">A/W</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgUp</kbd></div></div>
-              <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">下一页</span><div class="flex gap-1"><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">→</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">D/S</kbd><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">PgDn</kbd></div></div>
+              <div class="flex items-center justify-between gap-4 p-3 glass rounded-xl"><span class="text-slate-300 shrink-0">上一页</span><div class="flex flex-wrap justify-end gap-1"><kbd v-for="key in previousKeyLabels" :key="key" class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">{{ key }}</kbd></div></div>
+              <div class="flex items-center justify-between gap-4 p-3 glass rounded-xl"><span class="text-slate-300 shrink-0">下一页</span><div class="flex flex-wrap justify-end gap-1"><kbd v-for="key in nextKeyLabels" :key="key" class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">{{ key }}</kbd></div></div>
               <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">退出 / 菜单</span><kbd class="px-2 py-1 bg-white/10 rounded-lg shadow-sm border border-white/5 text-sm font-mono">ESC</kbd></div>
               <div class="flex items-center justify-between p-3 glass rounded-xl"><span class="text-slate-300">鼠标操作</span><span class="text-xs text-slate-400">点击中间唤出菜单</span></div>
             </div>
@@ -1371,7 +1405,7 @@ onUnmounted(async () => {
           <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
           <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
           <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
-          <Transition name="sf"><StylePanel v-if="showStyling" :recalc="recalc" @close="showStyling=false" /></Transition>
+          <Transition name="sf"><StylePanel v-if="showStyling" :effective-page-mode="effectivePageMode" :double-page-available="doublePageAvailable" @close="showStyling=false" /></Transition>
           <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
           <Transition name="sf"><TTSPanel
             v-if="showTts"
@@ -1388,7 +1422,7 @@ onUnmounted(async () => {
             @stop="stopTts"
             @timer-change="updateTtsSleepTimer"
           /></Transition>
-          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" :book="book" @close="showReaderOptions=false" @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }" /></Transition>
+          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" :book="book" :effective-page-mode="effectivePageMode" @close="showReaderOptions=false" @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }" /></Transition>
         </ReaderMenu>
       </Transition>
 
