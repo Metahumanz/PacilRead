@@ -1,6 +1,8 @@
 import { ref } from 'vue'
 import { useDataStore } from './useDataStore'
 import { toReplacementRuleView, type ReplacementRuleView } from '../types/entities'
+import { notifyError } from './useNotifications'
+import { getErrorMessage } from '../utils/errorMessage'
 
 interface RuleBookOption {
   id: number
@@ -39,14 +41,20 @@ export function useRuleManager() {
     try {
       await useDataStore().deleteRule(id)
       await fetchAllRules()
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+      notifyError(getErrorMessage(e, '删除规则失败，请重试'))
+    }
   }
 
   const toggleRuleActive = async (rule: ReplacementRuleView) => {
     try {
       await useDataStore().updateRule(rule.id, { active: !rule.active })
       await fetchAllRules()
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+      notifyError(getErrorMessage(e, '更新规则状态失败，请重试'))
+    }
   }
 
   return {
