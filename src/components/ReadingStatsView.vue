@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ANNUAL_REPORT_IMAGE_HEIGHT,
   ANNUAL_REPORT_IMAGE_WIDTH,
@@ -34,7 +34,7 @@ import {
   type AnnualReportMetricKey,
 } from '../utils/readingInsights'
 import BookCover from './common/BookCover.vue'
-import AnnualReportImageCard from './reports/AnnualReportImageCard.vue'
+const AnnualReportImageCard = defineAsyncComponent(() => import('./reports/AnnualReportImageCard.vue'))
 
 const annualReportMetricStorageKey = (scope: 'global' | 'book') => (
   `pacilread.annual_report.${scope}_metrics`

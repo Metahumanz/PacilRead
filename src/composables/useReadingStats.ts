@@ -1,7 +1,6 @@
 import { createApp, h, nextTick } from 'vue'
-import { toPng } from 'html-to-image'
 import { saveSetting, useSettings } from './useSettings'
-import AnnualReportImageCard from '../components/reports/AnnualReportImageCard.vue'
+import { useDataStore } from './useDataStore'
 import {
   DEFAULT_DESKTOP_SETTINGS_DIR,
   buildBasicAuth,
@@ -280,8 +279,7 @@ async function replaceSettingsMap(settings: Record<string, string>): Promise<voi
 }
 
 async function writeSettingsMap(settings: Record<string, string>): Promise<void> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (store.dataLoaded.value) {
     store.settingsMap.value = { ...settings }
   }
@@ -506,8 +504,7 @@ async function readReadingStatsRows(): Promise<ReadingStatsRowPayload[]> {
 }
 
 async function writeReadingStatsRows(rows: ReadingStatsRowPayload[]): Promise<void> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (store.dataLoaded.value) {
     store.readingStats.value = rows as any
   }
@@ -548,8 +545,7 @@ export async function createReadingStatsSnapshot(): Promise<{
   rows: ReadingStatsRowPayload[]
 }> {
   const deviceId = await ensureReadingStatsDeviceId()
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const rows = getStore().getReadingStatsRows(deviceId)
+  const rows = useDataStore().getReadingStatsRows(deviceId)
 
   return {
     schemaVersion: READING_STATS_SCHEMA_VERSION,
@@ -609,8 +605,7 @@ export async function mergeRemoteReadingStats(): Promise<number> {
         rows?: ReadingStatsRowPayload[]
       }
       const rows = Array.isArray(payload.rows) ? payload.rows : []
-      const { useDataStore: getStore } = await import('./useDataStore')
-      const store = getStore()
+      const store = useDataStore()
       for (const row of rows) {
         if (!row?.date || !row?.sourceDeviceId || !row?.bookIdentity) continue
         const merged = await store.mergeRemoteReadingStatRow({
@@ -633,8 +628,7 @@ export async function mergeRemoteReadingStats(): Promise<number> {
 }
 
 export async function clearLocalReadingStats(): Promise<void> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  await getStore().clearReadingStats()
+  await useDataStore().clearReadingStats()
 }
 
 export async function deleteRemoteReadingStatsFiles(): Promise<void> {
@@ -655,16 +649,14 @@ export async function deleteRemoteReadingStatsFiles(): Promise<void> {
 }
 
 async function getBookIdentityById(bookId: number): Promise<string | null> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const book = store.getBook(bookId)
   return book?.readingStatsKey ?? null
 }
 
 async function queryReadingStatsTotal(start: string, end: string, bookIdentity?: string | null): Promise<number> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const allRows = store.getReadingStatsRows()
   let total = 0
@@ -696,8 +688,7 @@ export async function fetchReadingStatsBookRank(
   options: { weekMode?: ReadingStatsWeekMode } = {},
 ): Promise<ReadingStatsBookRankItem[]> {
   const range = getPeriodRange(period, options)
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const allStats = store.getReadingStatsRows()
   const allBooks = store.books.value
@@ -740,8 +731,7 @@ export async function fetchReadingStatsBookRank(
 }
 
 export async function fetchReadingStatsBookDetail(bookId: number): Promise<ReadingStatsBookDetail | null> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const b = store.getBook(bookId)
   if (!b) return null
@@ -764,8 +754,7 @@ export async function fetchReadingStatsBookDetail(bookId: number): Promise<Readi
 }
 
 export async function fetchReadingCalendar(bookId?: number | null): Promise<ReadingCalendarSummary> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const bookIdentity = typeof bookId === 'number' ? store.getBook(bookId)?.readingStatsKey : null
   const days = buildReadingCalendar(store.getReadingStatsRows() as any[], {
@@ -782,8 +771,7 @@ export async function createAnnualReadingReport(
   year = new Date().getFullYear(),
   options: { bookId?: number | null } = {},
 ): Promise<AnnualReadingReport> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const bookIdentity = typeof options.bookId === 'number'
     ? store.getBook(options.bookId)?.readingStatsKey
@@ -801,8 +789,7 @@ export async function createReadingPeriodReport(options: {
   weekMode?: ReadingStatsWeekMode
   bookId?: number | null
 }): Promise<ReadingPeriodReport> {
-  const { useDataStore: getStore } = await import('./useDataStore')
-  const store = getStore()
+  const store = useDataStore()
   if (!store.dataLoaded.value) await store.loadAllData()
   const bookIdentity = typeof options.bookId === 'number'
     ? store.getBook(options.bookId)?.readingStatsKey
@@ -889,6 +876,11 @@ async function renderReportImageCardDataUrl(options: {
     zIndex: '-1',
   })
   document.body.appendChild(stage)
+
+  const [{ toPng }, { default: AnnualReportImageCard }] = await Promise.all([
+    import('html-to-image'),
+    import('../components/reports/AnnualReportImageCard.vue'),
+  ])
 
   const app = createApp({
     render: () => h(AnnualReportImageCard, {
@@ -1007,11 +999,6 @@ export async function exportReadingPeriodReportImage(options: {
   if (!result.success && !result.canceled) {
     throw new Error('图片保存失败')
   }
-}
-
-export async function hasReadingStatsHistory(): Promise<boolean> {
-  const rows = await window.electronAPI.data.readEntity('readingStats')
-  return Array.isArray(rows) && rows.length > 0
 }
 
 function shouldIncludeSettingKey(

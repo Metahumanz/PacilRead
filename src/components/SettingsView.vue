@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch, type Component } from 'vue'
 import { clampBookshelfProgressPrefetchLimit, useSettings } from '../composables/useSettings'
 import {
   applySyncResolution,
@@ -11,36 +11,13 @@ import {
 import { useDataStore } from '../composables/useDataStore'
 import { useRuleManager } from '../composables/useRuleManager'
 import { useUpdaterStatus } from '../composables/useUpdaterStatus'
-import {
-  buildPacilReadBaseUrl,
-  clearLocalReadingStats,
-  extractHrefValues,
-  fetchReadingStatsOverview,
-  getLocalOnlySettingsSnapshot,
-  getAllLocalReadingStatsRows,
-  deleteRemoteReadingStatsFiles,
-  hasReadingStatsHistory,
-  mergeRemoteReadingStats,
-  restoreDesktopSettingsSnapshot,
-  restoreDesktopSettingsValues,
-  restoreLocalOnlySettings,
-  restoreReadingStatsRows,
-  sanitizeWebdavDirectorySegment,
-  uploadDesktopSettingsSnapshot,
-  uploadReadingStatsSnapshot,
-  type ReadingStatsOverview,
-} from '../composables/useReadingStats'
+import type { ReadingStatsOverview } from '../composables/useReadingStats'
+import { hasReadingStatsHistory } from '../utils/readingStatsAvailability'
+import { buildPacilReadBaseUrl, extractHrefValues, sanitizeWebdavDirectorySegment } from '../utils/webdav'
 
-// Sub-components
-import SettingsDisplay from './settings/SettingsDisplay.vue'
-import SettingsAppearance from './settings/SettingsAppearance.vue'
-import SettingsReading from './settings/SettingsReading.vue'
-import SettingsReadingStats from './settings/SettingsReadingStats.vue'
-import SettingsWebDAV from './settings/SettingsWebDAV.vue'
-import SettingsTTS from './settings/SettingsTTS.vue'
-import SettingsRules from './settings/SettingsRules.vue'
-import SettingsAbout from './settings/SettingsAbout.vue'
-import SettingsSnapshots from './settings/SettingsSnapshots.vue'
+import SettingsCategoryPane from './settings/SettingsCategoryPane.vue'
+import { addShortcutBinding } from '../utils/keyboardShortcuts'
+import { notifyError } from '../composables/useNotifications'
 
 const emit = defineEmits<{
   (e: 'back'): void
@@ -109,6 +86,39 @@ const readingStatsHasHistory = ref(false)
 const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, last7Days: 0, year: 0 })
 const showReadingStatsDisableModal = ref(false)
 const readingStatsActionBusy = ref(false)
+const shortcutMessage = ref('')
+
+type SettingsCategory = 'appearance' | 'reading' | 'data' | 'sync' | 'about'
+const activeCategory = ref<SettingsCategory>('appearance')
+const settingsCategories: Array<{ key: SettingsCategory; label: string; icon: string; description: string }> = [
+  { key: 'appearance', label: '外观显示', icon: '◐', description: '主题、布局与首页' },
+  { key: 'reading', label: '阅读与听书', icon: '▷', description: '交互、语音与规则' },
+  { key: 'data', label: '统计与恢复', icon: '◫', description: '阅读数据与恢复点' },
+  { key: 'sync', label: '云同步', icon: '⇅', description: 'WebDAV 与备份' },
+  { key: 'about', label: '关于', icon: 'ⓘ', description: '版本、更新与存储' },
+]
+
+type SettingsLoader = () => Promise<{ default: Component }>
+interface SettingsPaneItem {
+  key: string
+  loader: SettingsLoader
+  props?: Record<string, unknown>
+}
+const loadReadingStatsApi = () => import('../composables/useReadingStats')
+type ReadingStatsApi = typeof import('../composables/useReadingStats')
+type DesktopSettingsUploadResult = Awaited<ReturnType<ReadingStatsApi['uploadDesktopSettingsSnapshot']>>
+type DesktopSettingsRestoreResult = Awaited<ReturnType<ReadingStatsApi['restoreDesktopSettingsSnapshot']>>
+const settingsLoaders: Record<string, SettingsLoader> = {
+  appearance: () => import('./settings/SettingsAppearance.vue'),
+  display: () => import('./settings/SettingsDisplay.vue'),
+  reading: () => import('./settings/SettingsReading.vue'),
+  tts: () => import('./settings/SettingsTTS.vue'),
+  rules: () => import('./settings/SettingsRules.vue'),
+  readingStats: () => import('./settings/SettingsReadingStats.vue'),
+  snapshots: () => import('./settings/SettingsSnapshots.vue'),
+  webdav: () => import('./settings/SettingsWebDAV.vue'),
+  about: () => import('./settings/SettingsAbout.vue'),
+}
 
 const {
   allRules,
@@ -192,26 +202,40 @@ const toggleAutoOpenLastRead = async () => {
   await saveSetting('autoOpenLastRead', autoOpenLastRead.value ? 'true' : 'false')
 }
 
-const addNextKey = (e: KeyboardEvent) => {
-  if (!nextKeys.value.includes(e.key) && e.key.trim().length > 0 || e.key === ' ') {
-    nextKeys.value.push(e.key)
-    saveSetting('reader_nextKeys', JSON.stringify(nextKeys.value))
-  }
-}
-const removeNextKey = (k: string) => {
-  nextKeys.value = nextKeys.value.filter(x => x !== k)
-  saveSetting('reader_nextKeys', JSON.stringify(nextKeys.value))
+const reportShortcutResult = (result: ReturnType<typeof addShortcutBinding>, direction: '上一页' | '下一页') => {
+  if (result.status === 'conflict') shortcutMessage.value = `该按键已绑定到${direction}，不能重复使用。`
+  else if (result.status === 'duplicate') shortcutMessage.value = '该按键已在当前绑定中。'
+  else if (result.status === 'ignored') shortcutMessage.value = '请输入非修饰键的有效按键。'
+  else shortcutMessage.value = ''
+  if (shortcutMessage.value) notifyError(shortcutMessage.value)
 }
 
-const addPrevKey = (e: KeyboardEvent) => {
-  if (!prevKeys.value.includes(e.key) && e.key.trim().length > 0 || e.key === ' ') {
-    prevKeys.value.push(e.key)
-    saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
+const addNextKey = async (e: KeyboardEvent) => {
+  const result = addShortcutBinding(nextKeys.value, prevKeys.value, e.key)
+  reportShortcutResult(result, '上一页')
+  if (result.status === 'added') {
+    nextKeys.value = result.keys
+    await saveSetting('reader_nextKeys', JSON.stringify(nextKeys.value))
   }
 }
-const removePrevKey = (k: string) => {
+const removeNextKey = async (k: string) => {
+  nextKeys.value = nextKeys.value.filter(x => x !== k)
+  shortcutMessage.value = ''
+  await saveSetting('reader_nextKeys', JSON.stringify(nextKeys.value))
+}
+
+const addPrevKey = async (e: KeyboardEvent) => {
+  const result = addShortcutBinding(prevKeys.value, nextKeys.value, e.key)
+  reportShortcutResult(result, '下一页')
+  if (result.status === 'added') {
+    prevKeys.value = result.keys
+    await saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
+  }
+}
+const removePrevKey = async (k: string) => {
   prevKeys.value = prevKeys.value.filter(x => x !== k)
-  saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
+  shortcutMessage.value = ''
+  await saveSetting('reader_prevKeys', JSON.stringify(prevKeys.value))
 }
 
 const saveMiMoKey = async () => {
@@ -440,6 +464,7 @@ const refreshReadingStatsSummary = async () => {
   try {
     readingStatsHasHistory.value = await hasReadingStatsHistory()
     if (readingTimeTrackingEnabled.value || readingStatsHasHistory.value) {
+      const { fetchReadingStatsOverview } = await loadReadingStatsApi()
       readingStatsOverview.value = await fetchReadingStatsOverview()
     } else {
       readingStatsOverview.value = { today: 0, week: 0, last7Days: 0, year: 0 }
@@ -502,6 +527,10 @@ const cancelDisableReadingStats = () => {
 
 const clearReadingStatsHistory = async () => {
   readingStatsActionBusy.value = true
+  const {
+    clearLocalReadingStats, deleteRemoteReadingStatsFiles,
+    getAllLocalReadingStatsRows, restoreReadingStatsRows,
+  } = await loadReadingStatsApi()
   const localSnapshot = await getAllLocalReadingStatsRows()
   try {
     await clearLocalReadingStats()
@@ -529,12 +558,13 @@ const clearReadingStatsHistory = async () => {
 const fullBackup = async () => {
   if (!webdavUrl.value) return
   try {
+    const { uploadDesktopSettingsSnapshot, uploadReadingStatsSnapshot } = await loadReadingStatsApi()
     await saveWebdav()
     webdavSyncing.value = true
     webdavSyncStatus.value = '准备备份...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
-    let desktopSettingsBackup: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null = null
+    let desktopSettingsBackup: DesktopSettingsUploadResult | null = null
 
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
@@ -557,8 +587,7 @@ const fullBackup = async () => {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     if (webdavSyncFiles.value) {
       const booksDir = appDataPath + '/books/'
-      const { useDataStore: getStore } = await import('../composables/useDataStore')
-      const store = getStore()
+      const store = useDataStore()
       if (!store.dataLoaded.value) await store.loadAllData()
       const bookFiles = store.books.value.map(b => b.sourceFile).filter(Boolean) as string[]
       for (let i = 0; i < bookFiles.length; i++) {
@@ -589,7 +618,7 @@ const fullBackup = async () => {
 }
 
 const formatDesktopSettingsRestoreStatus = (
-  result: Awaited<ReturnType<typeof restoreDesktopSettingsSnapshot>>
+  result: DesktopSettingsRestoreResult
 ) => {
   if (!result.applied) return result.message || '云端没有桌面设置文件，已保留当前设置'
 
@@ -600,7 +629,7 @@ const formatDesktopSettingsRestoreStatus = (
 }
 
 const applyLegacyDesktopSettingsFallback = async (
-  desktopSettingsRestore: Awaited<ReturnType<typeof restoreDesktopSettingsSnapshot>>,
+  desktopSettingsRestore: DesktopSettingsRestoreResult,
   fallback?: Record<string, string>
 ) => {
   if (desktopSettingsRestore.applied) {
@@ -612,12 +641,13 @@ const applyLegacyDesktopSettingsFallback = async (
     return formatDesktopSettingsRestoreStatus(desktopSettingsRestore)
   }
 
+  const { restoreDesktopSettingsValues } = await loadReadingStatsApi()
   await restoreDesktopSettingsValues(fallback!)
   return `云端没有 desktop-settings.json，已从旧版 sync/settings.json 应用 ${fallbackCount} 项桌面设置`
 }
 
 const formatDesktopSettingsBackupStatus = (
-  result: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null
+  result: DesktopSettingsUploadResult | null
 ) => {
   if (!result) return '桌面设置同步未开启'
   if (!result.uploaded) return result.message || '桌面设置未上传'
@@ -707,6 +737,10 @@ const applySyncDiffPreview = async () => {
 const fullRestore = async () => {
   if (!webdavUrl.value || !confirm('确定要从云端恢复吗？这将替换您当前的本地书架与设置驱动。')) return
   try {
+    const {
+      getLocalOnlySettingsSnapshot, mergeRemoteReadingStats,
+      restoreDesktopSettingsSnapshot, restoreLocalOnlySettings,
+    } = await loadReadingStatsApi()
     await saveWebdav()
     webdavSyncing.value = true
     const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
@@ -755,12 +789,13 @@ const fullRestore = async () => {
 const incrementalBackup = async () => {
   if (!webdavUrl.value) return
   try {
+    const { uploadDesktopSettingsSnapshot, uploadReadingStatsSnapshot } = await loadReadingStatsApi()
     await saveWebdav()
     webdavSyncing.value = true
     webdavSyncStatus.value = '准备增量同步...'
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
-    let desktopSettingsBackup: Awaited<ReturnType<typeof uploadDesktopSettingsSnapshot>> | null = null
+    let desktopSettingsBackup: DesktopSettingsUploadResult | null = null
 
     webdavSyncStatus.value = '创建云端目录...'
     await ensureSyncDirectories(auth, { includeChapterText: true })
@@ -786,8 +821,7 @@ const incrementalBackup = async () => {
     const appDataPath = await window.electronAPI.app.getPath('userData')
     if (webdavSyncFiles.value) {
       const booksDir = appDataPath + '/books/'
-      const { useDataStore: getStore } = await import('../composables/useDataStore')
-      const store = getStore()
+      const store = useDataStore()
       if (!store.dataLoaded.value) await store.loadAllData()
       const bookFiles = store.books.value.map(b => b.sourceFile).filter(Boolean) as string[]
       for (let i = 0; i < bookFiles.length; i++) {
@@ -825,13 +859,98 @@ const incrementalRestore = async () => {
   await openSyncDiffPreview()
 }
 
+const activeCategoryItems = computed<SettingsPaneItem[]>(() => {
+  switch (activeCategory.value) {
+    case 'appearance':
+      return [
+        { key: 'appearance', loader: settingsLoaders.appearance },
+        { key: 'display', loader: settingsLoaders.display, props: { setAspectRatio } },
+      ]
+    case 'reading':
+      return [
+        {
+          key: 'reading', loader: settingsLoaders.reading, props: {
+            toggleKeyHints, toggleAutoOpenLastRead, addNextKey, removeNextKey,
+            addPrevKey, removePrevKey, shortcutMessage: shortcutMessage.value,
+          },
+        },
+        { key: 'tts', loader: settingsLoaders.tts, props: { saveMiMoKey } },
+        {
+          key: 'rules', loader: settingsLoaders.rules, props: {
+            rules: allRules.value, getBookTitle, deleteRule, toggleRuleActive,
+          },
+        },
+      ]
+    case 'data':
+      return [
+        {
+          key: 'readingStats', loader: settingsLoaders.readingStats, props: {
+            trackingEnabled: readingTimeTrackingEnabled.value,
+            hidden: readingTimeStatsHidden.value,
+            hasHistory: readingStatsHasHistory.value,
+            loading: readingStatsLoading.value,
+            overview: readingStatsOverview.value,
+            onToggleTracking: handleToggleReadingStats,
+            onOpenStats: openReadingStats,
+          },
+        },
+        { key: 'snapshots', loader: settingsLoaders.snapshots },
+      ]
+    case 'sync':
+      return [{
+        key: 'webdav', loader: settingsLoaders.webdav, props: {
+          saveWebdav, testWebdav, fullBackup, fullRestore, incrementalBackup, incrementalRestore,
+          syncDiffPreview: syncDiffPreview.value,
+          syncDiffResolution: syncDiffResolution.value,
+          syncDiffLoading: syncDiffLoading.value,
+          syncDiffApplying: syncDiffApplying.value,
+          openSyncDiffPreview, applySyncDiffPreview, closeSyncDiffPreview, setSyncDiffResolution,
+          webdavTesting: webdavTesting.value,
+          webdavSyncing: webdavSyncing.value,
+          webdavSyncStatus: webdavSyncStatus.value,
+          webdavTestResult: webdavTestResult.value,
+        },
+      }]
+    case 'about':
+      return [{
+        key: 'about', loader: settingsLoaders.about, props: {
+          appVersion: appVersion.value,
+          dataSize: dataSize.value,
+          chapterTextSize: chapterTextSize.value,
+          jsonDataSize: jsonDataSize.value,
+          totalDataSize: totalDataSize.value,
+          updateStatus: updateStatus.value,
+          updateDetail: updateDetail.value,
+          updateAvailable: updateAvailable.value,
+          updateReady: updateReady.value,
+          isDownloading: isDownloading.value,
+          downloadUpdate, installNow, checkForUpdate, toggleSilentUpdate,
+        },
+      }]
+  }
+})
+
+const initializedCategories = new Set<SettingsCategory>()
+const initializeCategory = async (category: SettingsCategory) => {
+  if (initializedCategories.has(category)) return
+  try {
+    if (category === 'reading') await Promise.all([fetchAllRules(), fetchBooks()])
+    else if (category === 'data') await refreshReadingStatsSummary()
+    else if (category === 'about') {
+      await initializeUpdaterStatus()
+      try { await refreshStorageSize() } catch { dataSize.value = '—'; chapterTextSize.value = '—'; jsonDataSize.value = '—'; totalDataSize.value = '—' }
+    }
+    initializedCategories.add(category)
+  } catch (error) {
+    console.error(`Failed to initialize settings category ${category}:`, error)
+  }
+}
+
+watch(activeCategory, category => { void initializeCategory(category) })
+
 onMounted(async () => {
   await loadAllSettings()
-  await fetchAllRules()
-  await fetchBooks()
-  await refreshReadingStatsSummary()
-  await initializeUpdaterStatus()
-  try { await refreshStorageSize() } catch { dataSize.value = '—'; chapterTextSize.value = '—'; jsonDataSize.value = '—'; totalDataSize.value = '—' }
+  await initializeCategory(activeCategory.value)
 })
 </script>
 
@@ -842,78 +961,34 @@ onMounted(async () => {
       <p class="app-muted text-[13px] mt-1">定制 PacilRead 的各项核心行为与界面特质</p>
     </div>
 
-    <!-- Sub-sections -->
-    <SettingsAppearance />
+    <div class="settings-layout">
+      <nav class="settings-category-nav" aria-label="设置分类">
+        <button
+          v-for="category in settingsCategories"
+          :key="category.key"
+          type="button"
+          class="settings-category-button"
+          :class="{ active: activeCategory === category.key }"
+          :aria-current="activeCategory === category.key ? 'page' : undefined"
+          @click="activeCategory = category.key"
+        >
+          <span class="settings-category-icon" aria-hidden="true">{{ category.icon }}</span>
+          <span>
+            <strong>{{ category.label }}</strong>
+            <small>{{ category.description }}</small>
+          </span>
+        </button>
+      </nav>
 
-    <SettingsDisplay :setAspectRatio="setAspectRatio" />
-    
-    <SettingsReading 
-      :toggleKeyHints="toggleKeyHints"
-      :toggleAutoOpenLastRead="toggleAutoOpenLastRead"
-      :addNextKey="addNextKey"
-      :removeNextKey="removeNextKey"
-      :addPrevKey="addPrevKey"
-      :removePrevKey="removePrevKey"
-    />
-
-    <SettingsReadingStats
-      :trackingEnabled="readingTimeTrackingEnabled"
-      :hidden="readingTimeStatsHidden"
-      :hasHistory="readingStatsHasHistory"
-      :loading="readingStatsLoading"
-      :overview="readingStatsOverview"
-      :onToggleTracking="handleToggleReadingStats"
-      :onOpenStats="openReadingStats"
-    />
-
-    <SettingsSnapshots />
-
-    <SettingsWebDAV 
-      :saveWebdav="saveWebdav"
-      :testWebdav="testWebdav"
-      :fullBackup="fullBackup"
-      :fullRestore="fullRestore"
-      :incrementalBackup="incrementalBackup"
-      :incrementalRestore="incrementalRestore"
-      :syncDiffPreview="syncDiffPreview"
-      :syncDiffResolution="syncDiffResolution"
-      :syncDiffLoading="syncDiffLoading"
-      :syncDiffApplying="syncDiffApplying"
-      :openSyncDiffPreview="openSyncDiffPreview"
-      :applySyncDiffPreview="applySyncDiffPreview"
-      :closeSyncDiffPreview="closeSyncDiffPreview"
-      :setSyncDiffResolution="setSyncDiffResolution"
-      :webdavTesting="webdavTesting"
-      :webdavSyncing="webdavSyncing"
-      :webdavSyncStatus="webdavSyncStatus"
-      :webdavTestResult="webdavTestResult"
-    />
-
-    <SettingsTTS :saveMiMoKey="saveMiMoKey" />
-
-    <SettingsRules 
-      :rules="allRules"
-      :getBookTitle="getBookTitle"
-      :deleteRule="deleteRule"
-      :toggleRuleActive="toggleRuleActive"
-    />
-
-    <SettingsAbout
-      :appVersion="appVersion"
-      :dataSize="dataSize"
-      :chapterTextSize="chapterTextSize"
-      :jsonDataSize="jsonDataSize"
-      :totalDataSize="totalDataSize"
-      :updateStatus="updateStatus"
-      :updateDetail="updateDetail"
-      :updateAvailable="updateAvailable"
-      :updateReady="updateReady"
-      :isDownloading="isDownloading"
-      :downloadUpdate="downloadUpdate"
-      :installNow="installNow"
-      :checkForUpdate="checkForUpdate"
-      :toggleSilentUpdate="toggleSilentUpdate"
-    />
+      <main class="settings-category-content">
+        <KeepAlive :max="5">
+          <SettingsCategoryPane
+            :key="activeCategory"
+            :items="activeCategoryItems"
+          />
+        </KeepAlive>
+      </main>
+    </div>
 
     <Transition name="fade">
       <div
@@ -958,5 +1033,20 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* Individual section animations (can be added if needed, but the list is already cleaner) */
+.settings-layout { display:grid; grid-template-columns:180px minmax(0, 1fr); align-items:start; gap:30px; }
+.settings-category-nav { position:sticky; top:18px; display:grid; gap:6px; }
+.settings-category-button { display:grid; grid-template-columns:24px 1fr; gap:10px; align-items:start; width:100%; padding:11px 12px; border:1px solid transparent; border-radius:12px; color:var(--app-text-muted); background:transparent; text-align:left; cursor:pointer; transition:background .18s ease, border-color .18s ease, color .18s ease; }
+.settings-category-button:hover { color:var(--app-text); background:var(--app-surface-secondary); }
+.settings-category-button.active { color:var(--app-accent); border-color:color-mix(in srgb, var(--app-accent) 30%, transparent); background:color-mix(in srgb, var(--app-accent) 10%, transparent); }
+.settings-category-button strong { display:block; font-size:13px; line-height:1.45; }
+.settings-category-button small { display:block; margin-top:2px; font-size:10px; line-height:1.4; color:var(--app-text-muted); }
+.settings-category-icon { display:grid; place-items:center; width:23px; height:23px; border-radius:7px; background:var(--app-surface); font-size:13px; }
+.settings-category-content { min-width:0; }
+@media (max-width:760px) {
+  .settings-layout { display:block; }
+  .settings-category-nav { position:sticky; z-index:20; top:0; display:flex; gap:8px; margin:0 -12px 22px; padding:10px 12px; overflow-x:auto; background:color-mix(in srgb, var(--app-bg) 90%, transparent); backdrop-filter:blur(16px); scrollbar-width:none; }
+  .settings-category-nav::-webkit-scrollbar { display:none; }
+  .settings-category-button { flex:0 0 auto; display:flex; align-items:center; width:auto; padding:9px 12px; white-space:nowrap; }
+  .settings-category-button small { display:none; }
+}
 </style>
