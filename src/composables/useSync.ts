@@ -39,6 +39,10 @@ const progressDownloadCache = new Map<string, {
   result: CachedDownloadProgress
 }>()
 const progressDownloadInFlight = new Map<string, Promise<CachedDownloadProgress>>()
+const prefetchedProgressCache = new Map<string, {
+  expiresAt: number
+  payload: RemoteReadingProgress
+}>()
 
 function parseRemoteReadingProgress(raw: string): RemoteReadingProgress {
   const data = JSON.parse(raw) as Record<string, unknown>
@@ -142,6 +146,26 @@ export function useSync() {
     return shouldApplyRemoteProgress(result.payload, book) ? result.payload : null
   }
 
+  const rememberPrefetchedProgressFromWebdav = (
+    book: ProgressBook,
+    remote: RemoteReadingProgress,
+  ) => {
+    const context = getProgressRequestContext(book)
+    prefetchedProgressCache.set(context.cacheKey, {
+      expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+      payload: remote,
+    })
+  }
+
+  const consumePrefetchedProgressFromWebdav = (book: ProgressBook): RemoteReadingProgress | null => {
+    const context = getProgressRequestContext(book)
+    const cached = prefetchedProgressCache.get(context.cacheKey)
+    if (!cached) return null
+    prefetchedProgressCache.delete(context.cacheKey)
+    if (cached.expiresAt <= Date.now()) return null
+    return cached.payload
+  }
+
   const uploadProgressToWebdav = async (context: {
     bookId: number
     title: string
@@ -203,6 +227,8 @@ export function useSync() {
     canDownloadProgressFromWebdav,
     downloadProgressFromWebdav,
     getApplicableProgressFromWebdav,
+    rememberPrefetchedProgressFromWebdav,
+    consumePrefetchedProgressFromWebdav,
     uploadProgressToWebdav
   }
 }

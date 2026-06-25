@@ -34,7 +34,11 @@ const settings = useSettings()
 const {
   viewMode, bookshelfShowAddEntry, bookshelfProgressPrefetchLimit, settingsLoaded, saveSetting
 } = settings
-const { canDownloadProgressFromWebdav, getApplicableProgressFromWebdav } = useSync()
+const {
+  canDownloadProgressFromWebdav,
+  getApplicableProgressFromWebdav,
+  rememberPrefetchedProgressFromWebdav,
+} = useSync()
 
 const books = ref<BookDisplay[]>([])
 const loading = ref(true)
@@ -124,6 +128,7 @@ const prefetchBookshelfProgress = async () => {
     try {
       const remote = await getApplicableProgressFromWebdav(book)
       if (!remote || run !== progressPrefetchRun) continue
+      rememberPrefetchedProgressFromWebdav(book, remote)
 
       books.value = sortBooks(books.value.map(item => {
         if (item.id !== book.id) return item

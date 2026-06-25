@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.3.4',
+    date: '2026-06-25',
+    changes: [
+      'Bookshelf Prefetch（书架预取）：打开书架预取到云端最新阅读进度后，进入阅读页会直接定位到对应章节与字符位置',
+      'Progress Prompt（进度提示）：已由书架预取应用的进度不再触发阅读页顶部云端进度横栏，减少重复确认打扰',
+      'Sync Cache（同步缓存）：书架与阅读页共享短时预取结果，避免把云端字符偏移误写成本地分页页码',
+    ]
+  },
+  {
     version: '1.3.3',
     date: '2026-06-21',
     changes: [
