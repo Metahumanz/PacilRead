@@ -122,7 +122,12 @@ const previousKeyLabels = computed(() => prevKeys.value.map(formatShortcutKey).f
 const { rules, fetchRules, applyReplacements } = useRules()
 const { effectiveRefreshRate } = useDisplayRefreshRate()
 const { startHUD, stopHUD, formatHUD } = useHUD()
-const { canDownloadProgressFromWebdav, getApplicableProgressFromWebdav, uploadProgressToWebdav } = useSync()
+const {
+  canDownloadProgressFromWebdav,
+  consumePrefetchedProgressFromWebdav,
+  getApplicableProgressFromWebdav,
+  uploadProgressToWebdav,
+} = useSync()
 type ProgressUploadContext = Parameters<typeof uploadProgressToWebdav>[0]
 let deferredProgressUpload: ProgressUploadContext | null = null
 
@@ -1134,6 +1139,10 @@ onMounted(async () => {
   await fetchChapters()
   await fetchRules(props.bookId)
   startHUD()
+  const prefetchedProgress = !props.initialBookmark && book.value
+    ? consumePrefetchedProgressFromWebdav(book.value)
+    : null
+  let appliedPrefetchedProgress = false
   if (props.initialBookmark && chapters.value.length > 0) {
     const targetIndex = chapters.value.findIndex((chapter) => chapter.order_index === props.initialBookmark?.chapterOrderIndex)
     currentChapterIndex.value = targetIndex >= 0
@@ -1141,10 +1150,25 @@ onMounted(async () => {
       : Math.min(Math.max(props.initialBookmark.chapterOrderIndex, 0), chapters.value.length - 1)
     pendingWebdavPos.value = Math.max(0, props.initialBookmark.chapterOffset)
     currentPage.value = 0
+  } else if (
+    prefetchedProgress
+    && book.value
+    && chapters.value.length > 0
+    && prefetchedProgress.durChapterIndex < chapters.value.length
+  ) {
+    const targetIndex = prefetchedProgress.durChapterIndex
+    currentChapterIndex.value = targetIndex
+    pendingWebdavPos.value = Math.max(0, prefetchedProgress.durChapterPos)
+    currentPage.value = 0
+    book.value.progressIndex = targetIndex
+    book.value.progressOffset = 0
+    book.value.lastReadAt = Math.max(book.value.lastReadAt || 0, prefetchedProgress.durChapterTime)
+    appliedPrefetchedProgress = true
   } else if (book.value) {
     currentPage.value = book.value.progressOffset || 0
   }
   const shouldCheckRemoteProgress = !props.initialBookmark
+    && !appliedPrefetchedProgress
     && !!book.value
     && chapters.value.length > 0
     && canDownloadProgressFromWebdav()
@@ -1168,6 +1192,7 @@ onMounted(async () => {
     }
     prewarmNearbyChapters()
     prewarmChapterAt(currentChapterIndex.value)
+    if (appliedPrefetchedProgress) window.setTimeout(() => saveProgress(), 160)
     if (shouldCheckRemoteProgress) void checkRemoteProgressInBackground()
   })
   window.addEventListener('resize', handleResize)
