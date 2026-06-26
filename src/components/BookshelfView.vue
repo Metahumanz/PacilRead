@@ -128,16 +128,31 @@ const prefetchBookshelfProgress = async () => {
     try {
       const remote = await getApplicableProgressFromWebdav(book)
       if (!remote || run !== progressPrefetchRun) continue
-      rememberPrefetchedProgressFromWebdav(book, remote)
+      if (book.chapterCount <= 0 || remote.durChapterIndex >= book.chapterCount) continue
+
+      const progressPatch = {
+        progressIndex: remote.durChapterIndex,
+        progressOffset: 0,
+        lastReadAt: remote.durChapterTime,
+        currentChapterTitle: remote.durChapterTitle || book.currentChapterTitle,
+        readingStatus: (book.readingStatus === 'finished' ? 'finished' : 'reading') as ReadingStatus,
+      }
+      const updatedBook = await window.electronAPI.library.updateBook(book.id, progressPatch)
+      if (!updatedBook || run !== progressPrefetchRun) continue
+      const syncedProgress = {
+        progressIndex: updatedBook.progressIndex,
+        progressOffset: updatedBook.progressOffset,
+        lastReadAt: updatedBook.lastReadAt,
+        currentChapterTitle: updatedBook.currentChapterTitle,
+        readingStatus: updatedBook.readingStatus,
+      }
+      rememberPrefetchedProgressFromWebdav({ ...book, ...syncedProgress }, remote, { appliedToLocal: true })
 
       books.value = sortBooks(books.value.map(item => {
         if (item.id !== book.id) return item
-        const maxProgressIndex = Math.max(0, item.chapterCount - 1)
         return {
           ...item,
-          progressIndex: Math.min(Math.max(remote.durChapterIndex, 0), maxProgressIndex),
-          lastReadAt: remote.durChapterTime,
-          currentChapterTitle: remote.durChapterTitle || item.currentChapterTitle,
+          ...syncedProgress,
         }
       }))
     } catch (error) {

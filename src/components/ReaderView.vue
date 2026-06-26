@@ -7,7 +7,7 @@ import { usePagination } from '../composables/usePagination'
 import { useReaderPaginator } from '../composables/useReaderPaginator'
 import { useRules } from '../composables/useRules'
 import { useHUD } from '../composables/useHUD'
-import { useSync } from '../composables/useSync'
+import { shouldUsePrefetchedProgress, useSync } from '../composables/useSync'
 import { useReadingTimeTracker } from '../composables/useReadingTimeTracker'
 import { useAppTheme } from '../composables/useAppTheme'
 import { useDisplayRefreshRate } from '../composables/useDisplayRefreshRate'
@@ -1142,6 +1142,7 @@ onMounted(async () => {
   const prefetchedProgress = !props.initialBookmark && book.value
     ? consumePrefetchedProgressFromWebdav(book.value)
     : null
+  const prefetchedRemote = prefetchedProgress?.payload ?? null
   let appliedPrefetchedProgress = false
   if (props.initialBookmark && chapters.value.length > 0) {
     const targetIndex = chapters.value.findIndex((chapter) => chapter.order_index === props.initialBookmark?.chapterOrderIndex)
@@ -1152,17 +1153,19 @@ onMounted(async () => {
     currentPage.value = 0
   } else if (
     prefetchedProgress
+    && prefetchedRemote
     && book.value
     && chapters.value.length > 0
-    && prefetchedProgress.durChapterIndex < chapters.value.length
+    && prefetchedRemote.durChapterIndex < chapters.value.length
+    && shouldUsePrefetchedProgress(prefetchedRemote, book.value, prefetchedProgress.appliedToLocal)
   ) {
-    const targetIndex = prefetchedProgress.durChapterIndex
+    const targetIndex = prefetchedRemote.durChapterIndex
     currentChapterIndex.value = targetIndex
-    pendingWebdavPos.value = Math.max(0, prefetchedProgress.durChapterPos)
+    pendingWebdavPos.value = Math.max(0, prefetchedRemote.durChapterPos)
     currentPage.value = 0
     book.value.progressIndex = targetIndex
     book.value.progressOffset = 0
-    book.value.lastReadAt = Math.max(book.value.lastReadAt || 0, prefetchedProgress.durChapterTime)
+    book.value.lastReadAt = Math.max(book.value.lastReadAt || 0, prefetchedRemote.durChapterTime)
     appliedPrefetchedProgress = true
   } else if (book.value) {
     currentPage.value = book.value.progressOffset || 0

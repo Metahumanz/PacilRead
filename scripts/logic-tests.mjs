@@ -69,6 +69,40 @@ assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 3, 1200), false)
 assert.equal(remoteProgress.buildRemoteProgressExcerpt('0123456789ABCDEFGHIJ', 10, 9), '…789ABCDEF…')
 assert.equal(remoteProgress.buildRemoteProgressExcerpt('第一行\n  第二行', 0, 64), '第一行 第二行')
 
+const sync = loadTsModule('src/composables/useSync.ts')
+const remoteReadingProgress = {
+  author: '作者',
+  durChapterIndex: 0,
+  durChapterPos: 1200,
+  durChapterTime: 100000,
+  durChapterTitle: '第一章',
+  name: '书名',
+}
+assert.equal(sync.shouldApplyRemoteProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 200000,
+  readingStatus: 'unread',
+}), true)
+assert.equal(sync.shouldApplyRemoteProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 100000,
+  readingStatus: 'reading',
+}), false)
+assert.equal(sync.shouldUsePrefetchedProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 100000,
+  readingStatus: 'reading',
+}, true), true)
+assert.equal(sync.shouldUsePrefetchedProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 120000,
+  readingStatus: 'reading',
+}, true), false)
+
 const settingsSchema = loadTsModule('src/utils/settingsSchema.ts')
 const boolDef = settingsSchema.boolSetting('enabled', false, 'ui')
 assert.equal(settingsSchema.readSetting({ enabled: 'true' }, boolDef), true)
