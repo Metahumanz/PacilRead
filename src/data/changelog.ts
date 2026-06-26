@@ -7,6 +7,19 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.0',
+    date: '2026-06-26',
+    changes: [
+      'Main Process（主进程结构）：拆分 Electron 主进程窗口、IPC 与书库服务模块，减少单文件体积并让后续维护更清晰',
+      'Security Hardening（安全加固）：开启渲染进程 sandbox，收紧 IPC、本地路径、WebDAV URL、认证头和图片数据校验，并过滤不安全外部链接',
+      'Content Safety（内容安全）：TXT/章节 HTML、分页快照和排版文本提取会清理脚本、内联事件与危险标签，降低导入内容影响阅读界面的风险',
+      'Library Reliability（书库可靠性）：导入、删除与章节正文同步写入更稳，增加 JSON 原子写入、ZIP 路径校验、导入回滚和重复文件摘要回填',
+      'Cloud Progress（云端进度）：书架预取成功后会真正写入本地阅读记录，进入阅读页直接定位到最新字符位置，不再重复弹出云端进度顶栏',
+      'WebDAV Cleanup（云端清理）：清理远端孤儿章节、封面和书籍文件时会正确解析 PROPFIND 返回的相对 href，避免删除请求地址错误',
+      'Build & Tests（构建验证）：测试脚本纳入类型检查，修正桌面开发/构建命令别名，并补充同步判断与 HTML 清理逻辑覆盖',
+    ]
+  },
+  {
     version: '1.3.4',
     date: '2026-06-25',
     changes: [
