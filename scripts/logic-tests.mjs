@@ -354,10 +354,15 @@ try {
 }
 
 const parsers = loadTsModule('electron/parsers.ts')
+assert.equal(parsers.escapeHtmlText('<b>A&B</b>'), '&lt;b&gt;A&amp;B&lt;/b&gt;')
+assert.equal(parsers.stripHtmlTags('<p>正文</p><script>alert(1)</script><style>.x{}</style>'), '正文')
 const chapters = parsers.splitTextIntoChapters('开头说明\n\n第一章：开始\n这里是正文\n\n第二章 继续\n更多正文')
 assert.equal(chapters.length, 3)
 assert.equal(chapters[0].title, '前言')
 assert.equal(chapters[1].title, '第一章：开始')
 assert.equal(chapters[2].title, '第二章 继续')
+const htmlEscapedChapters = parsers.splitTextIntoChapters('第一章：开始\n<script>alert(1)</script>\nA & B < C')
+assert.equal(htmlEscapedChapters[0].body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), true)
+assert.equal(htmlEscapedChapters[0].body.includes('A &amp; B &lt; C'), true)
 
 console.log('logic tests passed')

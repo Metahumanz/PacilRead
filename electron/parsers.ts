@@ -19,15 +19,31 @@ export interface EpubParseResult {
   coverExtension?: string
 }
 
+export function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+export function stripUnsafeHtmlBlocks(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, '')
+}
+
 export function stripHtmlTags(html: string): string {
-  return html.replace(/<[^>]+>/g, '').trim()
+  return stripUnsafeHtmlBlocks(html).replace(/<[^>]+>/g, '').trim()
 }
 
 function linesToHtml(text: string): string {
   return text
     .split(/\n/)
     .filter(l => l.trim())
-    .map(l => `<p>${l.trim()}</p>`)
+    .map(l => `<p>${escapeHtmlText(l.trim())}</p>`)
     .join('\n')
 }
 
@@ -136,8 +152,7 @@ export async function parsePdf(filePath: string): Promise<Chapter[]> {
 function extractBodyContent(html: string): string {
   // Extract content inside <body>...</body>
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-  if (bodyMatch) return bodyMatch[1].trim()
-  return html
+  return stripUnsafeHtmlBlocks(bodyMatch ? bodyMatch[1].trim() : html)
 }
 
 function extractTitle(html: string): string {

@@ -240,7 +240,26 @@ export function usePagination(opts: {
     return null
   }
 
-  const captureCurrentSnapshot = () => opts.containerRef.value?.outerHTML || ''
+  const sanitizeSnapshotHtml = (html: string): string => {
+    const template = document.createElement('template')
+    template.innerHTML = html
+    template.content.querySelectorAll('script, style, noscript, iframe, object, embed, link, meta, base').forEach(node => node.remove())
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT)
+    let node = walker.nextNode() as Element | null
+    while (node) {
+      for (const attr of Array.from(node.attributes)) {
+        const name = attr.name.toLocaleLowerCase()
+        const value = attr.value.trim().toLocaleLowerCase()
+        if (name.startsWith('on') || name === 'srcdoc' || value.startsWith('javascript:')) {
+          node.removeAttribute(attr.name)
+        }
+      }
+      node = walker.nextNode() as Element | null
+    }
+    return template.innerHTML
+  }
+
+  const captureCurrentSnapshot = () => sanitizeSnapshotHtml(opts.containerRef.value?.outerHTML || '')
 
   const cancelFrame = () => {
     if (animationFrame !== null) {

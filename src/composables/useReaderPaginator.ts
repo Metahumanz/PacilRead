@@ -87,9 +87,16 @@ function normalizeText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ')
 }
 
+function sanitizeHtmlForTextExtraction(html: string): string {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  template.content.querySelectorAll('script, style, noscript, iframe, object, embed, link, meta, base').forEach(node => node.remove())
+  return template.innerHTML
+}
+
 function extractParagraphs(bodyHtml: string, bodyText: string): string[] {
   const template = document.createElement('template')
-  template.innerHTML = (bodyHtml || '').replace(/<br\s*\/?>/gi, '\n')
+  template.innerHTML = sanitizeHtmlForTextExtraction(bodyHtml || '').replace(/<br\s*\/?>/gi, '\n')
   const paragraphNodes = Array.from(template.content.querySelectorAll('p'))
   const paragraphs = paragraphNodes
     .map((node) => normalizeText(node.textContent || '').trim())
