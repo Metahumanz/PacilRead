@@ -16,6 +16,7 @@ export interface LocalReadingProgress {
   progressIndex: number
   progressOffset: number
   lastReadAt: number
+  readingStatus?: string
 }
 
 export interface RemoteReadingProgress {
@@ -34,6 +35,11 @@ export type DownloadProgressResult =
 
 type CachedDownloadProgress = Exclude<DownloadProgressResult, { status: 'disabled' }>
 
+export interface PrefetchedReadingProgress {
+  payload: RemoteReadingProgress
+  appliedToLocal: boolean
+}
+
 const progressDownloadCache = new Map<string, {
   expiresAt: number
   result: CachedDownloadProgress
@@ -42,6 +48,7 @@ const progressDownloadInFlight = new Map<string, Promise<CachedDownloadProgress>
 const prefetchedProgressCache = new Map<string, {
   expiresAt: number
   payload: RemoteReadingProgress
+  appliedToLocal: boolean
 }>()
 
 function parseRemoteReadingProgress(raw: string): RemoteReadingProgress {
@@ -66,8 +73,24 @@ export function shouldApplyRemoteProgress(
   local: LocalReadingProgress,
 ): boolean {
   if (remote.durChapterTime <= 0) return false
-  const localEmpty = local.progressIndex === 0 && local.progressOffset === 0
-  return remote.durChapterTime > local.lastReadAt + REMOTE_NEWER_GRACE_MS || localEmpty
+  const localEmpty = local.progressIndex === 0
+    && local.progressOffset === 0
+    && local.readingStatus !== 'reading'
+    && local.readingStatus !== 'finished'
+  const sameAppliedTimestamp = local.lastReadAt > 0
+    && Math.abs(remote.durChapterTime - local.lastReadAt) <= REMOTE_NEWER_GRACE_MS
+  return remote.durChapterTime > local.lastReadAt + REMOTE_NEWER_GRACE_MS
+    || (localEmpty && !sameAppliedTimestamp)
+}
+
+export function shouldUsePrefetchedProgress(
+  remote: RemoteReadingProgress,
+  local: LocalReadingProgress,
+  appliedToLocal: boolean,
+): boolean {
+  if (!appliedToLocal) return shouldApplyRemoteProgress(remote, local)
+  return remote.durChapterIndex === local.progressIndex
+    && Math.abs(remote.durChapterTime - local.lastReadAt) <= REMOTE_NEWER_GRACE_MS
 }
 
 export function useSync() {
@@ -149,21 +172,26 @@ export function useSync() {
   const rememberPrefetchedProgressFromWebdav = (
     book: ProgressBook,
     remote: RemoteReadingProgress,
+    options: { appliedToLocal?: boolean } = {},
   ) => {
     const context = getProgressRequestContext(book)
     prefetchedProgressCache.set(context.cacheKey, {
       expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
       payload: remote,
+      appliedToLocal: options.appliedToLocal === true,
     })
   }
 
-  const consumePrefetchedProgressFromWebdav = (book: ProgressBook): RemoteReadingProgress | null => {
+  const consumePrefetchedProgressFromWebdav = (book: ProgressBook): PrefetchedReadingProgress | null => {
     const context = getProgressRequestContext(book)
     const cached = prefetchedProgressCache.get(context.cacheKey)
     if (!cached) return null
     prefetchedProgressCache.delete(context.cacheKey)
     if (cached.expiresAt <= Date.now()) return null
-    return cached.payload
+    return {
+      payload: cached.payload,
+      appliedToLocal: cached.appliedToLocal,
+    }
   }
 
   const uploadProgressToWebdav = async (context: {

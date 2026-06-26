@@ -69,6 +69,40 @@ assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 3, 1200), false)
 assert.equal(remoteProgress.buildRemoteProgressExcerpt('0123456789ABCDEFGHIJ', 10, 9), '…789ABCDEF…')
 assert.equal(remoteProgress.buildRemoteProgressExcerpt('第一行\n  第二行', 0, 64), '第一行 第二行')
 
+const sync = loadTsModule('src/composables/useSync.ts')
+const remoteReadingProgress = {
+  author: '作者',
+  durChapterIndex: 0,
+  durChapterPos: 1200,
+  durChapterTime: 100000,
+  durChapterTitle: '第一章',
+  name: '书名',
+}
+assert.equal(sync.shouldApplyRemoteProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 200000,
+  readingStatus: 'unread',
+}), true)
+assert.equal(sync.shouldApplyRemoteProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 100000,
+  readingStatus: 'reading',
+}), false)
+assert.equal(sync.shouldUsePrefetchedProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 100000,
+  readingStatus: 'reading',
+}, true), true)
+assert.equal(sync.shouldUsePrefetchedProgress(remoteReadingProgress, {
+  progressIndex: 0,
+  progressOffset: 0,
+  lastReadAt: 120000,
+  readingStatus: 'reading',
+}, true), false)
+
 const settingsSchema = loadTsModule('src/utils/settingsSchema.ts')
 const boolDef = settingsSchema.boolSetting('enabled', false, 'ui')
 assert.equal(settingsSchema.readSetting({ enabled: 'true' }, boolDef), true)
@@ -354,10 +388,15 @@ try {
 }
 
 const parsers = loadTsModule('electron/parsers.ts')
+assert.equal(parsers.escapeHtmlText('<b>A&B</b>'), '&lt;b&gt;A&amp;B&lt;/b&gt;')
+assert.equal(parsers.stripHtmlTags('<p>正文</p><script>alert(1)</script><style>.x{}</style>'), '正文')
 const chapters = parsers.splitTextIntoChapters('开头说明\n\n第一章：开始\n这里是正文\n\n第二章 继续\n更多正文')
 assert.equal(chapters.length, 3)
 assert.equal(chapters[0].title, '前言')
 assert.equal(chapters[1].title, '第一章：开始')
 assert.equal(chapters[2].title, '第二章 继续')
+const htmlEscapedChapters = parsers.splitTextIntoChapters('第一章：开始\n<script>alert(1)</script>\nA & B < C')
+assert.equal(htmlEscapedChapters[0].body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), true)
+assert.equal(htmlEscapedChapters[0].body.includes('A &amp; B &lt; C'), true)
 
 console.log('logic tests passed')

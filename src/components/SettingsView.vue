@@ -288,6 +288,10 @@ const getFileNameFromPath = (value: string) => {
   return clean.split(/[\\/]/).pop() || ''
 }
 
+const resolveRemoteHref = (href: string, baseUrl: string) => {
+  try { return new URL(href, baseUrl).toString() } catch (_) { return href }
+}
+
 const chapterTextZipFileName = (bookId: number) => `book_${bookId}.zip`
 const legacyChapterTextZipFileName = (bookId: number) => `chapters_${bookId}.zip`
 
@@ -395,7 +399,7 @@ const cleanRemoteOrphans = async (auth: string) => {
           const remoteBookId = parseInt(match[1])
           if (!bookIdSet.has(remoteBookId)) {
             await window.electronAPI.webdav.request({
-              url: zipFile, method: 'DELETE',
+              url: resolveRemoteHref(zipFile, chapterTextDir), method: 'DELETE',
               headers: { Authorization: `Basic ${auth}` }
             })
           }
@@ -423,7 +427,7 @@ const cleanRemoteOrphans = async (auth: string) => {
         const fileName = coverFile.split('/').pop() || ''
         if (fileName && !usedSet.has(fileName)) {
           await window.electronAPI.webdav.request({
-            url: coverFile, method: 'DELETE',
+            url: resolveRemoteHref(coverFile, coversDir), method: 'DELETE',
             headers: { Authorization: `Basic ${auth}` }
           })
         }
@@ -450,7 +454,7 @@ const cleanRemoteOrphans = async (auth: string) => {
         const fileName = bookFile.split('/').pop() || ''
         if (fileName && !usedSet.has(fileName)) {
           await window.electronAPI.webdav.request({
-            url: bookFile, method: 'DELETE',
+            url: resolveRemoteHref(bookFile, booksDir), method: 'DELETE',
             headers: { Authorization: `Basic ${auth}` }
           })
         }
