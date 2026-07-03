@@ -76,6 +76,7 @@ const periodKindLabel = computed(() => {
   if (!report) return '年度报告'
   if (report.period === 'day') return '每日报告'
   if (report.period === 'week') return '周报'
+  if (report.period === 'month') return '月报'
   return '年度报告'
 })
 
@@ -106,6 +107,8 @@ const reportMark = computed(() => {
   if (!period) return String(reportYear.value)
   if (period.period === 'day') return 'DAY'
   if (period.period === 'week') return 'WEEK'
+  if (period.period === 'month') return 'MONTH'
+  if (period.period === 'year' && period.yearMode === 'last365Days') return '365'
   return String(reportYear.value)
 })
 
@@ -114,6 +117,8 @@ const wrappedHeroTitle = computed(() => {
   if (!period) return String(reportYear.value)
   if (period.period === 'day') return 'DAY'
   if (period.period === 'week') return 'WEEK'
+  if (period.period === 'month') return 'MONTH'
+  if (period.period === 'year' && period.yearMode === 'last365Days') return '365'
   return String(reportYear.value)
 })
 
@@ -130,6 +135,8 @@ const wrappedBadge = computed(() => {
   const period = periodReport.value
   if (period?.period === 'day') return 'DAY'
   if (period?.period === 'week') return 'WEEK'
+  if (period?.period === 'month') return 'MONTH'
+  if (period?.period === 'year') return period.yearMode === 'last365Days' ? '365' : 'YEAR'
   return 'READING'
 })
 
@@ -138,10 +145,18 @@ const heroDurationLabel = computed(() => {
   if (isBookReport.value) {
     if (period?.period === 'day') return '这本书今天读了'
     if (period?.period === 'week') return '这本书这周读了'
+    if (period?.period === 'month') {
+      return period.monthMode === 'last30Days' ? '这本书过去30天读了' : '这本书这个自然月读了'
+    }
+    if (period?.period === 'year' && period.yearMode === 'last365Days') return '这本书过去365天读了'
     return '这本书今年读了'
   }
   if (period?.period === 'day') return '你今天读了'
   if (period?.period === 'week') return '你这周读了'
+  if (period?.period === 'month') {
+    return period.monthMode === 'last30Days' ? '你过去30天读了' : '你这个自然月读了'
+  }
+  if (period?.period === 'year' && period.yearMode === 'last365Days') return '你过去365天读了'
   return '你今年读了'
 })
 
@@ -210,7 +225,10 @@ const wrappedChips = computed(() => {
 
 const rhythmTitle = computed(() => {
   const period = periodReport.value
-  if (!period || period.period === 'year') return '12 个月阅读趋势'
+  if (!period) return '12 个月阅读趋势'
+  if (period.period === 'year') {
+    return period.yearMode === 'last365Days' ? '月度阅读趋势' : '12 个月阅读趋势'
+  }
   if (period.period === 'day') return '今日阅读构成'
   return '每日阅读节奏'
 })

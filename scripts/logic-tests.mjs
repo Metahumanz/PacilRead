@@ -273,6 +273,8 @@ const calendarWeekRange = readingInsights.buildReadingReportRange('week', {
 assert.deepEqual(plain(calendarWeekRange), {
   period: 'week',
   weekMode: 'calendarWeek',
+  monthMode: null,
+  yearMode: null,
   startDate: '2026-01-05',
   endDate: '2026-01-07',
   title: '本周阅读周报',
@@ -295,6 +297,69 @@ const last7Report = readingInsights.buildReadingPeriodReport(periodRows, annualB
 assert.equal(last7Range.startDate, '2026-01-01')
 assert.equal(last7Report.totalSeconds, 4200)
 assert.equal(last7Report.daily.length, 7)
+const calendarMonthRange = readingInsights.buildReadingReportRange('month', {
+  monthMode: 'calendarMonth',
+  now: fixedNow,
+})
+assert.deepEqual(plain(calendarMonthRange), {
+  period: 'month',
+  weekMode: null,
+  monthMode: 'calendarMonth',
+  yearMode: null,
+  startDate: '2026-01-01',
+  endDate: '2026-01-07',
+  title: '自然月阅读月报',
+  rangeTitle: '2026-01-01 至 2026-01-07',
+  fileLabel: '2026-01-01_2026-01-07-自然月月报',
+})
+const calendarMonthReport = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, calendarMonthRange)
+assert.equal(calendarMonthReport.totalSeconds, 4200)
+assert.equal(calendarMonthReport.totalChars, 8400)
+assert.equal(calendarMonthReport.readingDays, 4)
+assert.equal(calendarMonthReport.daily.length, 7)
+assert.equal(calendarMonthReport.rhythmDaily.length, 7)
+assert.equal(calendarMonthReport.topBooks[0].title, 'A')
+const last30Range = readingInsights.buildReadingReportRange('month', {
+  monthMode: 'last30Days',
+  now: fixedNow,
+})
+const last30Report = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, last30Range)
+assert.equal(last30Range.startDate, '2025-12-09')
+assert.equal(last30Range.endDate, '2026-01-07')
+assert.equal(last30Report.totalSeconds, 5199)
+assert.equal(last30Report.readingDays, 5)
+assert.equal(last30Report.daily.length, 30)
+assert.equal(last30Report.topBooks[0].title, 'A')
+assert.equal(
+  readingInsights.buildReadingPeriodReportHtml(calendarMonthReport).includes('自然月阅读月报'),
+  true,
+)
+const last365Range = readingInsights.buildReadingReportRange('year', {
+  yearMode: 'last365Days',
+  now: fixedNow,
+})
+assert.deepEqual(plain(last365Range), {
+  period: 'year',
+  weekMode: null,
+  monthMode: null,
+  yearMode: 'last365Days',
+  startDate: '2025-01-08',
+  endDate: '2026-01-07',
+  title: '过去365天阅读年报',
+  rangeTitle: '2025-01-08 至 2026-01-07',
+  fileLabel: '2025-01-08_2026-01-07-过去365天年报',
+})
+const last365Report = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, last365Range)
+assert.equal(last365Report.totalSeconds, 5199)
+assert.equal(last365Report.readingDays, 5)
+assert.equal(last365Report.daily.length, 365)
+assert.equal(last365Report.monthly.length, 13)
+assert.equal(last365Report.monthly.find(month => month.month === '2025-12')?.totalSeconds, 999)
+assert.equal(last365Report.monthly.find(month => month.month === '2026-01')?.totalSeconds, 4200)
+assert.equal(
+  readingInsights.buildReadingPeriodReportInsight(last365Report).startsWith('过去365天你读了 5 天'),
+  true,
+)
 const dailyRange = readingInsights.buildReadingReportRange('day', { now: fixedNow })
 const dailyReport = readingInsights.buildReadingPeriodReport(periodRows, annualBooks, dailyRange, { bookIdentity: 'a' })
 assert.equal(dailyReport.scope, 'book')

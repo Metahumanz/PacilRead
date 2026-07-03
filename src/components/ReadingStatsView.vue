@@ -21,8 +21,10 @@ import {
   type ReadingCalendarSummary,
   type ReadingStatsBookDetail,
   type ReadingStatsBookRankItem,
+  type ReadingStatsMonthMode,
   type ReadingStatsPeriod,
   type ReadingStatsWeekMode,
+  type ReadingStatsYearMode,
 } from '../composables/useReadingStats'
 import { useAppTheme } from '../composables/useAppTheme'
 import { useSettings } from '../composables/useSettings'
@@ -53,7 +55,9 @@ const loading = ref(true)
 const syncing = ref(false)
 const selectedPeriod = ref<ReadingStatsPeriod>('today')
 const selectedWeekMode = ref<ReadingStatsWeekMode>('calendarWeek')
-const overview = ref({ today: 0, week: 0, last7Days: 0, year: 0 })
+const selectedMonthMode = ref<ReadingStatsMonthMode>('calendarMonth')
+const selectedYearMode = ref<ReadingStatsYearMode>('calendarYear')
+const overview = ref({ today: 0, week: 0, last7Days: 0, month: 0, last30Days: 0, year: 0, last365Days: 0 })
 const bookDetail = ref<ReadingStatsBookDetail | null>(null)
 const ranking = ref<ReadingStatsBookRankItem[]>([])
 const calendar = ref<ReadingCalendarSummary>({ days: [], longestStreak: 0 })
@@ -74,12 +78,23 @@ const { webdavUrl, webdavSyncReadingStats } = useSettings()
 const periodOptions: Array<{ value: ReadingStatsPeriod; label: string }> = [
   { value: 'today', label: '本日' },
   { value: 'week', label: '本周' },
+  { value: 'month', label: '自然月' },
   { value: 'year', label: '本年' },
 ]
 
 const weekModeOptions: Array<{ value: ReadingStatsWeekMode; label: string }> = [
   { value: 'calendarWeek', label: '自然周' },
   { value: 'last7Days', label: '过去七天' },
+]
+
+const monthModeOptions: Array<{ value: ReadingStatsMonthMode; label: string }> = [
+  { value: 'calendarMonth', label: '自然月' },
+  { value: 'last30Days', label: '过去30天' },
+]
+
+const yearModeOptions: Array<{ value: ReadingStatsYearMode; label: string }> = [
+  { value: 'calendarYear', label: '自然年' },
+  { value: 'last365Days', label: '过去365天' },
 ]
 
 let syncRunId = 0
@@ -93,7 +108,7 @@ const headerTitle = computed(() => {
 
 const headerDescription = computed(() => {
   if (props.bookId) return '查看这本书在当前设备与已同步设备上的累计阅读时长'
-  return '汇总今日、本周、本年的阅读时长，并按书籍聚合排行'
+  return '汇总今日、本周、自然月、本年的阅读时长，并按书籍聚合排行'
 })
 
 const canSyncReadingStats = computed(() => (
@@ -132,6 +147,14 @@ const weekOverviewSeconds = computed(() => (
   selectedWeekMode.value === 'last7Days' ? overview.value.last7Days : overview.value.week
 ))
 
+const monthOverviewSeconds = computed(() => (
+  selectedMonthMode.value === 'last30Days' ? overview.value.last30Days : overview.value.month
+))
+
+const yearOverviewSeconds = computed(() => (
+  selectedYearMode.value === 'last365Days' ? overview.value.last365Days : overview.value.year
+))
+
 const selectedPeriodReportKey = computed<ReadingReportPeriod>(() => (
   selectedPeriod.value === 'today' ? 'day' : selectedPeriod.value
 ))
@@ -139,18 +162,21 @@ const selectedPeriodReportKey = computed<ReadingReportPeriod>(() => (
 const currentRangeLabel = computed(() => {
   if (selectedPeriod.value === 'today') return '本日'
   if (selectedPeriod.value === 'week') return selectedWeekMode.value === 'last7Days' ? '过去七天' : '本周'
-  return '本年'
+  if (selectedPeriod.value === 'month') return selectedMonthMode.value === 'last30Days' ? '过去30天' : '自然月'
+  return selectedYearMode.value === 'last365Days' ? '过去365天' : '自然年'
 })
 
 const currentRangeSeconds = computed(() => {
   if (selectedPeriod.value === 'today') return overview.value.today
   if (selectedPeriod.value === 'week') return weekOverviewSeconds.value
-  return overview.value.year
+  if (selectedPeriod.value === 'month') return monthOverviewSeconds.value
+  return yearOverviewSeconds.value
 })
 
 const reportKindLabelForPeriod = (period: ReadingReportPeriod) => {
   if (period === 'day') return '每日报告'
   if (period === 'week') return '周报'
+  if (period === 'month') return '月报'
   return '年度报告'
 }
 
@@ -214,6 +240,14 @@ const selectWeekMode = (mode: ReadingStatsWeekMode) => {
   selectedWeekMode.value = mode
 }
 
+const selectMonthMode = (mode: ReadingStatsMonthMode) => {
+  selectedMonthMode.value = mode
+}
+
+const selectYearMode = (mode: ReadingStatsYearMode) => {
+  selectedYearMode.value = mode
+}
+
 const setSyncStatus = (message: string, autoClear = false) => {
   syncStatusText.value = message
   if (syncStatusTimer !== null) {
@@ -237,6 +271,8 @@ const loadData = async (options: { showLoading?: boolean } = {}) => {
     currentPeriodReport.value = await createReadingPeriodReport({
       period: selectedPeriodReportKey.value,
       weekMode: selectedWeekMode.value,
+      monthMode: selectedMonthMode.value,
+      yearMode: selectedYearMode.value,
       bookId: props.bookId,
     })
     if (props.bookId) {
@@ -246,6 +282,8 @@ const loadData = async (options: { showLoading?: boolean } = {}) => {
       bookDetail.value = null
       ranking.value = await fetchReadingStatsBookRank(selectedPeriod.value, {
         weekMode: selectedWeekMode.value,
+        monthMode: selectedMonthMode.value,
+        yearMode: selectedYearMode.value,
       })
     }
   } finally {
@@ -325,6 +363,8 @@ const exportReport = async (format: 'html' | 'json') => {
     await exportReadingPeriodReport(format, {
       period: selectedPeriodReportKey.value,
       weekMode: selectedWeekMode.value,
+      monthMode: selectedMonthMode.value,
+      yearMode: selectedYearMode.value,
       bookId: props.bookId,
     })
   } finally {
@@ -400,7 +440,7 @@ const openImageExportDialog = async () => {
   selectedAnnualReportMetrics.value = []
   imagePreviewLoading.value = true
   try {
-    if (selectedPeriod.value === 'year') {
+    if (selectedPeriod.value === 'year' && selectedYearMode.value === 'calendarYear') {
       const report = await createAnnualReadingReport(new Date().getFullYear(), { bookId: props.bookId })
       if (report.totalSeconds <= 0 && report.totalChars <= 0) {
         throw new Error(props.bookId ? '这本书今年还没有足够的阅读统计' : '今年还没有足够的阅读统计')
@@ -411,6 +451,8 @@ const openImageExportDialog = async () => {
       const report = await createReadingPeriodReport({
         period: selectedPeriodReportKey.value,
         weekMode: selectedWeekMode.value,
+        monthMode: selectedMonthMode.value,
+        yearMode: selectedYearMode.value,
         bookId: props.bookId,
       })
       if (report.totalSeconds <= 0 && report.totalChars <= 0) {
@@ -436,6 +478,8 @@ const exportReportImage = async () => {
       await exportReadingPeriodReportImage({
         period: periodReport.period,
         weekMode: periodReport.weekMode || selectedWeekMode.value,
+        monthMode: periodReport.monthMode || selectedMonthMode.value,
+        yearMode: periodReport.yearMode || selectedYearMode.value,
         template: selectedImageTemplate.value,
         theme: selectedImageTheme.value,
         bookId: props.bookId,
@@ -470,6 +514,16 @@ watch(selectedPeriod, () => {
 watch(selectedWeekMode, () => {
   if (selectedPeriod.value !== 'week') return
   loadData().catch((error) => console.error('Reload weekly reading stats failed:', error))
+})
+
+watch(selectedMonthMode, () => {
+  if (selectedPeriod.value !== 'month') return
+  loadData().catch((error) => console.error('Reload monthly reading stats failed:', error))
+})
+
+watch(selectedYearMode, () => {
+  if (selectedPeriod.value !== 'year') return
+  loadData().catch((error) => console.error('Reload yearly reading stats failed:', error))
 })
 
 onMounted(async () => {
@@ -681,6 +735,38 @@ watch(showImageExportDialog, (shown) => {
           class="week-mode-button"
           :class="{ 'is-active': selectedWeekMode === option.value }"
           @click="selectWeekMode(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+      <div
+        v-if="selectedPeriod === 'month'"
+        class="week-mode-toggle"
+        aria-label="月统计口径"
+      >
+        <button
+          v-for="option in monthModeOptions"
+          :key="option.value"
+          type="button"
+          class="week-mode-button"
+          :class="{ 'is-active': selectedMonthMode === option.value }"
+          @click="selectMonthMode(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+      <div
+        v-if="selectedPeriod === 'year'"
+        class="week-mode-toggle"
+        aria-label="年统计口径"
+      >
+        <button
+          v-for="option in yearModeOptions"
+          :key="option.value"
+          type="button"
+          class="week-mode-button"
+          :class="{ 'is-active': selectedYearMode === option.value }"
+          @click="selectYearMode(option.value)"
         >
           {{ option.label }}
         </button>

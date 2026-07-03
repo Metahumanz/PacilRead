@@ -69,12 +69,16 @@ export interface AnnualReadingReport {
   monthly: Array<{ month: string; totalSeconds: number; charCount: number }>
 }
 
-export type ReadingReportPeriod = 'day' | 'week' | 'year'
+export type ReadingReportPeriod = 'day' | 'week' | 'month' | 'year'
 export type WeeklyReportRangeMode = 'calendarWeek' | 'last7Days'
+export type MonthlyReportRangeMode = 'calendarMonth' | 'last30Days'
+export type YearlyReportRangeMode = 'calendarYear' | 'last365Days'
 
 export interface ReadingReportRange {
   period: ReadingReportPeriod
   weekMode: WeeklyReportRangeMode | null
+  monthMode: MonthlyReportRangeMode | null
+  yearMode: YearlyReportRangeMode | null
   startDate: string
   endDate: string
   title: string
@@ -86,6 +90,8 @@ export interface ReadingPeriodReport {
   scope: 'global' | 'book'
   period: ReadingReportPeriod
   weekMode: WeeklyReportRangeMode | null
+  monthMode: MonthlyReportRangeMode | null
+  yearMode: YearlyReportRangeMode | null
   title: string
   rangeTitle: string
   startDate: string
@@ -558,6 +564,10 @@ function endOfYear(year: number): string {
   return `${year}-12-31`
 }
 
+function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1)
+}
+
 function startOfCalendarWeek(date: Date): Date {
   const startDate = new Date(date)
   const day = startDate.getDay()
@@ -568,7 +578,12 @@ function startOfCalendarWeek(date: Date): Date {
 
 export function buildReadingReportRange(
   period: ReadingReportPeriod,
-  options: { weekMode?: WeeklyReportRangeMode; now?: Date } = {},
+  options: {
+    weekMode?: WeeklyReportRangeMode
+    monthMode?: MonthlyReportRangeMode
+    yearMode?: YearlyReportRangeMode
+    now?: Date
+  } = {},
 ): ReadingReportRange {
   const now = options.now ?? new Date()
   const endDate = toDateString(now)
@@ -577,6 +592,8 @@ export function buildReadingReportRange(
     return {
       period,
       weekMode: null,
+      monthMode: null,
+      yearMode: null,
       startDate: endDate,
       endDate,
       title: `${endDate} 阅读日报`,
@@ -595,6 +612,28 @@ export function buildReadingReportRange(
     return {
       period,
       weekMode,
+      monthMode: null,
+      yearMode: null,
+      startDate,
+      endDate,
+      title: modeTitle,
+      rangeTitle: `${startDate} 至 ${endDate}`,
+      fileLabel: `${startDate}_${endDate}-${modeLabel}`,
+    }
+  }
+
+  if (period === 'month') {
+    const monthMode = options.monthMode ?? 'calendarMonth'
+    const startDate = monthMode === 'last30Days'
+      ? toDateString(addDays(parseDate(endDate), -29))
+      : toDateString(startOfMonth(now))
+    const modeTitle = monthMode === 'last30Days' ? '过去30天阅读月报' : '自然月阅读月报'
+    const modeLabel = monthMode === 'last30Days' ? '过去30天月报' : '自然月月报'
+    return {
+      period,
+      weekMode: null,
+      monthMode,
+      yearMode: null,
       startDate,
       endDate,
       title: modeTitle,
@@ -604,9 +643,27 @@ export function buildReadingReportRange(
   }
 
   const year = now.getFullYear()
+  const yearMode = options.yearMode ?? 'calendarYear'
+  if (yearMode === 'last365Days') {
+    const startDate = toDateString(addDays(parseDate(endDate), -364))
+    return {
+      period,
+      weekMode: null,
+      monthMode: null,
+      yearMode,
+      startDate,
+      endDate,
+      title: '过去365天阅读年报',
+      rangeTitle: `${startDate} 至 ${endDate}`,
+      fileLabel: `${startDate}_${endDate}-过去365天年报`,
+    }
+  }
+
   return {
     period,
     weekMode: null,
+    monthMode: null,
+    yearMode,
     startDate: startOfYear(year),
     endDate,
     title: `${year} 阅读年报`,
@@ -658,6 +715,23 @@ function buildReadingCalendarRange(
     byDate.set(row.date, entry)
   }
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function buildMonthBuckets(startDate: string, endDate: string): Array<{ month: string; totalSeconds: number; charCount: number }> {
+  const start = parseDate(startDate)
+  const end = parseDate(endDate)
+  const cursor = new Date(start.getFullYear(), start.getMonth(), 1)
+  const endMonth = new Date(end.getFullYear(), end.getMonth(), 1)
+  const buckets: Array<{ month: string; totalSeconds: number; charCount: number }> = []
+  while (cursor <= endMonth) {
+    buckets.push({
+      month: `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`,
+      totalSeconds: 0,
+      charCount: 0,
+    })
+    cursor.setMonth(cursor.getMonth() + 1)
+  }
+  return buckets
 }
 
 function buildDailyBuckets(calendar: ReadingCalendarDay[], startDate: string, endDate: string): ReadingCalendarDay[] {
@@ -905,11 +979,14 @@ export function buildReadingPeriodReport(
     ? []
     : buildDailyBuckets(rhythmCalendar, rhythmStartDate, range.endDate)
   const year = Number(range.startDate.slice(0, 4))
-  const monthly = Array.from({ length: 12 }, (_, index) => ({
-    month: `${year}-${String(index + 1).padStart(2, '0')}`,
-    totalSeconds: 0,
-    charCount: 0,
-  }))
+  const monthly = range.period === 'year' && range.yearMode === 'calendarYear'
+    ? Array.from({ length: 12 }, (_, index) => ({
+      month: `${year}-${String(index + 1).padStart(2, '0')}`,
+      totalSeconds: 0,
+      charCount: 0,
+    }))
+    : buildMonthBuckets(range.startDate, range.endDate)
+  const monthIndexes = new Map(monthly.map((month, index) => [month.month, index]))
 
   for (const row of periodRows) {
     const book = scopedBook || booksByIdentity.get(row.bookIdentity)
@@ -928,8 +1005,8 @@ export function buildReadingPeriodReport(
     for (const tag of book?.tags || []) bumpMap(tagTotals, tag, Number(row.durationSeconds || 0))
     if (book?.series) bumpMap(seriesTotals, book.series, Number(row.durationSeconds || 0))
 
-    if (row.date.startsWith(`${year}-`)) {
-      const monthIndex = Math.max(0, Math.min(11, Number(row.date.slice(5, 7)) - 1))
+    const monthIndex = monthIndexes.get(row.date.slice(0, 7))
+    if (monthIndex !== undefined) {
       monthly[monthIndex].totalSeconds += Number(row.durationSeconds || 0)
       monthly[monthIndex].charCount += Number(row.charCount || 0)
     }
@@ -959,6 +1036,8 @@ export function buildReadingPeriodReport(
     scope: isBookScope ? 'book' : 'global',
     period: range.period,
     weekMode: range.weekMode,
+    monthMode: range.monthMode,
+    yearMode: range.yearMode,
     title: range.title,
     rangeTitle: isBookScope && bookTitle
       ? `${bookTitle} · ${range.rangeTitle}`
@@ -1034,6 +1113,13 @@ export function buildReadingPeriodReportInsight(report: ReadingPeriodReport): st
   if (report.period === 'week') {
     const weekText = report.weekMode === 'last7Days' ? '过去七天' : '这个自然周'
     return `${weekText}你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
+  }
+  if (report.period === 'month') {
+    const monthText = report.monthMode === 'last30Days' ? '过去30天' : '这个自然月'
+    return `${monthText}你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
+  }
+  if (report.period === 'year' && report.yearMode === 'last365Days') {
+    return `过去365天你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
   }
   return `这一年你读了 ${report.readingDays} 天，累计 ${durationText}、${charsText}；${topBookText}，${tasteText}。`
 }
