@@ -7,6 +7,17 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.1',
+    date: '2026-07-03',
+    changes: [
+      'Monthly Reports（月报）：统计页新增自然月与过去30天口径，月报支持 HTML、JSON、图片预览与 PNG 导出，并同步覆盖单书统计',
+      'Yearly Ranges（年度口径）：本年统计新增自然年与过去365天切换，排行、摘要、报告导出和图片报告都会跟随当前口径',
+      'Report Data（报告数据）：过去365天跨自然年时按实际月份生成趋势，避免跨年阅读记录漏入月度统计',
+      'Settings Overview（设置概览）：阅读统计概览新增自然月时长，并统一“自然月”命名减少口径歧义',
+      'Tests（测试）：补充自然月、过去30天和过去365天范围、明细长度、跨年月度趋势与报告文案覆盖',
+    ]
+  },
+  {
     version: '1.4.0',
     date: '2026-06-26',
     changes: [

@@ -42,7 +42,7 @@ defineProps<{
           <div>
             <div class="text-[13px] font-medium app-title">统计概览</div>
             <div class="text-[11px] app-muted mt-1">
-              {{ hidden ? '统计概览已隐藏，历史数据仍然保留。' : '展示今日、本周、本年的累计阅读时长。' }}
+              {{ hidden ? '统计概览已隐藏，历史数据仍然保留。' : '展示今日、本周、自然月、本年的累计阅读时长。' }}
             </div>
           </div>
           <button
@@ -59,7 +59,7 @@ defineProps<{
 
         <div
           v-else-if="!hidden"
-          class="grid grid-cols-1 md:grid-cols-3 gap-3"
+          class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3"
         >
           <div class="app-card app-card-strong p-4">
             <div class="text-[11px] app-muted uppercase tracking-wider">今日</div>
@@ -68,6 +68,10 @@ defineProps<{
           <div class="app-card app-card-strong p-4">
             <div class="text-[11px] app-muted uppercase tracking-wider">本周</div>
             <div class="text-[18px] font-semibold app-title mt-2">{{ formatDuration(overview.week) }}</div>
+          </div>
+          <div class="app-card app-card-strong p-4">
+            <div class="text-[11px] app-muted uppercase tracking-wider">自然月</div>
+            <div class="text-[18px] font-semibold app-title mt-2">{{ formatDuration(overview.month) }}</div>
           </div>
           <div class="app-card app-card-strong p-4">
             <div class="text-[11px] app-muted uppercase tracking-wider">本年</div>

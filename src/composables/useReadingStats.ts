@@ -30,7 +30,9 @@ import {
   type ReadingReportPeriod,
   type ReadingCalendarDay,
   type ReadingSpeedStats,
+  type MonthlyReportRangeMode,
   type WeeklyReportRangeMode,
+  type YearlyReportRangeMode,
 } from '../utils/readingInsights'
 
 export {
@@ -39,8 +41,10 @@ export {
   sanitizeWebdavDirectorySegment,
 } from '../utils/webdav'
 
-export type ReadingStatsPeriod = 'today' | 'week' | 'year'
+export type ReadingStatsPeriod = 'today' | 'week' | 'month' | 'year'
 export type ReadingStatsWeekMode = WeeklyReportRangeMode
+export type ReadingStatsMonthMode = MonthlyReportRangeMode
+export type ReadingStatsYearMode = YearlyReportRangeMode
 export type { ReadingPeriodReport, ReadingReportPeriod }
 export type AnnualReportImageTemplate = 'magazine' | 'wrapped'
 export type AnnualReportImageTheme = 'light' | 'dark'
@@ -52,7 +56,10 @@ export interface ReadingStatsOverview {
   today: number
   week: number
   last7Days: number
+  month: number
+  last30Days: number
   year: number
+  last365Days: number
 }
 
 export interface ReadingStatsBookRankItem {
@@ -250,11 +257,17 @@ function buildRemoteReadingStatsFileName(deviceId: string): string {
 
 function getPeriodRange(
   period: ReadingStatsPeriod,
-  options: { weekMode?: ReadingStatsWeekMode } = {},
+  options: {
+    weekMode?: ReadingStatsWeekMode
+    monthMode?: ReadingStatsMonthMode
+    yearMode?: ReadingStatsYearMode
+  } = {},
 ): { start: string; end: string } {
   const reportPeriod: ReadingReportPeriod = period === 'today' ? 'day' : period
   const range = buildReadingReportRange(reportPeriod, {
     weekMode: options.weekMode,
+    monthMode: options.monthMode,
+    yearMode: options.yearMode,
   })
   return { start: range.startDate, end: range.endDate }
 }
@@ -673,19 +686,29 @@ export async function fetchReadingStatsOverview(bookId?: number | null): Promise
   const todayRange = getPeriodRange('today')
   const weekRange = getPeriodRange('week')
   const last7DaysRange = getPeriodRange('week', { weekMode: 'last7Days' })
+  const monthRange = getPeriodRange('month')
+  const last30DaysRange = getPeriodRange('month', { monthMode: 'last30Days' })
   const yearRange = getPeriodRange('year')
+  const last365DaysRange = getPeriodRange('year', { yearMode: 'last365Days' })
 
   return {
     today: await queryReadingStatsTotal(todayRange.start, todayRange.end, bookIdentity),
     week: await queryReadingStatsTotal(weekRange.start, weekRange.end, bookIdentity),
     last7Days: await queryReadingStatsTotal(last7DaysRange.start, last7DaysRange.end, bookIdentity),
+    month: await queryReadingStatsTotal(monthRange.start, monthRange.end, bookIdentity),
+    last30Days: await queryReadingStatsTotal(last30DaysRange.start, last30DaysRange.end, bookIdentity),
     year: await queryReadingStatsTotal(yearRange.start, yearRange.end, bookIdentity),
+    last365Days: await queryReadingStatsTotal(last365DaysRange.start, last365DaysRange.end, bookIdentity),
   }
 }
 
 export async function fetchReadingStatsBookRank(
   period: ReadingStatsPeriod,
-  options: { weekMode?: ReadingStatsWeekMode } = {},
+  options: {
+    weekMode?: ReadingStatsWeekMode
+    monthMode?: ReadingStatsMonthMode
+    yearMode?: ReadingStatsYearMode
+  } = {},
 ): Promise<ReadingStatsBookRankItem[]> {
   const range = getPeriodRange(period, options)
   const store = useDataStore()
@@ -787,6 +810,8 @@ export async function createAnnualReadingReport(
 export async function createReadingPeriodReport(options: {
   period: ReadingReportPeriod
   weekMode?: ReadingStatsWeekMode
+  monthMode?: ReadingStatsMonthMode
+  yearMode?: ReadingStatsYearMode
   bookId?: number | null
 }): Promise<ReadingPeriodReport> {
   const store = useDataStore()
@@ -799,6 +824,8 @@ export async function createReadingPeriodReport(options: {
   }
   const range = buildReadingReportRange(options.period, {
     weekMode: options.weekMode,
+    monthMode: options.monthMode,
+    yearMode: options.yearMode,
   })
   return buildReadingPeriodReport(store.getReadingStatsRows() as any[], store.books.value as any[], range, {
     bookIdentity,
@@ -824,6 +851,8 @@ export async function exportReadingPeriodReport(
   options: {
     period: ReadingReportPeriod
     weekMode?: ReadingStatsWeekMode
+    monthMode?: ReadingStatsMonthMode
+    yearMode?: ReadingStatsYearMode
     bookId?: number | null
   },
 ): Promise<void> {
@@ -953,12 +982,15 @@ export async function exportAnnualReadingReportImage(options: {
 function getReadingPeriodReportKindLabel(period: ReadingReportPeriod): string {
   if (period === 'day') return '每日报告'
   if (period === 'week') return '周报'
+  if (period === 'month') return '月报'
   return '年度报告'
 }
 
 export async function renderReadingPeriodReportImageDataUrl(options: {
   period: ReadingReportPeriod
   weekMode?: ReadingStatsWeekMode
+  monthMode?: ReadingStatsMonthMode
+  yearMode?: ReadingStatsYearMode
   bookId?: number | null
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme
@@ -966,6 +998,8 @@ export async function renderReadingPeriodReportImageDataUrl(options: {
   const report = await createReadingPeriodReport({
     period: options.period,
     weekMode: options.weekMode,
+    monthMode: options.monthMode,
+    yearMode: options.yearMode,
     bookId: options.bookId,
   })
   if (report.totalSeconds <= 0 && report.totalChars <= 0) {
@@ -983,6 +1017,8 @@ export async function renderReadingPeriodReportImageDataUrl(options: {
 export async function exportReadingPeriodReportImage(options: {
   period: ReadingReportPeriod
   weekMode?: ReadingStatsWeekMode
+  monthMode?: ReadingStatsMonthMode
+  yearMode?: ReadingStatsYearMode
   bookId?: number | null
   template: AnnualReportImageTemplate
   theme: AnnualReportImageTheme

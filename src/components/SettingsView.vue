@@ -83,7 +83,15 @@ const syncDiffResolution = ref<SyncResolutionMap>({})
 const syncDiffLoading = ref(false)
 const syncDiffApplying = ref(false)
 const readingStatsHasHistory = ref(false)
-const readingStatsOverview = ref<ReadingStatsOverview>({ today: 0, week: 0, last7Days: 0, year: 0 })
+const readingStatsOverview = ref<ReadingStatsOverview>({
+  today: 0,
+  week: 0,
+  last7Days: 0,
+  month: 0,
+  last30Days: 0,
+  year: 0,
+  last365Days: 0,
+})
 const showReadingStatsDisableModal = ref(false)
 const readingStatsActionBusy = ref(false)
 const shortcutMessage = ref('')
@@ -471,7 +479,15 @@ const refreshReadingStatsSummary = async () => {
       const { fetchReadingStatsOverview } = await loadReadingStatsApi()
       readingStatsOverview.value = await fetchReadingStatsOverview()
     } else {
-      readingStatsOverview.value = { today: 0, week: 0, last7Days: 0, year: 0 }
+      readingStatsOverview.value = {
+        today: 0,
+        week: 0,
+        last7Days: 0,
+        month: 0,
+        last30Days: 0,
+        year: 0,
+        last365Days: 0,
+      }
     }
   } catch (error) {
     console.error('Refresh reading stats summary failed:', error)
