@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.3',
+    date: '2026-07-05',
+    changes: [
+      'Selection Defaults（默认选区）：右键正文时不再默认框选整段，英文优先选中当前词，中文按点击位置智能选取附近短文本',
+      'Selection Menu Placement（菜单避让）：右键动作菜单会避开选区高亮与起止拖拽柄，优先放在选区外侧，减少覆盖导致点不中的问题',
+      'Shortcut Guard（快捷键防穿透）：搜索、替换、复制、分享与选区动作菜单打开时，阅读器翻页快捷键不再穿透触发翻页',
+    ]
+  },
+  {
     version: '1.4.2',
     date: '2026-07-04',
     changes: [
