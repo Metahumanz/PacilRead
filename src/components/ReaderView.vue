@@ -66,6 +66,13 @@ interface ReaderSelectionHandleView {
   style: CSSProperties
 }
 
+interface ReaderSelectionBounds {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
 interface ReaderSelectionLineEntry {
   line: PageLine
   element: HTMLElement
@@ -152,21 +159,6 @@ const readerDialogTransformOrigin = computed(() => {
     : readerDialogOrigin.value.y > height * 0.65 ? 'bottom' : 'center'
   return `${horizontal} ${vertical}`
 })
-const selectionMenuPlacement = computed(() => selectionMenuPosition.value.y > viewportSize.value.height * 0.54 ? 'above' : 'below')
-const selectionMenuStyle = computed<CSSProperties>(() => {
-  const menuHalfWidth = 172
-  const x = Math.max(menuHalfWidth, Math.min(selectionMenuPosition.value.x, viewportSize.value.width - menuHalfWidth))
-  const y = Math.max(16, Math.min(selectionMenuPosition.value.y, viewportSize.value.height - 16))
-  return {
-    left: `${x}px`,
-    top: `${y}px`,
-    transform: selectionMenuPlacement.value === 'above'
-      ? 'translate(-50%, calc(-100% - 12px))'
-      : 'translate(-50%, 12px)',
-    transformOrigin: selectionMenuPlacement.value === 'above' ? 'center bottom' : 'center top',
-  }
-})
-
 let lastFirstReadableLoggedBookId = -1
 
 // DOM refs
@@ -1018,10 +1010,7 @@ const getTextNode = (element: HTMLElement) => (
   Array.from(element.childNodes).find(node => node.nodeType === Node.TEXT_NODE) as Text | undefined
 )
 
-const getSelectionLineEntries = (selection = customTextSelection.value): ReaderSelectionLineEntry[] => {
-  const slice = getSelectionSlice(selection)
-  const pageElement = findSelectionPageElement(selection)
-  if (!slice || !pageElement) return []
+const lineEntriesForPage = (pageElement: HTMLElement, slice: PageSlice): ReaderSelectionLineEntry[] => {
   const elements = lineElementsForPage(pageElement)
   return slice.lines
     .map((line, lineIndex) => {
@@ -1037,6 +1026,13 @@ const getSelectionLineEntries = (selection = customTextSelection.value): ReaderS
       }
     })
     .filter((entry): entry is ReaderSelectionLineEntry => !!entry)
+}
+
+const getSelectionLineEntries = (selection = customTextSelection.value): ReaderSelectionLineEntry[] => {
+  const slice = getSelectionSlice(selection)
+  const pageElement = findSelectionPageElement(selection)
+  if (!slice || !pageElement) return []
+  return lineEntriesForPage(pageElement, slice)
 }
 
 const clampCharIndex = (line: PageLine, offset: number) => {
@@ -1102,6 +1098,85 @@ const lineOffsetFromClientPoint = (entry: ReaderSelectionLineEntry, clientX: num
   return entry.textStart + index
 }
 
+const charIndexFromClientPoint = (entry: ReaderSelectionLineEntry, clientX: number) => {
+  const text = String(entry.line.text || '')
+  const node = getTextNode(entry.element)
+  const length = Math.min(text.length, node?.data.length ?? text.length)
+  if (!node || length <= 0) return 0
+  let nearestIndex = 0
+  let nearestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < length; index += 1) {
+    const range = document.createRange()
+    range.setStart(node, index)
+    range.setEnd(node, index + 1)
+    const rect = range.getBoundingClientRect()
+    range.detach()
+    if (rect.width <= 0.5) continue
+    if (clientX >= rect.left && clientX <= rect.right) return index
+    const distance = Math.min(Math.abs(clientX - rect.left), Math.abs(clientX - rect.right), Math.abs(clientX - (rect.left + rect.width / 2)))
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestIndex = index
+    }
+  }
+  return nearestIndex
+}
+
+const isLatinWordChar = (char: string) => /[A-Za-z0-9_]/.test(char)
+const isSelectionBoundaryChar = (char: string) => (
+  !char
+  || /\s/.test(char)
+  || /[，。！？；：、,.!?;:()[\]{}<>《》“”‘’"'`~…—–\-+=*/\\|@#$%^&]/.test(char)
+)
+
+const nearestSelectableIndex = (text: string, index: number) => {
+  if (!isSelectionBoundaryChar(text[index] || '')) return index
+  for (let distance = 1; distance <= 3; distance += 1) {
+    const right = index + distance
+    if (right < text.length && !isSelectionBoundaryChar(text[right])) return right
+    const left = index - distance
+    if (left >= 0 && !isSelectionBoundaryChar(text[left])) return left
+  }
+  return -1
+}
+
+const contiguousTextRun = (text: string, index: number) => {
+  let start = index
+  let end = index + 1
+  while (start > 0 && !isSelectionBoundaryChar(text[start - 1])) start -= 1
+  while (end < text.length && !isSelectionBoundaryChar(text[end])) end += 1
+  return { start, end }
+}
+
+const shortWindowAroundIndex = (runStart: number, runEnd: number, index: number, targetLength = 6) => {
+  const length = Math.min(targetLength, Math.max(1, runEnd - runStart))
+  const minStart = runStart
+  const maxStart = Math.max(runStart, runEnd - length)
+  const centered = index - Math.floor((length - 1) / 2)
+  const start = Math.max(minStart, Math.min(centered, maxStart))
+  return { start, end: start + length }
+}
+
+const smartInitialRangeForLine = (entry: ReaderSelectionLineEntry, clientX: number) => {
+  const text = String(entry.line.text || '')
+  if (!text) return null
+  const rawIndex = charIndexFromClientPoint(entry, clientX)
+  const index = nearestSelectableIndex(text, Math.max(0, Math.min(rawIndex, text.length - 1)))
+  if (index < 0) return null
+
+  if (isLatinWordChar(text[index])) {
+    let start = index
+    let end = index + 1
+    while (start > 0 && isLatinWordChar(text[start - 1])) start -= 1
+    while (end < text.length && isLatinWordChar(text[end])) end += 1
+    return { start: entry.textStart + start, end: entry.textStart + end }
+  }
+
+  const run = contiguousTextRun(text, index)
+  const window = shortWindowAroundIndex(run.start, run.end, index)
+  return { start: entry.textStart + window.start, end: entry.textStart + window.end }
+}
+
 const selectionLineFromPoint = (clientY: number) => {
   const entries = getSelectionLineEntries()
   if (entries.length === 0) return null
@@ -1147,41 +1222,23 @@ const applyCustomTextSelection = () => {
   return true
 }
 
-const initialCustomSelectionRange = (pageElement: HTMLElement, slice: PageSlice, clientY: number) => {
-  const elements = lineElementsForPage(pageElement)
-  const lineIndex = elements.findIndex((element) => {
-    const rect = element.getBoundingClientRect()
-    return clientY >= rect.top && clientY <= rect.bottom
-  })
-  const line = lineIndex >= 0 ? slice.lines[lineIndex] : null
-  if (!line || line.kind !== 'body' || line.bodyEnd <= line.bodyStart) return sliceBodyRange(slice)
-
-  let startIndex = lineIndex
-  let endIndex = lineIndex
-  while (startIndex > 0) {
-    const previous = slice.lines[startIndex - 1]
-    if (previous.kind !== 'body') break
-    startIndex -= 1
-    if (previous.isParagraphStart) break
-  }
-  while (endIndex < slice.lines.length - 1) {
-    const current = slice.lines[endIndex]
-    if (current.kind !== 'body' || current.isParagraphEnd) break
-    const next = slice.lines[endIndex + 1]
-    if (next.kind !== 'body') break
-    endIndex += 1
-  }
-  const first = slice.lines[startIndex]
-  const last = slice.lines[endIndex]
-  if (!first || !last || first.kind !== 'body' || last.kind !== 'body') return sliceBodyRange(slice)
-  return { start: renderedLineStart(first), end: last.bodyEnd }
+const initialCustomSelectionRange = (pageElement: HTMLElement, slice: PageSlice, clientX: number, clientY: number) => {
+  const entries = lineEntriesForPage(pageElement, slice)
+  if (entries.length === 0) return null
+  const entry = entries.find(item => clientY >= item.rect.top && clientY <= item.rect.bottom)
+    || entries.reduce((closest, item) => {
+      const distance = Math.abs(clientY - (item.rect.top + item.rect.height / 2))
+      const closestDistance = Math.abs(clientY - (closest.rect.top + closest.rect.height / 2))
+      return distance < closestDistance ? item : closest
+    }, entries[0])
+  return smartInitialRangeForLine(entry, clientX)
 }
 
 const startCustomTextSelection = (pageElement: HTMLElement, event: MouseEvent) => {
   const pageIndex = Number(pageElement.dataset.pageIndex || currentPage.value)
   const slice = currentPages.value[pageIndex]
   if (!slice) return false
-  const range = initialCustomSelectionRange(pageElement, slice, event.clientY)
+  const range = initialCustomSelectionRange(pageElement, slice, event.clientX, event.clientY)
   if (!range || range.end <= range.start) return false
   customSelectionPageElement.value = pageElement
   customTextSelection.value = { pageIndex, startOffset: range.start, endOffset: range.end }
@@ -1274,6 +1331,101 @@ const customSelectionHandles = computed<ReaderSelectionHandleView[]>(() => {
   if (start) handles.push({ key: 'start', style: { left: `${start.x}px`, top: `${start.y}px` } })
   if (end) handles.push({ key: 'end', style: { left: `${end.x}px`, top: `${end.y}px` } })
   return handles
+})
+
+const cssPx = (value: unknown) => Number.parseFloat(String(value ?? '0')) || 0
+const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+const customSelectionBounds = computed<ReaderSelectionBounds | null>(() => {
+  const rects = customSelectionRects.value
+  const handles = customSelectionHandles.value
+  if (rects.length === 0 && handles.length === 0) return null
+  const bounds: ReaderSelectionBounds = {
+    left: Number.POSITIVE_INFINITY,
+    top: Number.POSITIVE_INFINITY,
+    right: Number.NEGATIVE_INFINITY,
+    bottom: Number.NEGATIVE_INFINITY,
+  }
+  const include = (left: number, top: number, right: number, bottom: number) => {
+    bounds.left = Math.min(bounds.left, left)
+    bounds.top = Math.min(bounds.top, top)
+    bounds.right = Math.max(bounds.right, right)
+    bounds.bottom = Math.max(bounds.bottom, bottom)
+  }
+  rects.forEach((rect) => {
+    const left = cssPx(rect.style.left)
+    const top = cssPx(rect.style.top)
+    include(left, top, left + cssPx(rect.style.width), top + cssPx(rect.style.height))
+  })
+  handles.forEach((handle) => {
+    const x = cssPx(handle.style.left)
+    const y = cssPx(handle.style.top)
+    include(x - 24, y - 24, x + 24, y + 44)
+  })
+  if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)) return null
+  return bounds
+})
+
+const rectsOverlap = (a: ReaderSelectionBounds, b: ReaderSelectionBounds) => (
+  a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+)
+
+const inflateBounds = (bounds: ReaderSelectionBounds, amount: number): ReaderSelectionBounds => ({
+  left: bounds.left - amount,
+  top: bounds.top - amount,
+  right: bounds.right + amount,
+  bottom: bounds.bottom + amount,
+})
+
+const selectionMenuStyle = computed<CSSProperties>(() => {
+  const viewport = viewportSize.value
+  const margin = 14
+  const edge = 16
+  const menuWidth = Math.min(328, Math.max(240, viewport.width - edge * 2))
+  const menuHeight = 112
+  const safeMaxLeft = Math.max(edge, viewport.width - menuWidth - edge)
+  const safeMaxTop = Math.max(edge, viewport.height - menuHeight - edge)
+  const anchor = selectionMenuPosition.value
+  const fallbackTop = anchor.y > viewport.height * 0.54 ? anchor.y - menuHeight - margin : anchor.y + margin
+
+  const toStyle = (left: number, top: number, origin: string): CSSProperties => ({
+    left: `${clampNumber(left, edge, safeMaxLeft)}px`,
+    top: `${clampNumber(top, edge, safeMaxTop)}px`,
+    width: `${menuWidth}px`,
+    transform: 'none',
+    transformOrigin: origin,
+  })
+
+  const bounds = customSelectionBounds.value
+  if (!bounds) {
+    return toStyle(anchor.x - menuWidth / 2, fallbackTop, anchor.y > viewport.height * 0.54 ? 'center bottom' : 'center top')
+  }
+
+  const avoid = inflateBounds(bounds, 10)
+  const centerX = (bounds.left + bounds.right) / 2
+  const centerY = (bounds.top + bounds.bottom) / 2
+  const candidates = [
+    { left: centerX - menuWidth / 2, top: bounds.top - menuHeight - margin, origin: 'center bottom' },
+    { left: centerX - menuWidth / 2, top: bounds.bottom + margin, origin: 'center top' },
+    { left: bounds.right + margin, top: centerY - menuHeight / 2, origin: 'left center' },
+    { left: bounds.left - menuWidth - margin, top: centerY - menuHeight / 2, origin: 'right center' },
+  ]
+
+  for (const candidate of candidates) {
+    const left = clampNumber(candidate.left, edge, safeMaxLeft)
+    const top = clampNumber(candidate.top, edge, safeMaxTop)
+    const rect = { left, top, right: left + menuWidth, bottom: top + menuHeight }
+    if (!rectsOverlap(rect, avoid)) return toStyle(left, top, candidate.origin)
+  }
+
+  const spaces = [
+    { value: bounds.top - edge, left: centerX - menuWidth / 2, top: edge, origin: 'center bottom' },
+    { value: viewport.height - bounds.bottom - edge, left: centerX - menuWidth / 2, top: viewport.height - menuHeight - edge, origin: 'center top' },
+    { value: viewport.width - bounds.right - edge, left: bounds.right + margin, top: centerY - menuHeight / 2, origin: 'left center' },
+    { value: bounds.left - edge, left: bounds.left - menuWidth - margin, top: centerY - menuHeight / 2, origin: 'right center' },
+  ].sort((a, b) => b.value - a.value)
+  const best = spaces[0]
+  return toStyle(best.left, best.top, best.origin)
 })
 
 const handleClick = (e: MouseEvent) => {
@@ -1442,6 +1594,22 @@ const handleWheel = (e: WheelEvent) => {
   if (e.deltaY > 0) trackedNextPage()
   else trackedPrevPage()
 }
+
+const isEditableKeyTarget = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null
+  return !!element?.closest('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]')
+}
+
+const shouldBlockReaderShortcuts = (target: EventTarget | null) => (
+  showMenu.value
+  || showSelectionMenu.value
+  || showSharePreview.value
+  || showCopyModal.value
+  || !!activeReaderPanel.value
+  || customSelectionDragging.value !== null
+  || isEditableKeyTarget(target)
+)
+
 const handleKeydown = (e: KeyboardEvent) => {
   const k = e.key
   if (k === 'Escape') {
@@ -1456,7 +1624,7 @@ const handleKeydown = (e: KeyboardEvent) => {
     if (autoPageActive.value) { stopAutoPage(); return }
     handleGoBack(); return
   }
-  if (showMenu.value) return
+  if (e.defaultPrevented || shouldBlockReaderShortcuts(e.target)) return
   const eventKeys = shortcutEventKeys(e)
   if (eventKeys.some(key => nextKeys.value.includes(key))) { e.preventDefault(); trackedNextPage() }
   else if (eventKeys.some(key => prevKeys.value.includes(key))) { e.preventDefault(); trackedPrevPage() }
