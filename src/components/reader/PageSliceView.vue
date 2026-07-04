@@ -23,6 +23,10 @@ const lineStyle = (line: PageLine, index: number): CSSProperties => ({
       v-for="(line, index) in slice.lines"
       :key="line.key"
       class="page-line"
+      :data-line-index="index"
+      :data-line-kind="line.kind"
+      :data-body-start="line.bodyStart"
+      :data-body-end="line.bodyEnd"
       :class="[
         line.kind === 'title' ? 'page-line-title' : 'page-line-body',
         props.justify && line.kind === 'body' && !line.isParagraphEnd ? 'page-line-justify' : '',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { perfLog, perfNow } from '../../../utils/perf'
 import type { BookSearchResult, ReaderChapter } from '../../../types/entities'
 import { notifyError } from '../../../composables/useNotifications'
@@ -9,6 +9,8 @@ interface SearchResult extends BookSearchResult { matchIndex: number }
 const props = defineProps<{
   bookId: number
   chapters: ReaderChapter[]
+  initialQuery?: string
+  autoRunKey?: number
 }>()
 
 const emit = defineEmits<{
@@ -55,6 +57,23 @@ const doSearch = async () => {
 const handleJump = (result: SearchResult) => {
   emit('jump', result)
 }
+
+const applyInitialQuery = async (autoRun: boolean) => {
+  const query = props.initialQuery?.trim() || ''
+  if (!query) return
+  searchQuery.value = query
+  await nextTick()
+  if (autoRun) await doSearch()
+}
+
+onMounted(() => {
+  if ((props.autoRunKey || 0) > 0) void applyInitialQuery(true)
+})
+
+watch(() => props.autoRunKey, (value, oldValue) => {
+  if (!value || value === oldValue) return
+  void applyInitialQuery(true)
+})
 </script>
 
 <template>

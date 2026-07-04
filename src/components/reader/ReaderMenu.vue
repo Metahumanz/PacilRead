@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import type { ReaderBook, ReaderChapter } from '../../types/entities'
 
+interface ReaderPanelLaunchOrigin {
+  x: number
+  y: number
+}
+
 defineProps<{
   book: Pick<ReaderBook, 'id' | 'title' | 'author'> | null
   canOpenStats: boolean
@@ -25,16 +30,23 @@ defineProps<{
   currentChapterTitle: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'back'): void
   (e: 'open-book-stats'): void
   (e: 'create-bookmark'): void
   (e: 'toggle-always-on-top'): void
   (e: 'toggle-immersive'): void
-  (e: 'open-panel', panel: string): void
+  (e: 'open-panel', panel: string, origin?: ReaderPanelLaunchOrigin): void
   (e: 'go-to-chapter', index: number): void
   (e: 'slider-input', val: number): void
 }>()
+
+const openPanel = (panel: string, event: MouseEvent) => {
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  emit('open-panel', panel, rect
+    ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    : undefined)
+}
 </script>
 
 <template>
@@ -56,20 +68,20 @@ defineEmits<{
           <span>置顶</span>
         </button>
         <button @click="$emit('toggle-immersive')" class="m-btn">{{ isImmersive ? '⊡ 退出全屏' : '⛶ 全屏' }}</button>
-        <button @click="$emit('open-panel', 'search')" class="m-btn" :class="{ active: showSearch }">🔍 搜索</button>
-        <button @click="$emit('open-panel', 'rules')" class="m-btn" :class="{ active: showRules }">📝 替换</button>
-        <button @click="$emit('open-panel', 'styling')" class="m-btn" :class="{ active: showStyling }">Aa 排版</button>
+        <button @click="openPanel('search', $event)" class="m-btn" :class="{ active: showSearch }">🔍 搜索</button>
+        <button @click="openPanel('rules', $event)" class="m-btn" :class="{ active: showRules }">📝 替换</button>
+        <button @click="openPanel('styling', $event)" class="m-btn" :class="{ active: showStyling }">Aa 排版</button>
         <button @click="$emit('create-bookmark')" class="m-btn">🔖 标记</button>
-        <button @click="$emit('open-panel', 'bookmarks')" class="m-btn" :class="{ active: showBookmarks }">书签</button>
-        <button @click="$emit('open-panel', 'autopage')" class="m-btn shadow-sm" :class="showAutoPage || autoPageActive ? 'bg-indigo-600/80 border-indigo-500 text-white' : ''">⏱ 翻页</button>
-        <button @click="$emit('open-panel', 'tts')" class="m-btn shadow-sm" :class="showTts || ttsActive ? 'bg-violet-600/80 border-violet-500 text-white' : ''">🎧 听书</button>
+        <button @click="openPanel('bookmarks', $event)" class="m-btn" :class="{ active: showBookmarks }">书签</button>
+        <button @click="openPanel('autopage', $event)" class="m-btn shadow-sm" :class="showAutoPage || autoPageActive ? 'bg-indigo-600/80 border-indigo-500 text-white' : ''">⏱ 翻页</button>
+        <button @click="openPanel('tts', $event)" class="m-btn shadow-sm" :class="showTts || ttsActive ? 'bg-violet-600/80 border-violet-500 text-white' : ''">🎧 听书</button>
       </div>
     </div>
 
     <div class="m-bottom-stack" @click.stop>
       <div class="m-info">
         <div class="flex items-center justify-start">
-          <button @click="$emit('open-panel', 'toc')" class="m-btn" :class="{ active: showToc }">☰ 目录</button>
+          <button @click="openPanel('toc', $event)" class="m-btn" :class="{ active: showToc }">☰ 目录</button>
         </div>
 
         <div class="flex flex-1 items-center justify-around text-center">
@@ -79,7 +91,7 @@ defineEmits<{
         </div>
 
         <div class="flex items-center justify-end">
-          <button @click="$emit('open-panel', 'readerOptions')" class="m-btn" :class="{ active: showReaderOptions }">⚙️ 设置</button>
+          <button @click="openPanel('readerOptions', $event)" class="m-btn" :class="{ active: showReaderOptions }">⚙️ 设置</button>
         </div>
       </div>
 
