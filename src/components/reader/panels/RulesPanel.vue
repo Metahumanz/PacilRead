@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useDataStore } from '../../../composables/useDataStore'
 import type { ReplacementRuleView } from '../../../types/entities'
 import { notifyError } from '../../../composables/useNotifications'
@@ -8,6 +8,8 @@ import { getErrorMessage } from '../../../utils/errorMessage'
 const props = defineProps<{
   rules: ReplacementRuleView[]
   bookId: number
+  initialPattern?: string
+  initialPatternKey?: number
 }>()
 
 const emit = defineEmits<{
@@ -73,6 +75,12 @@ const toggleRuleActive = async (rule: ReplacementRuleView) => {
     notifyError(operationError.value)
   } finally { busyRuleIds.value = busyRuleIds.value.filter(ruleId => ruleId !== rule.id) }
 }
+
+watch(() => props.initialPatternKey, (value, oldValue) => {
+  if (!value || value === oldValue) return
+  const pattern = props.initialPattern?.trim() || ''
+  if (pattern) newPattern.value = pattern
+}, { immediate: true })
 </script>
 
 <template>

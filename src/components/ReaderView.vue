@@ -19,7 +19,7 @@ import { createBookmark, type BookmarkTarget } from '../composables/useBookmarks
 import { computeReaderPageMetrics } from '../utils/readerLayout'
 import { perfLog, perfNow } from '../utils/perf'
 import { isSimilarRemoteProgress } from '../utils/remoteProgress'
-import { quoteContextExcerpt, quoteTextFromPageLines } from '../utils/quoteShare'
+import { quoteContextExcerpt } from '../utils/quoteShare'
 import { formatShortcutKey, shortcutEventKeys } from '../utils/keyboardShortcuts'
 import { createThrottledTask } from '../utils/taskScheduler'
 import { isDoublePageAvailable, resolveReaderPageMode } from '../utils/readerPageMode'
@@ -27,6 +27,7 @@ import { isDoublePageAvailable, resolveReaderPageMode } from '../utils/readerPag
 // Sub-components
 import ReaderHUD from './reader/ReaderHUD.vue'
 import ReaderMenu from './reader/ReaderMenu.vue'
+import ReaderOverlayDialog from './reader/ReaderOverlayDialog.vue'
 import StylePanel from './reader/panels/StylePanel.vue'
 import TOCPanel from './reader/panels/TOCPanel.vue'
 import SearchPanel from './reader/panels/SearchPanel.vue'
@@ -37,8 +38,42 @@ import OptionsPanel from './reader/panels/OptionsPanel.vue'
 import BookmarksPanel from './reader/panels/BookmarksPanel.vue'
 import PageSliceView from './reader/PageSliceView.vue'
 import PageFlipOuterBook from './reader/PageFlipOuterBook.vue'
-import type { PageSlice, PagingTarget } from '../types/pagination'
+import type { PageLine, PageSlice, PagingTarget } from '../types/pagination'
 import type { BookSearchResult, ReaderBook, ReaderChapter } from '../types/entities'
+
+type ReaderPanelKey = 'toc' | 'search' | 'bookmarks' | 'rules' | 'styling' | 'autopage' | 'tts' | 'readerOptions'
+
+interface ReaderPanelLaunchOrigin {
+  x: number
+  y: number
+}
+
+type TextSelectionHandle = 'start' | 'end'
+
+interface ReaderCustomTextSelection {
+  pageIndex: number
+  startOffset: number
+  endOffset: number
+}
+
+interface ReaderSelectionRect {
+  key: string
+  style: CSSProperties
+}
+
+interface ReaderSelectionHandleView {
+  key: TextSelectionHandle
+  style: CSSProperties
+}
+
+interface ReaderSelectionLineEntry {
+  line: PageLine
+  element: HTMLElement
+  lineIndex: number
+  textStart: number
+  textEnd: number
+  rect: DOMRect
+}
 
 const props = defineProps<{ bookId: number, isImmersive: boolean, initialBookmark?: BookmarkTarget | null }>()
 const emit = defineEmits<{
@@ -70,8 +105,16 @@ const shareCardRef = ref<HTMLElement | null>(null)
 const shareCardDataUrl = ref('')
 const shareCardGenerating = ref(false)
 const showSharePreview = ref(false)
+const showSelectionMenu = ref(false)
+const selectionMenuPosition = ref<ReaderPanelLaunchOrigin>({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+const selectionSearchQuery = ref('')
+const selectionSearchRunKey = ref(0)
+const selectionRulePattern = ref('')
+const selectionRuleRunKey = ref(0)
+const readerDialogOrigin = ref<ReaderPanelLaunchOrigin>({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
 const bookmarkPanelVersion = ref(0)
 const bookmarkStatus = ref('')
+let bookmarkStatusTimer: number | null = null
 interface RemoteProgressSuggestion {
   chapterIndex: number
   chapterTitle: string
@@ -83,6 +126,46 @@ const remoteProgressSuggestion = ref<RemoteProgressSuggestion | null>(null)
 const remoteProgressChecking = ref(false)
 let readerDisposed = false
 const viewportSize = ref({ width: window.innerWidth, height: window.innerHeight })
+const smallReaderPanels = new Set<ReaderPanelKey>(['autopage', 'tts'])
+const activeReaderPanel = computed<ReaderPanelKey | null>(() => {
+  if (showToc.value) return 'toc'
+  if (showSearch.value) return 'search'
+  if (showBookmarks.value) return 'bookmarks'
+  if (showRules.value) return 'rules'
+  if (showStyling.value) return 'styling'
+  if (showAutoPage.value) return 'autopage'
+  if (showTts.value) return 'tts'
+  if (showReaderOptions.value) return 'readerOptions'
+  return null
+})
+const readerDialogKind = computed<'small' | 'large'>(() => {
+  const panel = activeReaderPanel.value
+  return panel && smallReaderPanels.has(panel) ? 'small' : 'large'
+})
+const readerDialogTransformOrigin = computed(() => {
+  const { width, height } = viewportSize.value
+  const horizontal = readerDialogOrigin.value.x < width * 0.35
+    ? 'left'
+    : readerDialogOrigin.value.x > width * 0.65 ? 'right' : 'center'
+  const vertical = readerDialogOrigin.value.y < height * 0.35
+    ? 'top'
+    : readerDialogOrigin.value.y > height * 0.65 ? 'bottom' : 'center'
+  return `${horizontal} ${vertical}`
+})
+const selectionMenuPlacement = computed(() => selectionMenuPosition.value.y > viewportSize.value.height * 0.54 ? 'above' : 'below')
+const selectionMenuStyle = computed<CSSProperties>(() => {
+  const menuHalfWidth = 172
+  const x = Math.max(menuHalfWidth, Math.min(selectionMenuPosition.value.x, viewportSize.value.width - menuHalfWidth))
+  const y = Math.max(16, Math.min(selectionMenuPosition.value.y, viewportSize.value.height - 16))
+  return {
+    left: `${x}px`,
+    top: `${y}px`,
+    transform: selectionMenuPlacement.value === 'above'
+      ? 'translate(-50%, calc(-100% - 12px))'
+      : 'translate(-50%, 12px)',
+    transformOrigin: selectionMenuPlacement.value === 'above' ? 'center bottom' : 'center top',
+  }
+})
 
 let lastFirstReadableLoggedBookId = -1
 
@@ -768,18 +851,20 @@ const tts = useTTS({
 const {
   ttsActive, ttsPaused, sleepRemainingMs, edgeVoices, systemVoices,
   stopTts, pauseTts, resumeTts, setSleepTimer,
-  handleTtsClick, loadVoices, injectHighlightStyles,
+  handleTtsClick, loadVoices, injectHighlightStyles, speakText,
 } = tts
+
+const handleMissingMimoKey = () => {
+  if (confirm('尚未配置小米 MiMo API Key，是否立即前往设置？')) {
+    showMenu.value = true
+    openPanel('tts')
+    window.open('https://platform.xiaomimimo.com/#/console/api-keys', '_blank')
+  }
+}
 
 const startTts = () => {
   const res = tts.startTts(ttsSleepDurationMs.value)
-  if (res === 'MIMO_KEY_MISSING') {
-    if (confirm('尚未配置小米 MiMo API Key，是否立即前往设置？')) {
-      showMenu.value = true
-      openPanel('tts')
-      window.open('https://platform.xiaomimimo.com/#/console/api-keys', '_blank')
-    }
-  }
+  if (res === 'MIMO_KEY_MISSING') handleMissingMimoKey()
 }
 
 // ---- Auto Page ----
@@ -871,6 +956,13 @@ const closeAll = () => {
   showMenu.value = false; showStyling.value = false; showToc.value = false;
   showSearch.value = false; showRules.value = false; showAutoPage.value = false;
   showTts.value = false; showReaderOptions.value = false; showBookmarks.value = false;
+  showSelectionMenu.value = false
+  clearCustomTextSelection()
+}
+const closeActiveReaderPanel = () => {
+  showStyling.value = false; showToc.value = false; showSearch.value = false;
+  showRules.value = false; showAutoPage.value = false; showTts.value = false;
+  showReaderOptions.value = false; showBookmarks.value = false;
 }
 const closeKeyHints = () => { showKeyHints.value = false }
 const disableKeyHints = async () => {
@@ -880,11 +972,317 @@ const disableKeyHints = async () => {
 
 const isReaderChromeTarget = (target: EventTarget | null) => {
   const t = target as HTMLElement | null
-  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p, .key-hints-overlay, .remote-progress-banner')
+  return !!t?.closest('.m-top, .m-bot, .m-info, .sty-p, .toc-p, .search-p, .rules-p, .copy-modal, .reader-options-p, .bookmark-p, .reader-overlay, .selection-menu-layer, .reader-text-selection-layer, .key-hints-overlay, .remote-progress-banner')
 }
+
+const isReaderTextTarget = (target: EventTarget | null) => {
+  const t = target as HTMLElement | null
+  return !!t?.closest('.page-line-body, .page-line-title, .page-line')
+}
+
+const customTextSelection = ref<ReaderCustomTextSelection | null>(null)
+const customSelectionPageElement = ref<HTMLElement | null>(null)
+const customSelectionDragging = ref<TextSelectionHandle | null>(null)
+const selectionLayoutVersion = ref(0)
+
+const refreshCustomSelectionLayout = () => { selectionLayoutVersion.value += 1 }
+
+const renderedLineStart = (line: PageLine) => Math.max(line.bodyStart, line.bodyEnd - String(line.text || '').length)
+
+const sliceBodyRange = (slice: PageSlice | null | undefined) => {
+  const bodyLines = (slice?.lines || []).filter(line => line.kind === 'body' && line.bodyEnd > line.bodyStart && line.text)
+  if (bodyLines.length === 0) return null
+  return {
+    start: renderedLineStart(bodyLines[0]),
+    end: bodyLines[bodyLines.length - 1].bodyEnd,
+  }
+}
+
+const getSelectionSlice = (selection = customTextSelection.value) => {
+  if (!selection) return null
+  return currentPages.value[selection.pageIndex] || null
+}
+
+const findSelectionPageElement = (selection = customTextSelection.value) => {
+  if (!selection) return null
+  const current = customSelectionPageElement.value
+  if (current?.isConnected && Number(current.dataset.pageIndex) === selection.pageIndex) return current
+  return document.querySelector(`.page-slice[data-page-index="${selection.pageIndex}"]`) as HTMLElement | null
+}
+
+const lineElementsForPage = (pageElement: HTMLElement) => (
+  Array.from(pageElement.querySelectorAll<HTMLElement>('.page-line'))
+)
+
+const getTextNode = (element: HTMLElement) => (
+  Array.from(element.childNodes).find(node => node.nodeType === Node.TEXT_NODE) as Text | undefined
+)
+
+const getSelectionLineEntries = (selection = customTextSelection.value): ReaderSelectionLineEntry[] => {
+  const slice = getSelectionSlice(selection)
+  const pageElement = findSelectionPageElement(selection)
+  if (!slice || !pageElement) return []
+  const elements = lineElementsForPage(pageElement)
+  return slice.lines
+    .map((line, lineIndex) => {
+      const element = elements[lineIndex]
+      if (!element || line.kind !== 'body' || line.bodyEnd <= line.bodyStart || !line.text) return null
+      return {
+        line,
+        element,
+        lineIndex,
+        textStart: renderedLineStart(line),
+        textEnd: line.bodyEnd,
+        rect: element.getBoundingClientRect(),
+      }
+    })
+    .filter((entry): entry is ReaderSelectionLineEntry => !!entry)
+}
+
+const clampCharIndex = (line: PageLine, offset: number) => {
+  const text = String(line.text || '')
+  return Math.max(0, Math.min(text.length, offset - renderedLineStart(line)))
+}
+
+const rectForLineRange = (entry: ReaderSelectionLineEntry, fromOffset: number, toOffset: number) => {
+  const text = String(entry.line.text || '')
+  const node = getTextNode(entry.element)
+  if (!node || !text) return []
+  const nodeLength = node.data.length
+  const from = Math.min(clampCharIndex(entry.line, fromOffset), nodeLength)
+  const to = Math.min(clampCharIndex(entry.line, toOffset), nodeLength)
+  if (to <= from) return []
+  const range = document.createRange()
+  range.setStart(node, from)
+  range.setEnd(node, to)
+  const rects = Array.from(range.getClientRects())
+  range.detach()
+  return rects.filter(rect => rect.width > 0.5 && rect.height > 0.5)
+}
+
+const caretPointForLineChar = (entry: ReaderSelectionLineEntry, charIndex: number) => {
+  const text = String(entry.line.text || '')
+  const node = getTextNode(entry.element)
+  const lineRect = entry.rect
+  const nodeLength = node?.data.length ?? text.length
+  const index = Math.max(0, Math.min(text.length, nodeLength, charIndex))
+  if (!node || !text) return { x: lineRect.left, y: lineRect.bottom }
+
+  const range = document.createRange()
+  let x = lineRect.left
+  if (index <= 0) {
+    range.setStart(node, 0)
+    range.setEnd(node, Math.min(1, nodeLength))
+    const rect = range.getBoundingClientRect()
+    x = rect.width > 0 ? rect.left : lineRect.left
+  } else {
+    range.setStart(node, index - 1)
+    range.setEnd(node, index)
+    const rect = range.getBoundingClientRect()
+    x = rect.width > 0 ? rect.right : lineRect.right
+  }
+  range.detach()
+  return { x, y: lineRect.bottom }
+}
+
+const lineOffsetFromClientPoint = (entry: ReaderSelectionLineEntry, clientX: number) => {
+  const text = String(entry.line.text || '')
+  if (!text) return entry.textStart
+  let low = 0
+  let high = text.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    const point = caretPointForLineChar(entry, mid + 1)
+    if (point.x < clientX) low = mid + 1
+    else high = mid
+  }
+  const before = caretPointForLineChar(entry, low)
+  const after = caretPointForLineChar(entry, Math.min(text.length, low + 1))
+  const index = Math.abs(clientX - before.x) <= Math.abs(clientX - after.x) ? low : Math.min(text.length, low + 1)
+  return entry.textStart + index
+}
+
+const selectionLineFromPoint = (clientY: number) => {
+  const entries = getSelectionLineEntries()
+  if (entries.length === 0) return null
+  return entries.find(entry => clientY >= entry.rect.top && clientY <= entry.rect.bottom)
+    || entries.reduce((closest, entry) => {
+      const currentDistance = Math.abs(clientY - (entry.rect.top + entry.rect.height / 2))
+      const closestDistance = Math.abs(clientY - (closest.rect.top + closest.rect.height / 2))
+      return currentDistance < closestDistance ? entry : closest
+    }, entries[0])
+}
+
+const selectedTextFromSliceRange = (slice: PageSlice, startOffset: number, endOffset: number) => (
+  slice.lines
+    .filter(line => line.kind === 'body' && line.bodyEnd > line.bodyStart && line.text)
+    .map((line) => {
+      const textStart = renderedLineStart(line)
+      const textEnd = line.bodyEnd
+      const from = Math.max(startOffset, textStart)
+      const to = Math.min(endOffset, textEnd)
+      if (to <= from) return ''
+      return String(line.text || '').slice(from - textStart, to - textStart)
+    })
+    .join('')
+    .trim()
+)
+
+const applyCustomTextSelection = () => {
+  const selection = customTextSelection.value
+  const slice = getSelectionSlice(selection)
+  if (!selection || !slice) return false
+  const range = sliceBodyRange(slice)
+  if (!range) return false
+  selection.startOffset = Math.max(range.start, Math.min(selection.startOffset, range.end - 1))
+  selection.endOffset = Math.max(selection.startOffset + 1, Math.min(selection.endOffset, range.end))
+  const text = selectedTextFromSliceRange(slice, selection.startOffset, selection.endOffset)
+  if (!text) return false
+  const chapterText = applyReplacements(currentChapterData.value?.body_text || '')
+  const excerpt = quoteContextExcerpt(chapterText, selection.startOffset, selection.endOffset)
+  selectedText.value = text
+  selectedContextBefore.value = excerpt.before
+  selectedContextAfter.value = excerpt.after
+  refreshCustomSelectionLayout()
+  return true
+}
+
+const initialCustomSelectionRange = (pageElement: HTMLElement, slice: PageSlice, clientY: number) => {
+  const elements = lineElementsForPage(pageElement)
+  const lineIndex = elements.findIndex((element) => {
+    const rect = element.getBoundingClientRect()
+    return clientY >= rect.top && clientY <= rect.bottom
+  })
+  const line = lineIndex >= 0 ? slice.lines[lineIndex] : null
+  if (!line || line.kind !== 'body' || line.bodyEnd <= line.bodyStart) return sliceBodyRange(slice)
+
+  let startIndex = lineIndex
+  let endIndex = lineIndex
+  while (startIndex > 0) {
+    const previous = slice.lines[startIndex - 1]
+    if (previous.kind !== 'body') break
+    startIndex -= 1
+    if (previous.isParagraphStart) break
+  }
+  while (endIndex < slice.lines.length - 1) {
+    const current = slice.lines[endIndex]
+    if (current.kind !== 'body' || current.isParagraphEnd) break
+    const next = slice.lines[endIndex + 1]
+    if (next.kind !== 'body') break
+    endIndex += 1
+  }
+  const first = slice.lines[startIndex]
+  const last = slice.lines[endIndex]
+  if (!first || !last || first.kind !== 'body' || last.kind !== 'body') return sliceBodyRange(slice)
+  return { start: renderedLineStart(first), end: last.bodyEnd }
+}
+
+const startCustomTextSelection = (pageElement: HTMLElement, event: MouseEvent) => {
+  const pageIndex = Number(pageElement.dataset.pageIndex || currentPage.value)
+  const slice = currentPages.value[pageIndex]
+  if (!slice) return false
+  const range = initialCustomSelectionRange(pageElement, slice, event.clientY)
+  if (!range || range.end <= range.start) return false
+  customSelectionPageElement.value = pageElement
+  customTextSelection.value = { pageIndex, startOffset: range.start, endOffset: range.end }
+  const applied = applyCustomTextSelection()
+  void nextTick(() => refreshCustomSelectionLayout())
+  return applied
+}
+
+const updateCustomSelectionFromPoint = (handle: TextSelectionHandle, clientX: number, clientY: number) => {
+  const selection = customTextSelection.value
+  const slice = getSelectionSlice(selection)
+  if (!selection || !slice) return
+  const range = sliceBodyRange(slice)
+  const entry = selectionLineFromPoint(clientY)
+  if (!range || !entry) return
+  const offset = Math.max(range.start, Math.min(lineOffsetFromClientPoint(entry, clientX), range.end))
+  if (handle === 'start') selection.startOffset = Math.min(offset, selection.endOffset - 1)
+  else selection.endOffset = Math.max(offset, selection.startOffset + 1)
+  applyCustomTextSelection()
+}
+
+const beginCustomSelectionHandleDrag = (handle: TextSelectionHandle, event: PointerEvent) => {
+  customSelectionDragging.value = handle
+  try {
+    ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+  } catch (_) {}
+  updateCustomSelectionFromPoint(handle, event.clientX, event.clientY)
+}
+
+const dragCustomSelectionHandle = (event: PointerEvent) => {
+  const handle = customSelectionDragging.value
+  if (!handle) return
+  updateCustomSelectionFromPoint(handle, event.clientX, event.clientY)
+}
+
+const endCustomSelectionHandleDrag = (event: PointerEvent) => {
+  try {
+    ;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId)
+  } catch (_) {}
+  customSelectionDragging.value = null
+}
+
+const clearCustomTextSelection = () => {
+  customTextSelection.value = null
+  customSelectionPageElement.value = null
+  customSelectionDragging.value = null
+}
+
+const customSelectionRects = computed<ReaderSelectionRect[]>(() => {
+  selectionLayoutVersion.value
+  const selection = customTextSelection.value
+  if (!selection) return []
+  const entries = getSelectionLineEntries(selection)
+  const rects: ReaderSelectionRect[] = []
+  entries.forEach((entry) => {
+    const from = Math.max(selection.startOffset, entry.textStart)
+    const to = Math.min(selection.endOffset, entry.textEnd)
+    rectForLineRange(entry, from, to).forEach((rect, rectIndex) => {
+      rects.push({
+        key: `${entry.line.key}-${rectIndex}`,
+        style: {
+          left: `${rect.left}px`,
+          top: `${entry.rect.top}px`,
+          width: `${rect.width}px`,
+          height: `${entry.rect.height}px`,
+        },
+      })
+    })
+  })
+  return rects
+})
+
+const customSelectionHandles = computed<ReaderSelectionHandleView[]>(() => {
+  selectionLayoutVersion.value
+  const selection = customTextSelection.value
+  if (!selection) return []
+  const entries = getSelectionLineEntries(selection)
+  const pointForOffset = (offset: number, isEnd: boolean) => {
+    const entry = entries.find((item) => (
+      isEnd
+        ? offset > item.textStart && offset <= item.textEnd
+        : offset >= item.textStart && offset <= item.textEnd
+    )) || (isEnd ? entries[entries.length - 1] : entries[0])
+    if (!entry) return null
+    return caretPointForLineChar(entry, clampCharIndex(entry.line, offset))
+  }
+  const start = pointForOffset(selection.startOffset, false)
+  const end = pointForOffset(selection.endOffset, true)
+  const handles: ReaderSelectionHandleView[] = []
+  if (start) handles.push({ key: 'start', style: { left: `${start.x}px`, top: `${start.y}px` } })
+  if (end) handles.push({ key: 'end', style: { left: `${end.x}px`, top: `${end.y}px` } })
+  return handles
+})
 
 const handleClick = (e: MouseEvent) => {
   if (consumeClickAfterDrag()) return
+  if (showSelectionMenu.value) {
+    showSelectionMenu.value = false
+    clearCustomTextSelection()
+    return
+  }
   if (isReaderChromeTarget(e.target)) return
   if (pageFlipSimulationEnabled.value && Date.now() < pageFlipClickSuppressedUntil) return
   handleReaderTap(e.clientX, e.clientY)
@@ -892,7 +1290,7 @@ const handleClick = (e: MouseEvent) => {
 
 const handlePointerDown = (e: PointerEvent) => {
   if (pageFlipSimulationEnabled.value) return
-  if (showMenu.value || isReaderChromeTarget(e.target)) return
+  if (showMenu.value || showSelectionMenu.value || isReaderChromeTarget(e.target)) return
   recordReadingActivity()
   paginationPointerDown(e)
 }
@@ -909,33 +1307,85 @@ const handlePointerCancel = (e: PointerEvent) => {
   if (pageFlipSimulationEnabled.value) return
   paginationPointerCancel(e)
 }
+const setBookmarkStatus = (message: string) => {
+  bookmarkStatus.value = message
+  if (bookmarkStatusTimer !== null) window.clearTimeout(bookmarkStatusTimer)
+  bookmarkStatusTimer = window.setTimeout(() => {
+    bookmarkStatus.value = ''
+    bookmarkStatusTimer = null
+  }, 1800)
+}
+
 const handleContextMenu = (e: MouseEvent) => {
   if (showMenu.value) return
-  const t = e.target as HTMLElement; const p = t.closest('.page-slice') || t.closest('.page-line')
-  if (p && p.textContent && p.textContent.trim().length > 0) {
-    const pageElement = p.closest('.page-slice') as HTMLElement | null
-    const pageIndex = Number(pageElement?.dataset.pageIndex || currentPage.value)
-    const slice = pagesResult.value?.slices?.[pageIndex]
-    const renderedBodyText = Array.from(pageElement?.querySelectorAll('.page-line-body') || [])
-      .map(line => line.textContent || '')
-      .join('')
-    selectedText.value = quoteTextFromPageLines(slice?.lines, renderedBodyText)
-    if (!selectedText.value) return
-    const chapterText = applyReplacements(currentChapterData.value?.body_text || '')
-    const start = Math.max(0, slice?.startChar || 0)
-    const end = Math.max(start, slice?.endChar || start + selectedText.value.length)
-    const excerpt = quoteContextExcerpt(chapterText, start, end)
-    selectedContextBefore.value = excerpt.before
-    selectedContextAfter.value = excerpt.after
-    showCopyModal.value = true
-  }
+  const target = e.target as HTMLElement
+  const pageElement = target.closest('.page-slice') as HTMLElement | null
+  if (!pageElement || !isReaderTextTarget(target)) return
+  const captured = startCustomTextSelection(pageElement, e)
+  if (!captured || !selectedText.value.trim()) return
+  closeActiveReaderPanel()
+  showCopyModal.value = false
+  showSharePreview.value = false
+  selectionMenuPosition.value = { x: e.clientX, y: e.clientY }
+  readerDialogOrigin.value = { x: e.clientX, y: e.clientY }
+  showSelectionMenu.value = true
 }
 
 const updateTtsSleepTimer = (durationMs: number) => {
   ttsSleepDurationMs.value = durationMs
   if (ttsActive.value) setSleepTimer(durationMs)
 }
-const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false }
+const copyToClipboard = () => { navigator.clipboard.writeText(selectedText.value); showCopyModal.value = false; setBookmarkStatus('已复制') }
+
+const closeSelectionMenu = () => {
+  showSelectionMenu.value = false
+  clearCustomTextSelection()
+}
+
+const copySelectedText = async () => {
+  if (!selectedText.value.trim()) return
+  await navigator.clipboard.writeText(selectedText.value)
+  closeSelectionMenu()
+  setBookmarkStatus('已复制')
+}
+
+const editSelectedText = () => {
+  closeSelectionMenu()
+  readerDialogOrigin.value = selectionMenuPosition.value
+  showCopyModal.value = true
+}
+
+const shareSelectedText = () => {
+  closeSelectionMenu()
+  readerDialogOrigin.value = selectionMenuPosition.value
+  void generateShareCard()
+}
+
+const searchSelectedText = () => {
+  const query = selectedText.value.trim()
+  if (!query) return
+  selectionSearchQuery.value = query
+  selectionSearchRunKey.value += 1
+  closeSelectionMenu()
+  openPanel('search', selectionMenuPosition.value, true)
+}
+
+const replaceSelectedText = () => {
+  const pattern = selectedText.value.trim()
+  if (!pattern) return
+  selectionRulePattern.value = pattern
+  selectionRuleRunKey.value += 1
+  closeSelectionMenu()
+  openPanel('rules', selectionMenuPosition.value, true)
+}
+
+const speakSelectedText = () => {
+  const text = selectedText.value.trim()
+  if (!text) return
+  closeSelectionMenu()
+  const res = speakText(text)
+  if (res === 'MIMO_KEY_MISSING') handleMissingMimoKey()
+}
 
 const quoteFontSize = computed(() => {
   const length = selectedText.value.length
@@ -947,6 +1397,7 @@ const quoteFontSize = computed(() => {
 
 const generateShareCard = async () => {
   if (!selectedText.value.trim()) return
+  showSelectionMenu.value = false
   shareCardGenerating.value = true
   try {
     await nextTick()
@@ -995,6 +1446,10 @@ const handleKeydown = (e: KeyboardEvent) => {
   const k = e.key
   if (k === 'Escape') {
     e.stopPropagation(); e.stopImmediatePropagation()
+    if (showSelectionMenu.value) { showSelectionMenu.value = false; return }
+    if (showSharePreview.value) { showSharePreview.value = false; return }
+    if (showCopyModal.value) { showCopyModal.value = false; return }
+    if (activeReaderPanel.value) { closeActiveReaderPanel(); return }
     if (props.isImmersive) { toggleImmersiveMode(); return }
     if (showMenu.value) { closeAll(); return }
     if (ttsActive.value) { stopTts(); return }
@@ -1029,15 +1484,28 @@ const openBookStats = () => {
   emit('open-book-stats', props.bookId)
 }
 
-const openPanel = (panel: string) => {
-  showToc.value = panel === 'toc' ? !showToc.value : false
-  showStyling.value = panel === 'styling' ? !showStyling.value : false
-  showSearch.value = panel === 'search' ? !showSearch.value : false
-  showRules.value = panel === 'rules' ? !showRules.value : false
-  showAutoPage.value = panel === 'autopage' ? !showAutoPage.value : false
-  showTts.value = panel === 'tts' ? !showTts.value : false
-  showReaderOptions.value = panel === 'readerOptions' ? !showReaderOptions.value : false
-  showBookmarks.value = panel === 'bookmarks' ? !showBookmarks.value : false
+const openPanel = (panel: string, origin?: ReaderPanelLaunchOrigin, preserveSeed = false) => {
+  const key = panel as ReaderPanelKey
+  const shouldOpen = activeReaderPanel.value !== key
+  readerDialogOrigin.value = origin || { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+  showSelectionMenu.value = false
+  if (!preserveSeed) {
+    if (panel === 'search') {
+      selectionSearchQuery.value = ''
+      selectionSearchRunKey.value = 0
+    } else if (panel === 'rules') {
+      selectionRulePattern.value = ''
+      selectionRuleRunKey.value = 0
+    }
+  }
+  showToc.value = shouldOpen && panel === 'toc'
+  showStyling.value = shouldOpen && panel === 'styling'
+  showSearch.value = shouldOpen && panel === 'search'
+  showRules.value = shouldOpen && panel === 'rules'
+  showAutoPage.value = shouldOpen && panel === 'autopage'
+  showTts.value = shouldOpen && panel === 'tts'
+  showReaderOptions.value = shouldOpen && panel === 'readerOptions'
+  showBookmarks.value = shouldOpen && panel === 'bookmarks'
 }
 
 const jumpToSearchResult = (result: BookSearchResult) => {
@@ -1098,6 +1566,7 @@ const handleResize = () => {
   viewportResizeInProgress = true
   viewportSize.value = { width: window.innerWidth, height: window.innerHeight }
   viewportResizeInProgress = false
+  refreshCustomSelectionLayout()
   resizeLayoutScheduler.schedule()
 }
 
@@ -1129,6 +1598,10 @@ watch([pageFlipSimulationEnabled, pageFlipTurnMode, currentPage], () => {
   if (currentPage.value !== normalized) currentPage.value = normalized
 })
 watch(currentPage, () => saveProgress())
+watch([currentPage, currentChapterIndex], () => {
+  showSelectionMenu.value = false
+  clearCustomTextSelection()
+})
 
 // ---- Lifecycle ----
 onMounted(async () => {
@@ -1352,6 +1825,30 @@ onUnmounted(async () => {
         <div v-if="animationState.active && animationState.mode === 'simulation' && !pageFlipSimulationEnabled" class="page-fold-highlight" :style="pagingVisuals.highlight"></div>
       </div>
 
+      <div v-if="customTextSelection" class="reader-text-selection-layer">
+        <div
+          v-for="rect in customSelectionRects"
+          :key="rect.key"
+          class="reader-text-selection-mark"
+          :style="rect.style"
+        ></div>
+        <button
+          v-for="handle in customSelectionHandles"
+          :key="handle.key"
+          type="button"
+          class="reader-text-selection-handle"
+          :class="`reader-text-selection-handle-${handle.key}`"
+          :style="handle.style"
+          :aria-label="handle.key === 'start' ? '调整选择起点' : '调整选择终点'"
+          @pointerdown.stop.prevent="beginCustomSelectionHandleDrag(handle.key, $event)"
+          @pointermove.stop.prevent="dragCustomSelectionHandle"
+          @pointerup.stop.prevent="endCustomSelectionHandleDrag"
+          @pointercancel.stop.prevent="endCustomSelectionHandleDrag"
+          @click.stop.prevent
+          @contextmenu.prevent.stop
+        ></button>
+      </div>
+
       <!-- Key Hints -->
       <Transition name="fade">
         <div
@@ -1413,7 +1910,7 @@ onUnmounted(async () => {
 
       <!-- Reader Menu -->
       <Transition name="menu-slide">
-        <ReaderMenu 
+        <ReaderMenu
           v-if="showMenu"
           :book="book" :can-open-stats="!readingTimeStatsHidden" :isAlwaysOnTop="isAlwaysOnTop" :isImmersive="props.isImmersive"
           :showSearch="showSearch" :showRules="showRules" :showStyling="showStyling"
@@ -1428,15 +1925,69 @@ onUnmounted(async () => {
           @toggle-immersive="toggleImmersiveMode" @open-panel="openPanel"
           @go-to-chapter="(idx) => trackedGoToChapter(idx, true)"
           @slider-input="(val) => { if(sliderMode==='book') trackedGoToChapter(val, true); else trackedSetCurrentPage(val); }"
-        >
-          <Transition name="sf"><SearchPanel v-if="showSearch" :book-id="props.bookId" :chapters="chapters" @close="showSearch=false" @jump="(result) => { jumpToSearchResult(result); showSearch=false; showMenu=false; }" /></Transition>
-          <Transition name="sf"><TOCPanel v-if="showToc" :chapters="chapters" :currentChapterIndex="currentChapterIndex" @close="showToc=false" @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }" /></Transition>
-          <Transition name="sf"><BookmarksPanel v-if="showBookmarks" :book-id="props.bookId" :refresh-key="bookmarkPanelVersion" @close="showBookmarks=false" @jump="goToBookmarkTarget" /></Transition>
-          <Transition name="sf"><RulesPanel v-if="showRules" :rules="rules" :bookId="props.bookId" @close="showRules=false" @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }" /></Transition>
-          <Transition name="sf"><StylePanel v-if="showStyling" :effective-page-mode="effectivePageMode" :double-page-available="doublePageAvailable" @close="showStyling=false" /></Transition>
-          <Transition name="sf"><AutoPagePanel v-if="showAutoPage" :autoPageActive="autoPageActive" @close="showAutoPage=false" @toggle="toggleAutoPage" /></Transition>
-          <Transition name="sf"><TTSPanel
-            v-if="showTts"
+        />
+      </Transition>
+
+      <ReaderOverlayDialog
+        :open="!!activeReaderPanel"
+        :kind="readerDialogKind"
+        :origin="readerDialogTransformOrigin"
+        @close="closeActiveReaderPanel"
+      >
+        <Transition name="reader-panel-content" mode="out-in">
+          <SearchPanel
+            v-if="showSearch"
+            key="search"
+            :book-id="props.bookId"
+            :chapters="chapters"
+            :initial-query="selectionSearchQuery"
+            :auto-run-key="selectionSearchRunKey"
+            @close="showSearch=false"
+            @jump="(result) => { jumpToSearchResult(result); showSearch=false; showMenu=false; }"
+          />
+          <TOCPanel
+            v-else-if="showToc"
+            key="toc"
+            :chapters="chapters"
+            :currentChapterIndex="currentChapterIndex"
+            @close="showToc=false"
+            @jump="(idx) => { trackedGoToChapter(idx, true); showToc=false; showMenu=false; }"
+          />
+          <BookmarksPanel
+            v-else-if="showBookmarks"
+            key="bookmarks"
+            :book-id="props.bookId"
+            :refresh-key="bookmarkPanelVersion"
+            @close="showBookmarks=false"
+            @jump="goToBookmarkTarget"
+          />
+          <RulesPanel
+            v-else-if="showRules"
+            key="rules"
+            :rules="rules"
+            :bookId="props.bookId"
+            :initial-pattern="selectionRulePattern"
+            :initial-pattern-key="selectionRuleRunKey"
+            @close="showRules=false"
+            @refresh="() => { fetchRules(props.bookId); paginator.clearCache(); recalc(); }"
+          />
+          <StylePanel
+            v-else-if="showStyling"
+            key="styling"
+            :effective-page-mode="effectivePageMode"
+            :double-page-available="doublePageAvailable"
+            @close="showStyling=false"
+          />
+          <AutoPagePanel
+            v-else-if="showAutoPage"
+            key="autopage"
+            :autoPageActive="autoPageActive"
+            @close="showAutoPage=false"
+            @toggle="toggleAutoPage"
+          />
+          <TTSPanel
+            v-else-if="showTts"
+            key="tts"
             :ttsActive="ttsActive"
             :ttsPaused="ttsPaused"
             :edgeVoices="edgeVoices"
@@ -1449,44 +2000,79 @@ onUnmounted(async () => {
             @resume="resumeTts"
             @stop="stopTts"
             @timer-change="updateTtsSleepTimer"
-          /></Transition>
-          <Transition name="sf"><OptionsPanel v-if="showReaderOptions" :book="book" :effective-page-mode="effectivePageMode" @close="showReaderOptions=false" @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }" /></Transition>
-        </ReaderMenu>
+          />
+          <OptionsPanel
+            v-else-if="showReaderOptions"
+            key="reader-options"
+            :book="book"
+            :effective-page-mode="effectivePageMode"
+            @close="showReaderOptions=false"
+            @update-book="(d) => { if(book) { book.title = d.title; book.author = d.author; } }"
+          />
+        </Transition>
+      </ReaderOverlayDialog>
+
+      <Transition name="selection-menu">
+        <div
+          v-if="showSelectionMenu"
+          class="selection-menu-layer"
+          @click="closeSelectionMenu"
+          @contextmenu.prevent.stop="closeSelectionMenu"
+          @wheel.stop
+        >
+          <div class="selection-action-menu" :style="selectionMenuStyle" @click.stop @contextmenu.prevent.stop>
+            <button style="--d:0ms;--rd:80ms" type="button" @click="copySelectedText">复制</button>
+            <button style="--d:22ms;--rd:64ms" type="button" @click="shareSelectedText">分享</button>
+            <button style="--d:44ms;--rd:48ms" type="button" @click="replaceSelectedText">替换</button>
+            <button style="--d:66ms;--rd:32ms" type="button" @click="searchSelectedText">搜索</button>
+            <button style="--d:88ms;--rd:16ms" type="button" @click="speakSelectedText">朗读</button>
+            <button style="--d:110ms;--rd:0ms" type="button" @click="editSelectedText">编辑</button>
+          </div>
+        </div>
       </Transition>
 
       <!-- Copy Modal -->
-      <Transition name="fade">
-        <div v-if="showCopyModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6" @click.stop="showCopyModal = false" @wheel.stop>
-          <div class="copy-modal bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 shadow-2xl flex flex-col gap-4 max-h-[80vh]" @click.stop @wheel.stop>
-            <div class="flex items-center justify-between"><h3 class="text-slate-200 font-bold">文字提取与复制</h3><button @click="showCopyModal = false" class="text-slate-400 hover:text-white px-2">✕</button></div>
-            <textarea v-model="selectedText" class="w-full flex-1 min-h-[150px] bg-slate-800 text-slate-300 resize-none rounded-xl p-4 outline-none border border-slate-700/50 focus:border-blue-500" style="user-select: text;"></textarea>
-            <div class="flex justify-end gap-3 mt-2">
-              <button @click="showCopyModal = false" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-medium">取消</button>
-              <button @click="copyToClipboard" class="px-5 py-2 rounded-xl bg-slate-800 text-slate-200 hover:bg-slate-700 font-medium">复制全文</button>
-              <button @click="generateShareCard" :disabled="shareCardGenerating" class="px-5 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 font-bold shadow-lg shadow-blue-500/20 disabled:opacity-50">{{ shareCardGenerating ? '生成中…' : '分享' }}</button>
-            </div>
+      <ReaderOverlayDialog
+        :open="showCopyModal"
+        kind="large"
+        :origin="readerDialogTransformOrigin"
+        @close="showCopyModal = false"
+      >
+        <div class="copy-modal reader-text-modal" @click.stop @wheel.stop>
+          <div class="reader-text-modal-head">
+            <h3>文字提取与复制</h3>
+            <button @click="showCopyModal = false">✕</button>
+          </div>
+          <textarea v-model="selectedText" class="reader-text-area"></textarea>
+          <div class="reader-text-modal-actions">
+            <button @click="showCopyModal = false">取消</button>
+            <button @click="copyToClipboard">复制全文</button>
+            <button @click="generateShareCard" :disabled="shareCardGenerating">{{ shareCardGenerating ? '生成中...' : '分享' }}</button>
           </div>
         </div>
-      </Transition>
+      </ReaderOverlayDialog>
 
-      <Transition name="fade">
-        <div v-if="showSharePreview" class="share-preview-backdrop fixed inset-0 z-[110] flex items-center justify-center p-6" @click.stop="showSharePreview = false" @wheel.stop>
-          <div class="share-preview-panel w-full max-w-3xl p-6 flex flex-col gap-4 max-h-[90vh]" @click.stop @wheel.stop>
-            <div class="flex items-center justify-between">
-              <div><h3 class="share-preview-title text-xl font-bold">分享图片预览</h3><p class="share-preview-detail text-xs mt-1">完整图片 · 1080px 宽 PNG</p></div>
-              <button @click="showSharePreview = false" class="share-preview-close px-2">✕</button>
-            </div>
-            <div class="share-preview-scroll flex-1 min-h-0 overflow-auto p-3" @wheel.stop>
-              <img :src="shareCardDataUrl" alt="引用分享卡预览" class="w-full h-auto rounded-lg" />
-            </div>
-            <div class="share-preview-actions">
-              <button @click="saveShareCard" class="app-button">保存到本地</button>
-              <button @click="copyShareCard" class="app-button app-button-primary">复制图片</button>
-            </div>
-            <button @click="showSharePreview = false" class="app-button share-preview-dismiss">关闭</button>
+      <ReaderOverlayDialog
+        :open="showSharePreview"
+        kind="large"
+        :origin="readerDialogTransformOrigin"
+        @close="showSharePreview = false"
+      >
+        <div class="share-preview-panel" @click.stop @wheel.stop>
+          <div class="share-preview-head">
+            <div><h3 class="share-preview-title">分享图片预览</h3><p class="share-preview-detail">完整图片 · 1080px 宽 PNG</p></div>
+            <button @click="showSharePreview = false" class="share-preview-close">✕</button>
           </div>
+          <div class="share-preview-scroll" @wheel.stop>
+            <img :src="shareCardDataUrl" alt="引用分享卡预览" />
+          </div>
+          <div class="share-preview-actions">
+            <button @click="saveShareCard" class="app-button">保存到本地</button>
+            <button @click="copyShareCard" class="app-button app-button-primary">复制图片</button>
+          </div>
+          <button @click="showSharePreview = false" class="app-button share-preview-dismiss">关闭</button>
         </div>
-      </Transition>
+      </ReaderOverlayDialog>
 
       <div class="quote-render-host" aria-hidden="true">
         <div ref="shareCardRef" class="quote-share-card">
@@ -1517,13 +2103,45 @@ onUnmounted(async () => {
 .quote-divider { height:2px; margin:88px 0 42px; background:var(--app-border); }
 .quote-source { color:var(--app-text-secondary); font:700 34px/1.2 var(--app-font-body,"Microsoft YaHei",sans-serif); }
 .quote-meta { margin-top:24px; color:var(--app-text-muted); font:400 26px/1.2 var(--app-font-body,"Microsoft YaHei",sans-serif); }
-.share-preview-backdrop { background:var(--app-scrim); }
-.share-preview-panel { color:var(--app-text); background:var(--app-surface); border:1px solid var(--app-border); border-radius:var(--app-radius-dialog); box-shadow:var(--app-shadow-hover); }
-.share-preview-title { color:var(--app-text); }
-.share-preview-detail,.share-preview-close { color:var(--app-text-muted); }
-.share-preview-close { border:0; background:transparent; cursor:pointer; }
+.reader-text-selection-layer { position:fixed; inset:0; z-index:99; pointer-events:none; }
+.reader-text-selection-mark { position:fixed; border-radius:4px; background:rgba(96,165,250,.28); box-shadow:inset 0 0 0 1px rgba(147,197,253,.24); mix-blend-mode:multiply; animation:reader-selection-mark-in 120ms ease-out; pointer-events:none; }
+.reader-text-selection-handle { position:fixed; width:30px; height:38px; padding:0; margin:-3px 0 0 -15px; border:0; background:transparent; cursor:grab; pointer-events:auto; touch-action:none; }
+.reader-text-selection-handle:active { cursor:grabbing; }
+.reader-text-selection-handle::before { content:""; position:absolute; left:14px; top:-15px; width:2px; height:24px; border-radius:999px; background:#60a5fa; box-shadow:0 0 0 1px rgba(15,23,42,.36),0 2px 8px rgba(37,99,235,.28); }
+.reader-text-selection-handle::after { content:""; position:absolute; left:7px; top:7px; width:16px; height:16px; border-radius:999px; background:#60a5fa; box-shadow:0 0 0 3px rgba(15,23,42,.86),0 8px 18px rgba(0,0,0,.28); }
+.reader-text-selection-handle-start::before { top:-15px; }
+.reader-text-selection-handle-end::before { top:-15px; }
+@keyframes reader-selection-mark-in { from { opacity:0; transform:scaleY(.82); } to { opacity:1; transform:scaleY(1); } }
+.selection-menu-layer { position:fixed; inset:0; z-index:98; pointer-events:none; }
+.selection-action-menu { position:fixed; width:min(328px, calc(100vw - 32px)); display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; padding:10px; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:rgba(15,23,42,.96); box-shadow:0 22px 58px rgba(0,0,0,.48); backdrop-filter:blur(22px) saturate(140%); -webkit-backdrop-filter:blur(22px) saturate(140%); }
+.selection-action-menu,
+.selection-action-menu button { pointer-events:auto; }
+.selection-action-menu button { min-height:40px; border:1px solid rgba(255,255,255,.1); border-radius:10px; color:white; background:rgba(255,255,255,.075); font-size:13px; font-weight:750; cursor:pointer; opacity:0; transform:translateY(6px) scale(.98); animation:selection-action-in 180ms cubic-bezier(.16,1,.3,1) forwards; animation-delay:var(--d); }
+.selection-action-menu button:hover { border-color:rgba(96,165,250,.5); background:rgba(59,130,246,.22); }
+.selection-menu-enter-active,.selection-menu-leave-active { transition:opacity 150ms ease; }
+.selection-menu-enter-from,.selection-menu-leave-to { opacity:0; }
+.selection-menu-leave-active .selection-action-menu button { animation:selection-action-out 110ms ease forwards; animation-delay:var(--rd); }
+@keyframes selection-action-in { to { opacity:1; transform:translateY(0) scale(1); } }
+@keyframes selection-action-out { to { opacity:0; transform:translateY(4px) scale(.98); } }
+.reader-text-modal { height:100%; display:flex; flex-direction:column; gap:16px; padding:22px; color:#f8fafc; }
+.reader-text-modal-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.reader-text-modal-head h3 { margin:0; color:#f8fafc; font-size:18px; font-weight:800; }
+.reader-text-modal-head button,.reader-text-modal-actions button { border:1px solid rgba(255,255,255,.1); border-radius:10px; color:#e2e8f0; background:rgba(255,255,255,.07); cursor:pointer; }
+.reader-text-modal-head button { width:34px; height:34px; }
+.reader-text-area { flex:1; min-height:180px; resize:none; user-select:text; color:#e2e8f0; background:rgba(15,23,42,.62); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:14px; outline:none; line-height:1.7; }
+.reader-text-area:focus { border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,.18); }
+.reader-text-modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+.reader-text-modal-actions button { min-height:40px; padding:0 16px; font-weight:750; }
+.reader-text-modal-actions button:last-child { border-color:#3b82f6; color:white; background:#2563eb; }
+.reader-text-modal-actions button:disabled { opacity:.55; cursor:default; }
+.share-preview-panel { height:100%; min-height:0; padding:22px; display:flex; flex-direction:column; gap:16px; color:#f8fafc; }
+.share-preview-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.share-preview-title { margin:0; color:#f8fafc; font-size:20px; font-weight:800; }
+.share-preview-detail { margin:4px 0 0; color:rgba(226,232,240,.5); font-size:12px; }
+.share-preview-close { width:34px; height:34px; border:1px solid rgba(255,255,255,.1); border-radius:10px; color:rgba(226,232,240,.65); background:rgba(255,255,255,.07); cursor:pointer; }
 .share-preview-close:hover { color:var(--app-text); }
-.share-preview-scroll { background:var(--app-surface-secondary); border:1px solid var(--app-border); border-radius:var(--app-radius-card); overscroll-behavior:contain; }
+.share-preview-scroll { flex:1; min-height:0; overflow:auto; padding:12px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); border-radius:14px; overscroll-behavior:contain; }
+.share-preview-scroll img { width:100%; height:auto; border-radius:10px; }
 .share-preview-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .share-preview-actions .app-button,.share-preview-dismiss { min-height:48px; justify-content:center; }
 .bookmark-toast { position:absolute; left:50%; top:86px; transform:translateX(-50%); z-index:70; padding:8px 14px; border-radius:999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.12); color:white; font-size:13px; font-weight:700; box-shadow:0 12px 32px rgba(0,0,0,0.35); backdrop-filter:blur(16px); }
@@ -1592,6 +2210,31 @@ onUnmounted(async () => {
 .sf-enter-from { opacity:0; transform:translateY(12px); }
 .sf-leave-to { opacity:0; transform:translateY(12px); }
 
-.menu-slide-enter-active, .menu-slide-leave-active { transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.reader-panel-content-enter-active,.reader-panel-content-leave-active { transition:opacity .14s ease; }
+.reader-panel-content-enter-from,.reader-panel-content-leave-to { opacity:0; }
+
+.menu-slide-enter-active, .menu-slide-leave-active { transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+.menu-slide-enter-active :deep(.m-top),
+.menu-slide-leave-active :deep(.m-top),
+.menu-slide-enter-active :deep(.m-bottom-stack),
+.menu-slide-leave-active :deep(.m-bottom-stack) { transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
 .menu-slide-enter-from, .menu-slide-leave-to { opacity: 0; }
+.menu-slide-enter-from :deep(.m-top), .menu-slide-leave-to :deep(.m-top) { opacity:0; transform:translateY(-10px); }
+.menu-slide-enter-from :deep(.m-bottom-stack), .menu-slide-leave-to :deep(.m-bottom-stack) { opacity:0; transform:translateY(14px); }
+@media (prefers-reduced-motion: reduce) {
+  .sf-enter-active,.sf-leave-active,
+  .reader-panel-content-enter-active,.reader-panel-content-leave-active,
+  .selection-menu-enter-active,.selection-menu-leave-active,
+  .menu-slide-enter-active,.menu-slide-leave-active,
+  .menu-slide-enter-active :deep(.m-top),
+  .menu-slide-leave-active :deep(.m-top),
+  .menu-slide-enter-active :deep(.m-bottom-stack),
+  .menu-slide-leave-active :deep(.m-bottom-stack) { transition-duration:80ms; }
+  .sf-enter-from,.sf-leave-to,
+  .menu-slide-enter-from :deep(.m-top),
+  .menu-slide-leave-to :deep(.m-top),
+  .menu-slide-enter-from :deep(.m-bottom-stack),
+  .menu-slide-leave-to :deep(.m-bottom-stack) { transform:none; }
+  .selection-action-menu button { animation:none; opacity:1; transform:none; }
+}
 </style>

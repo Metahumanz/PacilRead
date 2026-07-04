@@ -7,6 +7,16 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.2',
+    date: '2026-07-04',
+    changes: [
+      'Reader Panels（阅读弹层）：桌面端阅读菜单改为统一小弹窗与大弹窗壳，目录、搜索、书签、替换规则、排版和设置跟随窗口方向自适应',
+      'Selection Handles（文字选区）：右键正文会显示动作菜单与起止拖拽柄，可在当前页内调整选中文字后再复制、分享、搜索、替换或朗读',
+      'Selected Text Actions（选中文本动作）：搜索和替换规则支持由选中文字预填，朗读可只播放当前选区并复用现有 TTS 引擎设置',
+      'Reader Motion（阅读动效）：菜单栏、弹层、分享预览和文字动作菜单加入轻量过渡，并尊重减少动态效果设置',
+    ]
+  },
+  {
     version: '1.4.1',
     date: '2026-07-03',
     changes: [

@@ -3,7 +3,7 @@ import { ttsDeadlineFrom, ttsRemaining } from '../utils/ttsSleepTimer'
 
 declare class Highlight { constructor(...ranges: Range[]) }
 
-interface SentenceItem { text: string; range: Range }
+interface SentenceItem { text: string; range?: Range }
 
 export function useTTS(opts: {
   contentRef: Ref<HTMLElement | null>
@@ -34,6 +34,7 @@ export function useTTS(opts: {
   let ttsGeneration = 0
   let activeSentences: SentenceItem[] = []
   let currentSentenceIndex = 0
+  let stopAtSentenceEnd = false
   let sleepDeadline = 0
   let sleepTimeout: number | null = null
   let sleepTicker: number | null = null
@@ -153,7 +154,7 @@ export function useTTS(opts: {
   }
 
   const nextText = () => activeSentences[currentSentenceIndex + 1]?.text
-    || sentenceTexts(opts.getFollowingSentenceText?.() || '')[0]
+    || (stopAtSentenceEnd ? null : sentenceTexts(opts.getFollowingSentenceText?.() || '')[0])
     || null
 
   const playSystem = (text: string) => new Promise<void>(resolve => {
@@ -213,7 +214,8 @@ export function useTTS(opts: {
     currentSentenceIndex = 0
     if (opts.contentRef.value) getSentencesFromNode(opts.contentRef.value, activeSentences)
     const visible = activeSentences.findIndex(item => {
-      const rect = item.range.getBoundingClientRect()
+      const rect = item.range?.getBoundingClientRect()
+      if (!rect) return false
       return rect.right > 20 && rect.width > 0
     })
     if (visible >= 0) currentSentenceIndex = visible
@@ -241,6 +243,7 @@ export function useTTS(opts: {
     ttsActive.value = false
     ttsPaused.value = false
     isPlayingTts = false
+    stopAtSentenceEnd = false
     if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
     if (mimoSource) { try { mimoSource.stop() } catch {}; mimoSource = null }
     if (window.speechSynthesis) window.speechSynthesis.cancel()
@@ -273,6 +276,10 @@ export function useTTS(opts: {
     const generation = ttsGeneration
     if (!isPlayingTts || ttsPaused.value) return
     if (!activeSentences.length || currentSentenceIndex >= activeSentences.length) {
+      if (stopAtSentenceEnd) {
+        stopTts()
+        return
+      }
       const turned = opts.nextPage()
       if (turned === false) opts.slideToNextChapter()
       window.setTimeout(() => {
@@ -285,14 +292,14 @@ export function useTTS(opts: {
 
     const item = activeSentences[currentSentenceIndex]
     prefetchText(nextText())
-    const rect = item.range.getBoundingClientRect()
+    const rect = item.range?.getBoundingClientRect()
     const width = opts.containerWidth.value || window.innerWidth
-    if (rect.left > width - 20) {
+    if (rect && rect.left > width - 20) {
       opts.nextPage()
       await new Promise(resolve => window.setTimeout(resolve, opts.flipDurationMs.value + 50))
     }
     if (!isPlayingTts || ttsPaused.value || generation !== ttsGeneration) return
-    highlightRange(item.range)
+    if (item.range) highlightRange(item.range)
     if (opts.ttsEngine.value === 'system') await playSystem(item.text)
     else if (opts.ttsEngine.value === 'edge') await playEdge(item.text)
     else await playMimo(item.text)
@@ -332,6 +339,7 @@ export function useTTS(opts: {
     if (ttsActive.value) { stopTts(); return }
     if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) return 'MIMO_KEY_MISSING'
     ttsGeneration++
+    stopAtSentenceEnd = false
     ttsActive.value = true
     ttsPaused.value = false
     isPlayingTts = true
@@ -343,9 +351,29 @@ export function useTTS(opts: {
     void playNextSentence()
   }
 
+  const speakText = (text: string) => {
+    const sentences = sentenceTexts(text).map((value) => ({ text: value }))
+    if (!sentences.length) return
+    if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) return 'MIMO_KEY_MISSING'
+    if (ttsActive.value) stopTts()
+    ttsGeneration++
+    stopAtSentenceEnd = true
+    ttsActive.value = true
+    ttsPaused.value = false
+    isPlayingTts = true
+    activeSentences = sentences
+    currentSentenceIndex = 0
+    clearHighlight()
+    setSleepTimer(0)
+    configureMediaSession()
+    updateMediaSession()
+    prefetchText(activeSentences[1]?.text || null)
+    void playNextSentence()
+  }
+
   const handleTtsClick = (x: number, y: number): boolean => {
     if (!ttsActive.value) return false
-    const found = activeSentences.findIndex(item => Array.from(item.range.getClientRects()).some(rect => (
+    const found = activeSentences.findIndex(item => item.range && Array.from(item.range.getClientRects()).some(rect => (
       x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
     )))
     if (found < 0) return false
@@ -380,6 +408,7 @@ export function useTTS(opts: {
     resumeTts,
     setSleepTimer,
     handleTtsClick,
+    speakText,
     loadVoices,
     injectHighlightStyles,
     buildSentences,
