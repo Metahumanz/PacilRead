@@ -1613,7 +1613,7 @@ const shouldBlockReaderShortcuts = (target: EventTarget | null) => (
 const handleKeydown = (e: KeyboardEvent) => {
   const k = e.key
   if (k === 'Escape') {
-    e.stopPropagation(); e.stopImmediatePropagation()
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation()
     if (showSelectionMenu.value) { showSelectionMenu.value = false; return }
     if (showSharePreview.value) { showSharePreview.value = false; return }
     if (showCopyModal.value) { showCopyModal.value = false; return }
@@ -1840,7 +1840,7 @@ onMounted(async () => {
     if (shouldCheckRemoteProgress) void checkRemoteProgressInBackground()
   })
   window.addEventListener('resize', handleResize)
-  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keydown', handleKeydown, true)
   window.addEventListener('blur', handleWindowBlur)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   loadVoices()
@@ -1860,7 +1860,7 @@ onUnmounted(async () => {
   window.electronAPI.win.setControlsVisible(true)
   await flushProgress()
   window.removeEventListener('resize', handleResize)
-  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keydown', handleKeydown, true)
   window.removeEventListener('blur', handleWindowBlur)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })

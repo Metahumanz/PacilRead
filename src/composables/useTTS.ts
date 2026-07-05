@@ -4,6 +4,7 @@ import { ttsDeadlineFrom, ttsRemaining } from '../utils/ttsSleepTimer'
 declare class Highlight { constructor(...ranges: Range[]) }
 
 interface SentenceItem { text: string; range?: Range }
+type TtsPlaybackMode = 'reader' | 'snippet'
 
 export function useTTS(opts: {
   contentRef: Ref<HTMLElement | null>
@@ -34,7 +35,7 @@ export function useTTS(opts: {
   let ttsGeneration = 0
   let activeSentences: SentenceItem[] = []
   let currentSentenceIndex = 0
-  let stopAtSentenceEnd = false
+  let playbackMode: TtsPlaybackMode = 'reader'
   let sleepDeadline = 0
   let sleepTimeout: number | null = null
   let sleepTicker: number | null = null
@@ -154,7 +155,7 @@ export function useTTS(opts: {
   }
 
   const nextText = () => activeSentences[currentSentenceIndex + 1]?.text
-    || (stopAtSentenceEnd ? null : sentenceTexts(opts.getFollowingSentenceText?.() || '')[0])
+    || (playbackMode === 'snippet' ? null : sentenceTexts(opts.getFollowingSentenceText?.() || '')[0])
     || null
 
   const playSystem = (text: string) => new Promise<void>(resolve => {
@@ -243,7 +244,7 @@ export function useTTS(opts: {
     ttsActive.value = false
     ttsPaused.value = false
     isPlayingTts = false
-    stopAtSentenceEnd = false
+    playbackMode = 'reader'
     if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
     if (mimoSource) { try { mimoSource.stop() } catch {}; mimoSource = null }
     if (window.speechSynthesis) window.speechSynthesis.cancel()
@@ -276,7 +277,7 @@ export function useTTS(opts: {
     const generation = ttsGeneration
     if (!isPlayingTts || ttsPaused.value) return
     if (!activeSentences.length || currentSentenceIndex >= activeSentences.length) {
-      if (stopAtSentenceEnd) {
+      if (playbackMode === 'snippet') {
         stopTts()
         return
       }
@@ -339,7 +340,7 @@ export function useTTS(opts: {
     if (ttsActive.value) { stopTts(); return }
     if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) return 'MIMO_KEY_MISSING'
     ttsGeneration++
-    stopAtSentenceEnd = false
+    playbackMode = 'reader'
     ttsActive.value = true
     ttsPaused.value = false
     isPlayingTts = true
@@ -357,7 +358,7 @@ export function useTTS(opts: {
     if (opts.ttsEngine.value === 'mimo' && !opts.ttsMiMoApiKey.value) return 'MIMO_KEY_MISSING'
     if (ttsActive.value) stopTts()
     ttsGeneration++
-    stopAtSentenceEnd = true
+    playbackMode = 'snippet'
     ttsActive.value = true
     ttsPaused.value = false
     isPlayingTts = true
@@ -373,6 +374,7 @@ export function useTTS(opts: {
 
   const handleTtsClick = (x: number, y: number): boolean => {
     if (!ttsActive.value) return false
+    if (playbackMode === 'snippet') return false
     const found = activeSentences.findIndex(item => item.range && Array.from(item.range.getClientRects()).some(rect => (
       x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
     )))
