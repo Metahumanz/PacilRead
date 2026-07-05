@@ -7,6 +7,15 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.4',
+    date: '2026-07-05',
+    changes: [
+      'Reader Escape（弹窗返回）：阅读菜单弹窗打开时按 Esc 只关闭当前小弹窗，不再直接退出阅读界面',
+      'Selection TTS（选区朗读）：右键选区菜单的朗读进入独立片段模式，只播放当前选中文字，读完即停',
+      'TTS Guard（听书防串流）：选区片段朗读期间不再响应正文点击跳句，也不会自动续读下一页正文',
+    ]
+  },
+  {
     version: '1.4.3',
     date: '2026-07-05',
     changes: [
