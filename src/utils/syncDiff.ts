@@ -168,6 +168,116 @@ function indexByKey(entity: SyncDiffEntity, items: any[]): Map<string, any> {
   return map
 }
 
+function positiveId(value: unknown): number | null {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+function nextAvailableId(used: Set<number>, start: { value: number }): number {
+  while (used.has(start.value) || start.value <= 0) start.value += 1
+  const id = start.value
+  used.add(id)
+  start.value += 1
+  return id
+}
+
+function maxEntityId(...groups: any[][]): number {
+  let max = 0
+  for (const group of groups) {
+    for (const item of group || []) max = Math.max(max, positiveId(item?.id) || 0)
+  }
+  return max
+}
+
+/**
+ * 将远端设备的数值主键映射到本地命名空间，同时保持书籍与章节、规则、书签的关联。
+ * 正文路径保留远端原值，因为 ZIP 内路径本身就是跨设备资源定位符。
+ */
+export function remapRemoteSyncEntityIds(
+  localEntities: Partial<SyncEntityPayloads>,
+  remoteEntities: Partial<SyncEntityPayloads>,
+): Partial<SyncEntityPayloads> {
+  const localBooks = localEntities.books || []
+  const remoteBooks = remoteEntities.books || []
+  const localBookByKey = indexByKey('books', localBooks)
+  const usedBookIds = new Set(localBooks.map((book) => positiveId(book?.id)).filter((id): id is number => id !== null))
+  const nextBookId = { value: maxEntityId(localBooks, remoteBooks) + 1 }
+  const remoteBookIdMap = new Map<number, number>()
+  const assignedBookKeyIds = new Map<string, number>()
+
+  const books = remoteBooks.map((book) => {
+    const key = getSyncItemKey('books', book)
+    const remoteId = positiveId(book?.id)
+    const localMatch = localBookByKey.get(key)
+    let mappedId = positiveId(localMatch?.id) || assignedBookKeyIds.get(key) || null
+    if (!mappedId && remoteId && !usedBookIds.has(remoteId)) {
+      mappedId = remoteId
+      usedBookIds.add(mappedId)
+    }
+    if (!mappedId) mappedId = nextAvailableId(usedBookIds, nextBookId)
+    if (key) assignedBookKeyIds.set(key, mappedId)
+    if (remoteId) remoteBookIdMap.set(remoteId, mappedId)
+    return { ...book, id: mappedId }
+  })
+
+  const localChapters = localEntities.chapters || []
+  const remoteChapters = remoteEntities.chapters || []
+  const localChapterByKey = indexByKey('chapters', localChapters)
+  const usedChapterIds = new Set(localChapters.map((chapter) => positiveId(chapter?.id)).filter((id): id is number => id !== null))
+  const nextChapterId = { value: maxEntityId(localChapters, remoteChapters) + 1 }
+  const chapters = remoteChapters.map((chapter) => {
+    const remoteBookId = positiveId(chapter?.bookId)
+    const bookId = remoteBookId ? (remoteBookIdMap.get(remoteBookId) || remoteBookId) : numberOrZero(chapter?.bookId)
+    const remapped = { ...chapter, bookId }
+    const localMatch = localChapterByKey.get(getSyncItemKey('chapters', remapped))
+    const remoteId = positiveId(chapter?.id)
+    let mappedId = positiveId(localMatch?.id)
+    if (!mappedId && remoteId && !usedChapterIds.has(remoteId)) {
+      mappedId = remoteId
+      usedChapterIds.add(mappedId)
+    }
+    if (!mappedId) mappedId = nextAvailableId(usedChapterIds, nextChapterId)
+    return { ...remapped, id: mappedId }
+  })
+
+  const remapBookId = (value: unknown): number | null => {
+    const id = positiveId(value)
+    if (!id) return null
+    return remoteBookIdMap.get(id) || id
+  }
+
+  const remapIdsByIdentity = (entity: 'rules' | 'themes' | 'bookmarks', remoteItems: any[]): any[] => {
+    const localItems = localEntities[entity] || []
+    const localByKey = indexByKey(entity, localItems)
+    const usedIds = new Set(localItems.map((item) => positiveId(item?.id)).filter((id): id is number => id !== null))
+    const nextId = { value: maxEntityId(localItems, remoteItems) + 1 }
+    return remoteItems.map((rawItem) => {
+      const item = entity === 'rules' || entity === 'bookmarks'
+        ? { ...rawItem, bookId: remapBookId(rawItem?.bookId) }
+        : { ...rawItem }
+      const localMatch = localByKey.get(getSyncItemKey(entity, item))
+      const remoteId = positiveId(rawItem?.id)
+      let mappedId = positiveId(localMatch?.id)
+      if (!mappedId && remoteId && !usedIds.has(remoteId)) {
+        mappedId = remoteId
+        usedIds.add(mappedId)
+      }
+      if (!mappedId) mappedId = nextAvailableId(usedIds, nextId)
+      return { ...item, id: mappedId }
+    })
+  }
+
+  return {
+    ...remoteEntities,
+    books,
+    chapters,
+    rules: remapIdsByIdentity('rules', remoteEntities.rules || []),
+    themes: remapIdsByIdentity('themes', remoteEntities.themes || []),
+    bookmarks: remapIdsByIdentity('bookmarks', remoteEntities.bookmarks || []),
+    readingStats: (remoteEntities.readingStats || []).map((row) => ({ ...row })),
+  }
+}
+
 export function buildSyncDiffPreview(
   localEntities: Partial<SyncEntityPayloads>,
   remoteEntities: Partial<SyncEntityPayloads>,

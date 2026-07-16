@@ -21,7 +21,6 @@ import { ALLOWED_BOOK_EXTENSIONS, assertAllowedLocalReadPath, assertFileExtensio
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
 const DATA_DIR = join(app.getPath('userData'), 'data')
-const SNAPSHOT_DIR = join(app.getPath('userData'), 'snapshots')
 const SEARCH_INDEX_DIR = join(app.getPath('userData'), 'search_index')
 const EMPTY_CHAPTER_TEXT_PLACEHOLDER = '章节正文为空或外置正文文件缺失。'
 const JSON_FILES: Record<string, string> = {
@@ -35,24 +34,6 @@ const JSON_FILES: Record<string, string> = {
 }
 
 type JsonEntityType = keyof typeof JSON_FILES
-
-interface SnapshotManifest {
-  id: string
-  reason: string
-  createdAt: number
-  schemaVersion: number
-  entityCounts: Record<string, number>
-  chapterTextFiles: number
-  sizeBytes: number
-}
-
-interface SnapshotBundle {
-  schemaVersion: number
-  createdAt: number
-  reason: string
-  entities: Record<string, unknown>
-  chapterTextFiles: Array<{ path: string; dataBase64: string }>
-}
 
 const jsonEntityCache = new Map<JsonEntityType, unknown>()
 let chaptersByBookIdCache: Map<number, any[]> | null = null
@@ -151,10 +132,6 @@ function writeJsonEntitiesAtomic(entries: Partial<Record<JsonEntityType, unknown
       rmSync(item.backupPath, { force: true })
     }
   }
-}
-
-function fileSizeBytes(filePath: string): number {
-  try { return statSync(filePath).size } catch { return 0 }
 }
 
 function extractFileName(path: string | null): string | null {
@@ -353,11 +330,37 @@ function createBookChapterTextZip(bookId: number): string | null {
   return zipPath
 }
 
-function extractBookChapterTextZip(zipPath: string): number {
+function getManagedFileIntegrity(filePath: string): { size: number; sha256: string } {
+  const safePath = assertAllowedLocalReadPath(filePath)
+  if (!existsSync(safePath) || !statSync(safePath).isFile()) {
+    throw new Error(`同步文件不存在: ${safePath}`)
+  }
+  return {
+    size: statSync(safePath).size,
+    sha256: sha256File(safePath),
+  }
+}
+
+function extractBookChapterTextZip(zipPath: string, expectedBookId?: number): number {
   assertAllowedLocalReadPath(zipPath)
   const chapterTextRoot = getChapterTextRoot()
   const zip = new AdmZip(zipPath)
   const entries = zip.getEntries()
+  const expectedPaths = Number.isFinite(expectedBookId)
+    ? new Set(getFileGzipChapterRowsForBook(Number(expectedBookId))
+        .map((row) => normalizeChapterTextStoragePath(row.bodyTextPath))
+        .filter((value): value is string => Boolean(value)))
+    : null
+  if (expectedPaths) {
+    const archivePaths = new Set(entries
+      .filter((entry) => !entry.isDirectory)
+      .map((entry) => normalizeChapterTextStoragePath(entry.entryName))
+      .filter((value): value is string => Boolean(value)))
+    const missingPaths = Array.from(expectedPaths).filter((path) => !archivePaths.has(path))
+    if (missingPaths.length > 0) {
+      throw new Error(`章节正文 ZIP 缺少 ${missingPaths.length} 个预期文件`)
+    }
+  }
   let extracted = 0
 
   for (const entry of entries) {
@@ -367,6 +370,7 @@ function extractBookChapterTextZip(zipPath: string): number {
       console.warn('[Library] Skipping unsafe ZIP entry:', entry.entryName)
       continue
     }
+    if (expectedPaths && !expectedPaths.has(normalized)) continue
     const absolutePath = join(chapterTextRoot, ...normalized.split('/'))
     mkdirSync(dirname(absolutePath), { recursive: true })
     writeFileSync(absolutePath, entry.getData())
@@ -392,7 +396,14 @@ function hasBookChapterTextFiles(bookId: number): boolean {
   return rows.every((chapter) => {
     const bodyTextPath = String(chapter.bodyTextPath || '')
     if (!bodyTextPath) return false
-    return resolveChapterTextPath(bodyTextPath, dataDir) !== null
+    const resolvedPath = resolveChapterTextPath(bodyTextPath, dataDir)
+    if (!resolvedPath) return false
+    try {
+      gunzipSync(readFileSync(resolvedPath))
+      return true
+    } catch {
+      return false
+    }
   })
 }
 
@@ -506,149 +517,13 @@ function getStorageSizeInfo(): { sizeBytes: number; chapterTextBytes: number; js
   }
 }
 
-function getSnapshotPaths(id: string): { bundlePath: string; manifestPath: string } {
-  const safeId = String(id || '').replace(/[^A-Za-z0-9_-]/g, '')
-  return {
-    bundlePath: join(SNAPSHOT_DIR, `${safeId}.json.gz`),
-    manifestPath: join(SNAPSHOT_DIR, `${safeId}.manifest.json`),
-  }
-}
-
-function collectChapterTextSnapshotFiles(): Array<{ path: string; dataBase64: string }> {
-  const root = getChapterTextRoot()
-  const files: Array<{ path: string; dataBase64: string }> = []
-  if (!existsSync(root)) return files
-
-  const walk = (dir: string, prefix = '') => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
-      const absolutePath = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        walk(absolutePath, relativePath)
-      } else if (entry.isFile() && normalizeChapterTextStoragePath(relativePath)) {
-        files.push({
-          path: relativePath,
-          dataBase64: readFileSync(absolutePath).toString('base64'),
-        })
-      }
-    }
-  }
-  walk(root)
-  return files
-}
-
-function writeChapterTextSnapshotFiles(files: Array<{ path: string; dataBase64: string }>): void {
-  const root = getChapterTextRoot()
-  rmSync(root, { recursive: true, force: true })
-  mkdirSync(root, { recursive: true })
-
-  for (const file of files) {
-    const relativePath = normalizeChapterTextStoragePath(file.path)
-    if (!relativePath) continue
-    const absolutePath = join(root, ...relativePath.split('/'))
-    mkdirSync(dirname(absolutePath), { recursive: true })
-    writeFileSync(absolutePath, Buffer.from(file.dataBase64, 'base64'))
-  }
-}
-
-function countEntityRows(value: unknown): number {
-  if (Array.isArray(value)) return value.length
-  if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length
-  return 0
-}
-
-function createLocalSnapshot(reason = '手动创建'): SnapshotManifest {
-  ensureDataDir()
-  mkdirSync(SNAPSHOT_DIR, { recursive: true })
-  const createdAt = Date.now()
-  const id = `${createdAt}-${createHash('sha1').update(`${reason}:${createdAt}`).digest('hex').slice(0, 8)}`
-  const entities: Record<string, unknown> = {}
-  const entityCounts: Record<string, number> = {}
-
-  for (const entityType of Object.keys(JSON_FILES) as JsonEntityType[]) {
-    const defaultValue = entityType === 'settings' ? {} : []
-    const value = readJsonEntity(entityType, defaultValue)
-    entities[entityType] = value
-    entityCounts[entityType] = countEntityRows(value)
-  }
-
-  const chapterTextFiles = collectChapterTextSnapshotFiles()
-  const bundle: SnapshotBundle = {
-    schemaVersion: 1,
-    createdAt,
-    reason,
-    entities,
-    chapterTextFiles,
-  }
-  const { bundlePath, manifestPath } = getSnapshotPaths(id)
-  writeFileSync(bundlePath, gzipSync(Buffer.from(JSON.stringify(bundle), 'utf8')))
-
-  const manifest: SnapshotManifest = {
-    id,
-    reason,
-    createdAt,
-    schemaVersion: 1,
-    entityCounts,
-    chapterTextFiles: chapterTextFiles.length,
-    sizeBytes: fileSizeBytes(bundlePath),
-  }
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
-  return manifest
-}
-
-function listLocalSnapshots(): SnapshotManifest[] {
-  mkdirSync(SNAPSHOT_DIR, { recursive: true })
-  const snapshots: SnapshotManifest[] = []
-  for (const entry of readdirSync(SNAPSHOT_DIR, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.manifest.json')) continue
-    try {
-      const manifest = JSON.parse(readFileSync(join(SNAPSHOT_DIR, entry.name), 'utf8')) as SnapshotManifest
-      const { bundlePath } = getSnapshotPaths(manifest.id)
-      manifest.sizeBytes = fileSizeBytes(bundlePath)
-      snapshots.push(manifest)
-    } catch {}
-  }
-  return snapshots.sort((a, b) => b.createdAt - a.createdAt)
-}
-
-function restoreLocalSnapshot(id: string): SnapshotManifest {
-  const { bundlePath } = getSnapshotPaths(id)
-  if (!existsSync(bundlePath)) throw new Error('恢复点文件不存在')
-  createLocalSnapshot('恢复前自动快照')
-
-  const bundle = JSON.parse(gunzipSync(readFileSync(bundlePath)).toString('utf8')) as SnapshotBundle
-  if (!bundle || bundle.schemaVersion !== 1 || !bundle.entities) {
-    throw new Error('恢复点格式不兼容')
-  }
-
-  const restoredEntities: Partial<Record<JsonEntityType, unknown>> = {}
-  for (const entityType of Object.keys(JSON_FILES) as JsonEntityType[]) {
-    const defaultValue = entityType === 'settings' ? {} : []
-    restoredEntities[entityType] = bundle.entities[entityType] ?? defaultValue
-  }
-  writeJsonEntitiesAtomic(restoredEntities)
-  writeChapterTextSnapshotFiles(Array.isArray(bundle.chapterTextFiles) ? bundle.chapterTextFiles : [])
-  chaptersByBookIdCache = null
-  return getSnapshotManifest(id)
-}
-
-function getSnapshotManifest(id: string): SnapshotManifest {
-  const { manifestPath, bundlePath } = getSnapshotPaths(id)
-  if (!existsSync(manifestPath)) throw new Error('恢复点清单不存在')
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SnapshotManifest
-  manifest.sizeBytes = fileSizeBytes(bundlePath)
-  return manifest
-}
-
-function deleteLocalSnapshot(id: string): { success: boolean } {
-  const { bundlePath, manifestPath } = getSnapshotPaths(id)
-  rmSync(bundlePath, { force: true })
-  rmSync(manifestPath, { force: true })
-  return { success: true }
-}
-
 function initializeJsonStore(): void {
   ensureDataDir()
+  try {
+    rmSync(join(app.getPath('userData'), 'snapshots'), { recursive: true, force: true })
+  } catch (error) {
+    console.warn('[Library] Failed to remove legacy local snapshots:', error)
+  }
   for (const [entityType, fileName] of Object.entries(JSON_FILES)) {
     const filePath = join(DATA_DIR, fileName)
     if (!existsSync(filePath)) {
@@ -1054,7 +929,6 @@ function batchClassifyBooksJson(bookIds: number[], operation: BatchClassificatio
 function deleteBooksJson(bookIds: number[]): { deleted: number } {
   const ids = new Set(bookIds.map(Number).filter(Number.isFinite))
   if (ids.size === 0) return { deleted: 0 }
-  createLocalSnapshot(ids.size > 1 ? '批量删除书籍前自动快照' : '删除书籍前自动快照')
   const books = readJsonEntity('books', []) as any[]
   const targets = books.filter(book => ids.has(Number(book.id)))
   writeJsonEntitiesAtomic({
@@ -1184,10 +1058,8 @@ function chapterRowToContent(chapter: any) {
 export {
   batchClassifyBooksJson,
   createBookChapterTextZip,
-  createLocalSnapshot,
   deleteBookJson,
   deleteBooksJson,
-  deleteLocalSnapshot,
   exportBooksJson,
   extractBookChapterTextZip,
   getBookChapterListJson,
@@ -1196,15 +1068,14 @@ export {
   getChapterContentBatchJson,
   getChapterTextExcerptJson,
   getMostRecentBookJson,
+  getManagedFileIntegrity,
   getBookshelfBooksJson,
   getStorageSizeInfo,
   hasBookChapterTextFiles,
   importBookJson,
   initializeJsonStore,
   isBookSearchIndexReady,
-  listLocalSnapshots,
   readJsonEntity,
-  restoreLocalSnapshot,
   searchBookJson,
   updateBookJson,
   writeJsonEntity,
@@ -1214,5 +1085,4 @@ export type {
   BatchClassificationOperation,
   ImportBookResult,
   JsonEntityType,
-  SnapshotManifest,
 }

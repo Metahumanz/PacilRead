@@ -62,6 +62,14 @@ assert.equal(webdav.sanitizeWebdavDirectorySegment('../desktop/settings'), 'desk
 assert.equal(webdav.buildProgressFileName({ title: 'A:B/C', author: '' }), 'A_B_C_未知.json')
 assert.deepEqual(plain(webdav.extractHrefValues('<d:href>/a.txt</d:href><href>/b.txt</href>')), ['/a.txt', '/b.txt'])
 
+const chapterTextSync = loadTsModule('src/utils/chapterTextSync.ts')
+assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('full', true), false)
+assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', true), true)
+assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', false), false)
+assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, true), true)
+assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, false), false)
+assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(0, true), false)
+
 const remoteProgress = loadTsModule('src/utils/remoteProgress.ts')
 assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 2, 450), true)
 assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1300, 2, 450), false)
@@ -185,6 +193,41 @@ const resolvedDiff = syncDiff.applySyncDiffResolution({
   chapters: [], rules: [], themes: [], bookmarks: [], readingStats: [],
 }, { 'books:book-a': 'remote' })
 assert.equal(resolvedDiff.books[0].title, 'Remote')
+
+const remappedRemote = syncDiff.remapRemoteSyncEntityIds({
+  books: [{ id: 1, title: '本地书', readingStatsKey: 'local-book' }],
+  chapters: [{ id: 1, bookId: 1, orderIndex: 0, title: '本地章' }],
+  rules: [{ id: 1, pattern: 'local', scope: 'book', bookId: 1 }],
+  themes: [],
+  bookmarks: [{ id: 1, uuid: 'local-mark', bookId: 1 }],
+  readingStats: [],
+}, {
+  books: [{ id: 1, title: '远端书', readingStatsKey: 'remote-book' }],
+  chapters: [{ id: 1, bookId: 1, orderIndex: 0, title: '远端章', bodyTextPath: 'book_1/chapter_1.txt.gz' }],
+  rules: [{ id: 1, pattern: 'remote', scope: 'book', bookId: 1 }],
+  themes: [],
+  bookmarks: [{ id: 1, uuid: 'remote-mark', bookId: 1 }],
+  readingStats: [],
+})
+assert.notEqual(remappedRemote.books[0].id, 1)
+assert.equal(remappedRemote.chapters[0].bookId, remappedRemote.books[0].id)
+assert.equal(remappedRemote.rules[0].bookId, remappedRemote.books[0].id)
+assert.equal(remappedRemote.bookmarks[0].bookId, remappedRemote.books[0].id)
+assert.notEqual(remappedRemote.chapters[0].id, 1)
+assert.equal(remappedRemote.chapters[0].bodyTextPath, 'book_1/chapter_1.txt.gz')
+
+const sameBookRemap = syncDiff.remapRemoteSyncEntityIds({
+  books: [{ id: 3, title: '同一本', readingStatsKey: 'same-book' }],
+  chapters: [{ id: 30, bookId: 3, orderIndex: 0, title: '本地章' }],
+  rules: [], themes: [], bookmarks: [], readingStats: [],
+}, {
+  books: [{ id: 99, title: '同一本', readingStatsKey: 'same-book' }],
+  chapters: [{ id: 990, bookId: 99, orderIndex: 0, title: '远端章' }],
+  rules: [], themes: [], bookmarks: [], readingStats: [],
+})
+assert.equal(sameBookRemap.books[0].id, 3)
+assert.equal(sameBookRemap.chapters[0].bookId, 3)
+assert.equal(sameBookRemap.chapters[0].id, 30)
 
 const readingInsights = loadTsModule('src/utils/readingInsights.ts')
 const insightRows = [

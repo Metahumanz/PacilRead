@@ -9,6 +9,7 @@ import { normalizeBookMetadata } from '../utils/bookMetadata'
 import {
   applySyncDiffResolution,
   buildSyncDiffPreview,
+  remapRemoteSyncEntityIds,
   type SyncDiffPreview,
   type SyncResolutionMap,
 } from '../utils/syncDiff'
@@ -19,18 +20,41 @@ interface ManifestFileEntry {
   size: number
 }
 
-interface ManifestAssetEntry {
+export interface ManifestAssetEntry {
   size: number
+  sha256?: string
 }
 
-interface Manifest {
+export interface SyncManifest {
   schemaVersion: number
   generatedAt: number
+  generationId?: string
   files: Record<string, ManifestFileEntry>
   assets: Record<string, ManifestAssetEntry>
+  scopes?: {
+    chapterText?: boolean
+    covers?: boolean
+    sourceFiles?: boolean
+  }
 }
 
+interface SnapshotCommit {
+  schemaVersion: number
+  generationId: string
+  manifestSha256: string
+  committedAt: number
+}
+
+interface PreparedAsset {
+  key: string
+  localPath: string
+  integrity: ManifestAssetEntry & { sha256: string }
+}
+
+type Manifest = SyncManifest
+
 const MANIFEST_SCHEMA_VERSION = 1
+const SNAPSHOT_COMMIT_FILE = 'commit.json'
 const ENTITY_TYPES = ['books', 'chapters', 'rules', 'themes', 'bookmarks', 'readingStats'] as const
 type EntityType = typeof ENTITY_TYPES[number]
 type SyncEntityPayloads = Record<EntityType, any>
@@ -69,11 +93,59 @@ function utf8Size(text: string): number {
   return new TextEncoder().encode(text).byteLength
 }
 
+function parseEntityArrayJson(raw: string, label: string): any[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`${label} JSON 格式损坏`)
+  }
+  if (!Array.isArray(parsed)) throw new Error(`${label} 数据结构无效`)
+  if (parsed.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+    throw new Error(`${label} 含有非对象记录`)
+  }
+  return parsed
+}
+
 async function sha256TextHex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return Array.from(new Uint8Array(digest))
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('')
+}
+
+function createGenerationId(): string {
+  const suffix = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`
+  return `${Date.now()}-${suffix}`
+}
+
+function manifestJson(manifest: Manifest): string {
+  return JSON.stringify(manifest, null, 2)
+}
+
+function assetFileName(value: unknown): string {
+  const clean = String(value || '').split(/[?#]/)[0].replace(/\\/g, '/')
+  return clean.split('/').pop() || ''
+}
+
+function encodeAssetKey(key: string): string {
+  return key.split('/').map(encodeURIComponent).join('/')
+}
+
+async function assertManagedFileIntegrity(
+  filePath: string,
+  expected: ManifestAssetEntry,
+  label: string,
+): Promise<void> {
+  const actual = await window.electronAPI.library.getManagedFileIntegrity(filePath)
+  if (actual.size !== expected.size) {
+    throw new Error(`${label}大小校验失败`)
+  }
+  if (expected.sha256 && actual.sha256.toLowerCase() !== expected.sha256.toLowerCase()) {
+    throw new Error(`${label} SHA-256 校验失败`)
+  }
 }
 
 // ---- WebDAV path helpers ----
@@ -141,6 +213,16 @@ export type {
   SyncResolutionMap,
 }
 
+export interface FullRestoreV8Result {
+  success: boolean
+  error?: string
+  desktopSettingsFallback?: Record<string, string>
+  resolvedBase?: string
+  manifest?: SyncManifest
+  strictSnapshot?: boolean
+  sourceFilesDownloaded?: number
+}
+
 export async function previewSyncDiff(): Promise<{
   success: boolean
   preview?: SyncDiffPreview
@@ -149,7 +231,7 @@ export async function previewSyncDiff(): Promise<{
   try {
     const dataStore = useDataStore()
     const localEntities = buildSyncEntities(dataStore)
-    const remoteEntities = await downloadRemoteSyncEntities()
+    const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
     return {
       success: true,
       preview: buildSyncDiffPreview(localEntities as any, remoteEntities as any),
@@ -165,12 +247,9 @@ export async function applySyncResolution(
 ): Promise<{ success: boolean; appliedFiles: string[]; error?: string }> {
   try {
     const dataStore = useDataStore()
-    onProgress?.('正在创建本地恢复点...')
-    await window.electronAPI.snapshot.create('WebDAV 差异应用前自动快照')
-
     onProgress?.('正在下载远端差异数据...')
     const localEntities = buildSyncEntities(dataStore)
-    const remoteEntities = await downloadRemoteSyncEntities()
+    const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
     const merged = applySyncDiffResolution(localEntities as any, remoteEntities as any, resolutions)
 
     onProgress?.('正在应用选择结果...')
@@ -182,10 +261,11 @@ export async function applySyncResolution(
     const appliedFiles: string[] = []
     for (const entity of ENTITY_TYPES) {
       const jsonStr = entityJson(merged, entity)
-      await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+      const ok = await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+      if (!ok) throw new Error(`上传 sync/${entity}.json 失败`)
       appliedFiles.push(`${entity}.json`)
     }
-    await uploadManifest(manifest, 'sync')
+    if (!await uploadManifest(manifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
     appliedFiles.push('manifest.json')
 
     onProgress?.('正在同步封面文件...')
@@ -239,10 +319,74 @@ function getCoverFilenames(books: any[]): string[] {
   const filenames = new Set<string>()
   for (const book of books) {
     if (book.coverFile) {
-      filenames.add(book.coverFile)
+      const filename = assetFileName(book.coverFile)
+      if (filename) filenames.add(filename)
     }
   }
   return [...filenames]
+}
+
+function getSourceFilenames(books: any[]): string[] {
+  const filenames = new Set<string>()
+  for (const book of books) {
+    const filename = assetFileName(book.sourceFile)
+    if (filename) filenames.add(filename)
+  }
+  return [...filenames]
+}
+
+async function prepareFullBackupAssets(
+  entities: SyncEntityPayloads,
+  includeSourceFiles: boolean,
+  onProgress?: (message: string) => void,
+): Promise<PreparedAsset[]> {
+  const userData = (await window.electronAPI.app.getPath('userData')).replace(/\\/g, '/')
+  const assets: PreparedAsset[] = []
+  const addAsset = async (key: string, localPath: string, label: string) => {
+    const integrity = await window.electronAPI.library.getManagedFileIntegrity(localPath)
+    assets.push({ key, localPath, integrity })
+    onProgress?.(`已校验 ${label}`)
+  }
+
+  const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
+  for (let index = 0; index < bookIds.length; index++) {
+    const bookId = bookIds[index]
+    onProgress?.(`正在打包章节正文 (${index + 1}/${bookIds.length})...`)
+    const zipPath = await window.electronAPI.library.createBookChapterTextZip(bookId)
+    if (!zipPath) throw new Error(`书籍 ${bookId} 的章节正文 ZIP 生成失败`)
+    await addAsset(`chapter_text/book_${bookId}.zip`, zipPath, `书籍 ${bookId} 正文包`)
+  }
+
+  for (const filename of getCoverFilenames(entities.books)) {
+    await addAsset(`covers/${filename}`, `${userData}/covers/${filename}`, `封面 ${filename}`)
+  }
+
+  if (includeSourceFiles) {
+    for (const filename of getSourceFilenames(entities.books)) {
+      await addAsset(`books/${filename}`, `${userData}/books/${filename}`, `源文件 ${filename}`)
+    }
+  }
+
+  return assets
+}
+
+async function uploadPreparedAssets(
+  assets: PreparedAsset[],
+  onProgress?: (message: string) => void,
+): Promise<void> {
+  const ctx = getWebdavContext()
+  for (let index = 0; index < assets.length; index++) {
+    const asset = assets[index]
+    onProgress?.(`正在上传资源 (${index + 1}/${assets.length})：${asset.key}`)
+    const result = await window.electronAPI.webdav.uploadFile(
+      asset.localPath,
+      remoteUrl(encodeAssetKey(asset.key)),
+      ctx.auth,
+    )
+    if (!result.success) {
+      throw new Error(`上传资源失败：${asset.key} (${result.error || result.status || 'unknown'})`)
+    }
+  }
 }
 
 async function uploadCovers(
@@ -279,6 +423,7 @@ async function downloadCovers(
   books: any[],
   onProgress?: (message: string) => void,
   baseOverride?: string,
+  assets: Record<string, ManifestAssetEntry> = {},
 ): Promise<string[]> {
   const downloaded: string[] = []
   const coversDir = await getCoversDir()
@@ -288,6 +433,8 @@ async function downloadCovers(
 
   for (const filename of filenames) {
     const localPath = `${coversDir}/${filename}`
+    const assetKey = `covers/${filename}`
+    const expected = assets[assetKey]
     try {
       const response = await window.electronAPI.webdav.downloadFile(
         `${base}/covers/${encodeURIComponent(filename)}`,
@@ -295,22 +442,63 @@ async function downloadCovers(
         ctx.auth,
       )
       if (response.success) {
+        if (expected) await assertManagedFileIntegrity(localPath, expected, `封面 ${filename}`)
         downloaded.push(filename)
       } else {
-        // File may not exist remotely — that's okay for optional covers
+        if (expected) throw new Error(`下载封面失败：${filename}`)
+        // 旧版清单未记录封面时按可选资源兼容处理。
         console.warn(`Cover not found remotely: ${filename}`)
       }
     } catch (e) {
       console.error(`Failed to download cover ${filename}:`, e)
+      if (expected) throw e
     }
   }
   if (downloaded.length > 0) onProgress?.(`已下载 ${downloaded.length} 个封面文件`)
   return downloaded
 }
 
+async function downloadSourceFiles(
+  books: any[],
+  onProgress?: (message: string) => void,
+  baseOverride?: string,
+  assets: Record<string, ManifestAssetEntry> = {},
+): Promise<string[]> {
+  const userData = (await window.electronAPI.app.getPath('userData')).replace(/\\/g, '/')
+  const ctx = getWebdavContext()
+  const base = baseOverride || ctx.baseUrl
+  const filenames = getSourceFilenames(books)
+  const downloaded: string[] = []
+
+  for (let index = 0; index < filenames.length; index++) {
+    const filename = filenames[index]
+    const assetKey = `books/${filename}`
+    const expected = assets[assetKey]
+    if (Object.keys(assets).length > 0 && !expected) continue
+    const localPath = `${userData}/books/${filename}`
+    onProgress?.(`正在下载源文件 (${index + 1}/${filenames.length})...`)
+    const response = await window.electronAPI.webdav.downloadFile(
+      `${base}/books/${encodeURIComponent(filename)}`,
+      localPath,
+      ctx.auth,
+    )
+    if (!response.success) throw new Error(`下载源文件失败：${filename}`)
+    if (expected) await assertManagedFileIntegrity(localPath, expected, `源文件 ${filename}`)
+    downloaded.push(filename)
+  }
+  return downloaded
+}
+
 // ---- Manifest operations ----
 
-async function generateManifest(entities: SyncEntityPayloads): Promise<Manifest> {
+async function generateManifest(
+  entities: SyncEntityPayloads,
+  options: {
+    generationId?: string
+    assets?: PreparedAsset[]
+    scopes?: Manifest['scopes']
+  } = {},
+): Promise<Manifest> {
   const files: Record<string, ManifestFileEntry> = {}
   const assets: Record<string, ManifestAssetEntry> = {}
 
@@ -323,22 +511,56 @@ async function generateManifest(entities: SyncEntityPayloads): Promise<Manifest>
     }
   }
 
-  // TODO: Add asset manifests for chapter_text zips (covers are already synced via uploadCovers/downloadCovers)
+  for (const asset of options.assets || []) {
+    assets[asset.key] = { ...asset.integrity }
+  }
 
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     generatedAt: Date.now(),
+    ...(options.generationId ? { generationId: options.generationId } : {}),
     files,
     assets,
+    ...(options.scopes ? { scopes: options.scopes } : {}),
   }
 }
 
 async function uploadManifest(manifest: Manifest, dir: 'database' | 'sync'): Promise<boolean> {
-  return webdavPut(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2), 'application/json')
+  return webdavPut(`${dir}/manifest.json`, manifestJson(manifest), 'application/json')
 }
 
 async function downloadManifest(dir: 'database' | 'sync'): Promise<Manifest | null> {
   return webdavGetJson<Manifest>(`${dir}/manifest.json`)
+}
+
+async function uploadSnapshotCommit(manifest: Manifest, dir: 'database' | 'sync'): Promise<boolean> {
+  if (!manifest.generationId) return false
+  const commit: SnapshotCommit = {
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    generationId: manifest.generationId,
+    manifestSha256: await sha256TextHex(manifestJson(manifest)),
+    committedAt: Date.now(),
+  }
+  return webdavPut(`${dir}/${SNAPSHOT_COMMIT_FILE}`, JSON.stringify(commit, null, 2), 'application/json')
+}
+
+async function validateSnapshotCommitAt(baseUrl: string, manifest: Manifest, manifestRaw: string): Promise<void> {
+  if (!manifest.generationId) return
+  const commitRaw = await getJsonAt(baseUrl, `database/${SNAPSHOT_COMMIT_FILE}`)
+  if (!commitRaw) throw new Error('完整快照尚未提交完成，请重新执行全量备份')
+  let commit: SnapshotCommit
+  try {
+    commit = JSON.parse(commitRaw) as SnapshotCommit
+  } catch {
+    throw new Error('完整快照提交标记损坏')
+  }
+  if (commit.generationId !== manifest.generationId) {
+    throw new Error('完整快照提交标记与 manifest 不匹配')
+  }
+  const manifestSha256 = await sha256TextHex(manifestRaw)
+  if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
+    throw new Error('完整快照 manifest 校验失败')
+  }
 }
 
 async function downloadRemoteSyncEntities(): Promise<Partial<SyncEntityPayloads>> {
@@ -348,13 +570,18 @@ async function downloadRemoteSyncEntities(): Promise<Partial<SyncEntityPayloads>
   const entities: Partial<SyncEntityPayloads> = {}
   for (const entity of ENTITY_TYPES) {
     const fileName = `${entity}.json`
-    if (!remoteManifest.files[fileName]) continue
-    const remoteData = await webdavGetJson<any[]>(`sync/${fileName}`)
-    if (Array.isArray(remoteData)) {
-      ;(entities as any)[entity] = entity === 'books'
-        ? remoteData.map(book => normalizeBookMetadata(book))
-        : remoteData
+    const expected = remoteManifest.files[fileName]
+    if (!expected?.sha256) throw new Error(`远程 manifest 缺少 ${fileName} 校验信息`)
+    const remoteText = await webdavGet(`sync/${fileName}`)
+    if (remoteText === null) throw new Error(`远程缺少 sync/${fileName}`)
+    if (utf8Size(remoteText) !== expected.size) throw new Error(`sync/${fileName} 大小校验失败`)
+    if ((await sha256TextHex(remoteText)).toLowerCase() !== expected.sha256.toLowerCase()) {
+      throw new Error(`sync/${fileName} SHA-256 校验失败`)
     }
+    const remoteData = parseEntityArrayJson(remoteText, `sync/${fileName}`)
+    ;(entities as any)[entity] = entity === 'books'
+      ? remoteData.map(book => normalizeBookMetadata(book))
+      : remoteData
   }
   return entities
 }
@@ -373,177 +600,19 @@ function findChangedFiles(local: Manifest, remote: Manifest): string[] {
   return changed
 }
 
-// ---- Entity merge logic ----
-
-type MatchKeyFn<T> = (entity: T) => string
-
-function toNumberOrNull(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const num = Number(value)
-  return Number.isFinite(num) ? num : null
-}
-
-function normalizeRuleScope(value: unknown): 'global' | 'book' {
-  return value === 'book' ? 'book' : 'global'
-}
-
-function getRuleBookId(rule: any): number | null {
-  return toNumberOrNull(rule?.bookId ?? rule?.book_id)
-}
-
-function getRuleUpdatedAt(rule: any): number {
-  return Number(rule?.updatedAt ?? rule?.updated_at ?? 0) || 0
-}
-
-function getRuleRegex(rule: any): boolean {
-  if (typeof rule?.regex === 'boolean') return rule.regex
-  return Number(rule?.is_regex ?? 0) === 1
-}
-
-function getRuleActive(rule: any): boolean {
-  if (typeof rule?.active === 'boolean') return rule.active
-  return Number(rule?.active ?? 1) === 1
-}
-
-function normalizeRuleForSync(rule: any, bookId: number | null = getRuleBookId(rule)): any {
-  const scope = normalizeRuleScope(rule?.scope)
-  return {
-    id: toNumberOrNull(rule?.id) ?? 0,
-    pattern: String(rule?.pattern || ''),
-    replacement: String(rule?.replacement || ''),
-    scope,
-    bookId: scope === 'book' ? bookId : null,
-    regex: getRuleRegex(rule),
-    active: getRuleActive(rule),
-    updatedAt: getRuleUpdatedAt(rule),
-  }
-}
-
-function isSameNormalizedRule(source: any, normalized: any): boolean {
-  return toNumberOrNull(source?.id) === normalized.id &&
-    String(source?.pattern || '') === normalized.pattern &&
-    String(source?.replacement || '') === normalized.replacement &&
-    normalizeRuleScope(source?.scope) === normalized.scope &&
-    getRuleBookId(source) === normalized.bookId &&
-    getRuleRegex(source) === normalized.regex &&
-    getRuleActive(source) === normalized.active &&
-    getRuleUpdatedAt(source) === normalized.updatedAt
-}
-
-function buildRuleSyncKey(rule: any): string {
-  const normalized = normalizeRuleForSync(rule)
-  return [
-    normalized.pattern,
-    normalized.scope,
-    normalized.scope === 'book' ? String(normalized.bookId ?? 0) : '0',
-  ].join('|')
-}
-
-function nextEntityId(items: Array<{ id?: number }>): number {
-  const maxId = items.reduce((max, item) => Math.max(max, Number(item.id || 0)), 0)
-  return maxId + 1
-}
-
-function getBookSyncIdentity(book: any): string {
-  return String(book?.readingStatsKey || '').trim()
-}
-
-function mapRemoteRuleBookIdToLocal(remoteRule: any, remoteBooks: any[], localBooks: any[]): number | null {
-  const remoteBookId = getRuleBookId(remoteRule)
-  if (remoteBookId === null) return null
-  const remoteBook = remoteBooks.find(book => Number(book?.id) === remoteBookId)
-  const remoteIdentity = getBookSyncIdentity(remoteBook)
-  if (!remoteIdentity) return remoteBookId
-  const localBook = localBooks.find(book => getBookSyncIdentity(book) === remoteIdentity)
-  return toNumberOrNull(localBook?.id) ?? remoteBookId
-}
-
-function mergeRules(
-  localRules: any[],
-  remoteRules: any[],
-  remoteBooks: any[],
-  localBooks: any[],
-): { merged: any[]; changes: number } {
-  const byKey = new Map<string, any>()
-  let changes = 0
-
-  for (const rule of localRules) {
-    const normalized = normalizeRuleForSync(rule)
-    const key = buildRuleSyncKey(normalized)
-    const existing = byKey.get(key)
-    if (!existing || normalized.updatedAt >= existing.updatedAt) {
-      byKey.set(key, normalized)
-    }
-    if (existing || !isSameNormalizedRule(rule, normalized)) changes++
-  }
-
-  for (const remoteRule of remoteRules) {
-    const mappedBookId = mapRemoteRuleBookIdToLocal(remoteRule, remoteBooks, localBooks)
-    const normalized = normalizeRuleForSync(remoteRule, mappedBookId)
-    const key = buildRuleSyncKey(normalized)
-    const localMatch = byKey.get(key)
-
-    if (!localMatch) {
-      normalized.id = nextEntityId(Array.from(byKey.values()))
-      byKey.set(key, normalized)
-      changes++
-    } else if (normalized.updatedAt > localMatch.updatedAt) {
-      byKey.set(key, { ...localMatch, ...normalized, id: localMatch.id })
-      changes++
-    }
-  }
-
-  return {
-    merged: Array.from(byKey.values()).sort((a, b) => Number(a.id || 0) - Number(b.id || 0)),
-    changes,
-  }
-}
-
-function mergeEntities<T extends { updatedAt: number }>(
-  local: T[],
-  remote: T[],
-  matchKey: MatchKeyFn<T>,
-): { merged: T[]; changes: number } {
-  const remoteMap = new Map<string, T>()
-  for (const entity of remote) {
-    remoteMap.set(matchKey(entity), entity)
-  }
-
-  let changes = 0
-  const localKeys = new Set<string>()
-
-  // Update existing and add new from remote
-  for (const remoteEntity of remote) {
-    const key = matchKey(remoteEntity)
-    const localIdx = local.findIndex(e => matchKey(e) === key)
-    if (localIdx !== -1) {
-      localKeys.add(key)
-      if (remoteEntity.updatedAt > local[localIdx].updatedAt) {
-        local[localIdx] = remoteEntity
-        changes++
-      }
-    } else {
-      local.push(remoteEntity)
-      changes++
-    }
-  }
-
-  // Keep local entities not in remote
-  // (they're already in the array, we just tracked which ones matched)
-
-  return { merged: local, changes }
-}
-
 // ---- Full backup ----
 
 export async function fullBackupV8(
   onProgress?: (message: string) => void,
+  options: { includeSourceFiles?: boolean } = {},
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const dataStore = useDataStore()
     onProgress?.('正在读取本地数据...')
 
     const entities = buildSyncEntities(dataStore)
+    const generationId = createGenerationId()
+    const assets = await prepareFullBackupAssets(entities, options.includeSourceFiles === true, onProgress)
 
     // Upload each entity JSON file to database/ directory for mobile compatibility.
     for (const entity of ENTITY_TYPES) {
@@ -553,25 +622,30 @@ export async function fullBackupV8(
       if (!ok) throw new Error(`上传 ${entity}.json 失败`)
     }
 
-    // Generate and upload manifest
-    onProgress?.('正在生成清单文件...')
-    const manifest = await generateManifest(entities)
-    await uploadManifest(manifest, 'database')
-
-    // Also upload manifest to sync/ for incremental sync
-    await uploadManifest(manifest, 'sync')
-
-    // Also upload individual entity files to sync/
     onProgress?.('正在上传增量同步文件...')
     for (const entity of ENTITY_TYPES) {
       const jsonStr = entityJson(entities, entity)
-      await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+      const ok = await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+      if (!ok) throw new Error(`上传 sync/${entity}.json 失败`)
     }
-    await cleanupLegacySettingsFiles()
 
-    // Upload cover image files
-    onProgress?.('正在上传封面文件...')
-    await uploadCovers(entities.books, onProgress)
+    await uploadPreparedAssets(assets, onProgress)
+
+    onProgress?.('正在生成完整资源清单...')
+    const manifest = await generateManifest(entities, {
+      generationId,
+      assets,
+      scopes: {
+        chapterText: true,
+        covers: true,
+        sourceFiles: options.includeSourceFiles === true,
+      },
+    })
+    if (!await uploadManifest(manifest, 'database')) throw new Error('上传 database/manifest.json 失败')
+    if (!await uploadManifest(manifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
+    if (!await uploadSnapshotCommit(manifest, 'database')) throw new Error('提交完整快照失败')
+    if (!await uploadSnapshotCommit(manifest, 'sync')) throw new Error('提交增量基线失败')
+    await cleanupLegacySettingsFiles()
 
     onProgress?.('全量备份完成!')
     return { success: true }
@@ -584,7 +658,8 @@ export async function fullBackupV8(
 
 export async function fullRestoreV8(
   onProgress?: (message: string) => void,
-): Promise<{ success: boolean; error?: string; desktopSettingsFallback?: Record<string, string> }> {
+  options: { includeSourceFiles?: boolean } = {},
+): Promise<FullRestoreV8Result> {
   try {
     const dataStore = useDataStore()
     const desktopSettingsFallback: Record<string, string> = {}
@@ -609,29 +684,34 @@ export async function fullRestoreV8(
       return { success: false, error: '远程没有 v8 JSON 格式数据，请尝试旧格式恢复' }
     }
 
-    onProgress?.('正在下载数据...')
+    const manifestRaw = await getJsonAt(base, 'database/manifest.json')
+    if (!manifestRaw) return { success: false, error: '远程 manifest.json 无法读取' }
+    let manifest: Manifest
+    try {
+      manifest = JSON.parse(manifestRaw) as Manifest
+    } catch {
+      return { success: false, error: '远程 manifest.json 已损坏' }
+    }
+    if (!manifest.files || typeof manifest.files !== 'object') {
+      return { success: false, error: '远程 manifest.json 缺少文件清单' }
+    }
+    await validateSnapshotCommitAt(base, manifest, manifestRaw)
+
+    onProgress?.('正在下载并校验 JSON 数据...')
     const entities: Record<string, any> = {}
 
     for (const entity of ENTITY_TYPES) {
+      const fileName = `${entity}.json`
+      const expected = manifest.files[fileName]
+      if (!expected?.sha256) throw new Error(`manifest 缺少 ${fileName} 校验信息`)
       onProgress?.(`正在下载 ${entity}.json...`)
-      const raw = await getJsonAt(base, `database/${entity}.json`)
-      if (raw !== null) {
-        try {
-          entities[entity] = JSON.parse(raw)
-        } catch {}
+      const raw = await getJsonAt(base, `database/${fileName}`)
+      if (raw === null) throw new Error(`完整快照缺少 ${fileName}`)
+      if (utf8Size(raw) !== expected.size) throw new Error(`${fileName} 大小校验失败`)
+      if ((await sha256TextHex(raw)).toLowerCase() !== expected.sha256.toLowerCase()) {
+        throw new Error(`${fileName} SHA-256 校验失败`)
       }
-    }
-
-    // Also try from sync/ directory as fallback
-    for (const entity of ENTITY_TYPES) {
-      if (!entities[entity]) {
-        const raw = await getJsonAt(base, `sync/${entity}.json`)
-        if (raw !== null) {
-          try {
-            entities[entity] = JSON.parse(raw)
-          } catch {}
-        }
-      }
+      entities[entity] = parseEntityArrayJson(raw, fileName)
     }
 
     const collectLegacySettings = async (path: string) => {
@@ -644,21 +724,31 @@ export async function fullRestoreV8(
     await collectLegacySettings('database/settings.json')
     await collectLegacySettings('sync/settings.json')
 
-    onProgress?.('正在创建本地恢复点...')
-    await window.electronAPI.snapshot.create('WebDAV 全量恢复前自动快照')
-
     onProgress?.('正在应用数据...')
     await dataStore.replaceAllEntities(entities as any)
     dataStore.dataLoaded.value = true
 
-    // Download cover image files
+    const assets = manifest.assets || {}
+    let sourceFilesDownloaded = 0
     if (entities.books) {
-      onProgress?.('正在下载封面文件...')
-      await downloadCovers(entities.books, onProgress, base)
+      if (manifest.scopes?.covers !== false) {
+        onProgress?.('正在下载封面文件...')
+        await downloadCovers(entities.books, onProgress, base, assets)
+      }
+      if (options.includeSourceFiles && manifest.scopes?.sourceFiles !== false) {
+        sourceFilesDownloaded = (await downloadSourceFiles(entities.books, onProgress, base, assets)).length
+      }
     }
 
     onProgress?.('全量恢复完成!')
-    return { success: true, desktopSettingsFallback }
+    return {
+      success: true,
+      desktopSettingsFallback,
+      resolvedBase: base,
+      manifest,
+      strictSnapshot: Boolean(manifest.generationId),
+      sourceFilesDownloaded,
+    }
   } catch (e) {
     return { success: false, error: String(e) }
   }
@@ -673,13 +763,29 @@ export async function incrementalBackupV8(
     const dataStore = useDataStore()
     const uploadedFiles: string[] = []
 
-    const entities = buildSyncEntities(dataStore)
-
-    onProgress?.('正在生成本地清单...')
-    const localManifest = await generateManifest(entities)
+    const localEntities = buildSyncEntities(dataStore)
 
     onProgress?.('正在下载远程清单...')
     const remoteManifest = await downloadManifest('sync')
+    let entities = localEntities
+
+    if (remoteManifest) {
+      onProgress?.('正在保留其他设备的云端独有数据...')
+      const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
+      const preview = buildSyncDiffPreview(localEntities, remoteEntities)
+      const preserveResolutions: SyncResolutionMap = {}
+      for (const item of preview.items) {
+        if (item.status === 'conflict') preserveResolutions[item.id] = 'local'
+      }
+      entities = applySyncDiffResolution(localEntities, remoteEntities, preserveResolutions)
+    }
+
+    onProgress?.('正在生成本地清单...')
+    const localManifest = await generateManifest(entities)
+    if (remoteManifest) {
+      localManifest.assets = { ...(remoteManifest.assets || {}) }
+      localManifest.scopes = remoteManifest.scopes
+    }
 
     if (!remoteManifest) {
       // First time - do full upload to sync/
@@ -687,10 +793,11 @@ export async function incrementalBackupV8(
       for (const entity of ENTITY_TYPES) {
         onProgress?.(`正在上传 ${entity}.json...`)
         const jsonStr = entityJson(entities, entity)
-        await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+        const ok = await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
+        if (!ok) throw new Error(`上传 sync/${entity}.json 失败`)
         uploadedFiles.push(`${entity}.json`)
       }
-      await uploadManifest(localManifest, 'sync')
+      if (!await uploadManifest(localManifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
       uploadedFiles.push('manifest.json')
       await cleanupLegacySettingsFiles()
     } else {
@@ -702,13 +809,14 @@ export async function incrementalBackupV8(
         if (entity in entities) {
           onProgress?.(`正在上传 ${fileName}...`)
           const jsonStr = entityJson(entities, entity as EntityType)
-          await webdavPut(`sync/${fileName}`, jsonStr, 'application/json')
+          const ok = await webdavPut(`sync/${fileName}`, jsonStr, 'application/json')
+          if (!ok) throw new Error(`上传 sync/${fileName} 失败`)
           uploadedFiles.push(fileName)
         }
       }
 
       if (changed.length > 0) {
-        await uploadManifest(localManifest, 'sync')
+        if (!await uploadManifest(localManifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
         uploadedFiles.push('manifest.json')
       }
       await cleanupLegacySettingsFiles()
@@ -716,7 +824,7 @@ export async function incrementalBackupV8(
 
     // Upload cover image files
     onProgress?.('正在上传封面文件...')
-    const coversUploaded = await uploadCovers(entities.books, onProgress)
+    const coversUploaded = await uploadCovers(localEntities.books, onProgress)
     coversUploaded.forEach(f => uploadedFiles.push(`covers/${f}`))
 
     return { success: true, uploadedFiles }
@@ -738,15 +846,7 @@ export async function incrementalRestoreV8(
   try {
     const dataStore = useDataStore()
     const mergedFiles: string[] = []
-    let remoteBooksForRuleMerge: any[] | null = null
     const desktopSettingsFallback: Record<string, string> = {}
-
-    const getRemoteBooksForRuleMerge = async () => {
-      if (remoteBooksForRuleMerge !== null) return remoteBooksForRuleMerge
-      const remoteBooks = await webdavGetJson<any[]>('sync/books.json')
-      remoteBooksForRuleMerge = Array.isArray(remoteBooks) ? remoteBooks : []
-      return remoteBooksForRuleMerge
-    }
 
     onProgress?.('正在下载远程清单...')
     const remoteManifest = await downloadManifest('sync')
@@ -754,64 +854,19 @@ export async function incrementalRestoreV8(
       return { success: false, mergedFiles: [], error: '远程没有增量同步数据' }
     }
 
-    onProgress?.('正在创建本地恢复点...')
-    await window.electronAPI.snapshot.create('WebDAV 增量恢复前自动快照')
+    const localEntities = buildSyncEntities(dataStore)
+    const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
+    const mergedEntities = applySyncDiffResolution(localEntities, remoteEntities, {})
+    for (const entity of ENTITY_TYPES) {
+      const fileName = `${entity}.json`
+      if (entityJson(localEntities, entity) === entityJson(mergedEntities, entity)) continue
+      await window.electronAPI.data.writeEntity(entity, toRaw(mergedEntities[entity]))
+      mergedFiles.push(fileName)
+    }
 
-    // Download and merge each entity file
-    for (const [fileName] of Object.entries(remoteManifest.files)) {
-      const entity = fileName.replace('.json', '')
-
-      onProgress?.(`正在下载 ${fileName}...`)
-      const remoteData = await webdavGetJson<any[] | Record<string, string>>(`sync/${fileName}`)
-      if (remoteData === null) continue
-
-      if (entity === 'settings') {
-        Object.assign(desktopSettingsFallback, extractLegacyDesktopSettings(remoteData))
-        continue
-      }
-
-      if (!ENTITY_TYPES.includes(entity as any)) continue
-
-      // Get local data
-      const localEntities = (dataStore as any)[entity].value as any[]
-
-      if (entity === 'rules' && Array.isArray(localEntities) && Array.isArray(remoteData)) {
-        const remoteBooks = await getRemoteBooksForRuleMerge()
-        const { merged, changes } = mergeRules(
-          localEntities,
-          remoteData,
-          remoteBooks,
-          dataStore.books.value,
-        )
-        dataStore.rules.value = merged as any
-        if (changes > 0) {
-          await window.electronAPI.data.writeEntity(entity, toRaw(merged))
-          mergedFiles.push(fileName)
-        }
-      } else if (Array.isArray(localEntities) && Array.isArray(remoteData)) {
-        // Array entities: merge by updatedAt
-        const matchKeys: Record<string, MatchKeyFn<any>> = {
-          books: (b: any) => b.readingStatsKey || `${b.title}\n${b.author || ''}`,
-          chapters: (c: any) => `${c.bookId}_${c.orderIndex}`,
-          themes: (t: any) => t.name,
-          bookmarks: (b: any) => b.uuid,
-          readingStats: (r: any) => `${r.sourceDeviceId}_${r.date}_${r.bookIdentity}`,
-        }
-
-        const matchKey = matchKeys[entity]
-        if (matchKey) {
-          const { merged, changes } = mergeEntities(
-            localEntities as any[],
-            remoteData as any[],
-            matchKey,
-          )
-          ;(dataStore as any)[entity].value = merged
-          if (changes > 0) {
-            await window.electronAPI.data.writeEntity(entity, toRaw(merged))
-            mergedFiles.push(fileName)
-          }
-        }
-      }
+    const legacySettingsRaw = await webdavGet('sync/settings.json')
+    if (legacySettingsRaw !== null) {
+      try { Object.assign(desktopSettingsFallback, extractLegacyDesktopSettings(JSON.parse(legacySettingsRaw))) } catch {}
     }
 
     // Reload everything from disk to ensure consistency
@@ -821,7 +876,12 @@ export async function incrementalRestoreV8(
     // Download cover image files if books were merged
     if (mergedFiles.includes('books.json')) {
       onProgress?.('正在下载封面文件...')
-      const coversDownloaded = await downloadCovers(dataStore.books.value, onProgress)
+      const coversDownloaded = await downloadCovers(
+        dataStore.books.value,
+        onProgress,
+        undefined,
+        remoteManifest.assets || {},
+      )
       coversDownloaded.forEach(f => mergedFiles.push(`covers/${f}`))
     }
 

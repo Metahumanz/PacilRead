@@ -28,7 +28,8 @@ export interface ElectronAPI {
     getBookIdsWithFileGzipChapters: () => Promise<number[]>
     hasBookChapterTextFiles: (bookId: number) => Promise<boolean>
     createBookChapterTextZip: (bookId: number) => Promise<string | null>
-    extractBookChapterTextZip: (zipPath: string) => Promise<number>
+    extractBookChapterTextZip: (zipPath: string, bookId?: number) => Promise<number>
+    getManagedFileIntegrity: (filePath: string) => Promise<{ size: number; sha256: string }>
     isSearchIndexReady: (bookId: number) => Promise<boolean>
     searchBook: (bookId: number, query: string) => Promise<BookSearchResult[]>
   }
@@ -48,12 +49,6 @@ export interface ElectronAPI {
   }
   clipboard: {
     writeImage: (dataUrl: string) => Promise<{ success: boolean }>
-  }
-  snapshot: {
-    create: (reason?: string) => Promise<SnapshotManifest>
-    list: () => Promise<SnapshotManifest[]>
-    restore: (id: string) => Promise<SnapshotManifest>
-    delete: (id: string) => Promise<{ success: boolean }>
   }
   win: {
     setAspectRatio: (ratio: number) => Promise<void>
@@ -140,16 +135,6 @@ export interface BookSearchResult {
   chapterTitle: string
   snippet: string
   charOffset: number
-}
-
-export interface SnapshotManifest {
-  id: string
-  reason: string
-  createdAt: number
-  schemaVersion: number
-  entityCounts: Record<string, number>
-  chapterTextFiles: number
-  sizeBytes: number
 }
 
 export interface ChapterMeta {

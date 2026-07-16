@@ -5,6 +5,7 @@ import {
   applySyncResolution,
   fullBackupV8, fullRestoreV8, incrementalBackupV8,
   previewSyncDiff,
+  type SyncManifest,
   type SyncDiffPreview,
   type SyncResolutionMap,
 } from '../composables/useV8Sync'
@@ -13,7 +14,12 @@ import { useRuleManager } from '../composables/useRuleManager'
 import { useUpdaterStatus } from '../composables/useUpdaterStatus'
 import type { ReadingStatsOverview } from '../composables/useReadingStats'
 import { hasReadingStatsHistory } from '../utils/readingStatsAvailability'
-import { buildPacilReadBaseUrl, extractHrefValues, sanitizeWebdavDirectorySegment } from '../utils/webdav'
+import { buildPacilReadBaseUrl, sanitizeWebdavDirectorySegment } from '../utils/webdav'
+import {
+  isChapterTextZipRestoreComplete,
+  shouldSkipExistingChapterTextZip,
+  type ChapterTextBackupMode,
+} from '../utils/chapterTextSync'
 
 import SettingsCategoryPane from './settings/SettingsCategoryPane.vue'
 import { addShortcutBinding } from '../utils/keyboardShortcuts'
@@ -101,7 +107,7 @@ const activeCategory = ref<SettingsCategory>('appearance')
 const settingsCategories: Array<{ key: SettingsCategory; label: string; icon: string; description: string }> = [
   { key: 'appearance', label: '外观显示', icon: '◐', description: '主题、布局与首页' },
   { key: 'reading', label: '阅读与听书', icon: '▷', description: '交互、语音与规则' },
-  { key: 'data', label: '统计与恢复', icon: '◫', description: '阅读数据与恢复点' },
+  { key: 'data', label: '阅读统计', icon: '◫', description: '阅读数据与年度报告' },
   { key: 'sync', label: '云同步', icon: '⇅', description: 'WebDAV 与备份' },
   { key: 'about', label: '关于', icon: 'ⓘ', description: '版本、更新与存储' },
 ]
@@ -123,7 +129,6 @@ const settingsLoaders: Record<string, SettingsLoader> = {
   tts: () => import('./settings/SettingsTTS.vue'),
   rules: () => import('./settings/SettingsRules.vue'),
   readingStats: () => import('./settings/SettingsReadingStats.vue'),
-  snapshots: () => import('./settings/SettingsSnapshots.vue'),
   webdav: () => import('./settings/SettingsWebDAV.vue'),
   about: () => import('./settings/SettingsAbout.vue'),
 }
@@ -291,19 +296,10 @@ const remoteFileExists = async (url: string, auth: string) => {
   }
 }
 
-const getFileNameFromPath = (value: string) => {
-  const clean = String(value || '').split(/[?#]/)[0]
-  return clean.split(/[\\/]/).pop() || ''
-}
-
-const resolveRemoteHref = (href: string, baseUrl: string) => {
-  try { return new URL(href, baseUrl).toString() } catch (_) { return href }
-}
-
 const chapterTextZipFileName = (bookId: number) => `book_${bookId}.zip`
 const legacyChapterTextZipFileName = (bookId: number) => `chapters_${bookId}.zip`
 
-const uploadBookChapterTextZips = async (auth: string) => {
+const uploadBookChapterTextZips = async (auth: string, mode: ChapterTextBackupMode) => {
   const baseUrl = getCurrentPacilReadBaseUrl()
   const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
   if (bookIds.length === 0) return { uploaded: 0, skipped: 0, total: 0 }
@@ -319,15 +315,20 @@ const uploadBookChapterTextZips = async (auth: string) => {
     const legacyRemotePath = chapterBaseUrl + legacyChapterTextZipFileName(bookId)
 
     webdavSyncStatus.value = `检查章节正文 ZIP (${i + 1}/${bookIds.length})...`
-    const exists = await remoteFileExists(remotePath, auth) || await remoteFileExists(legacyRemotePath, auth)
-    if (exists) {
+    const remoteExists = mode === 'incremental'
+      && (await remoteFileExists(remotePath, auth) || await remoteFileExists(legacyRemotePath, auth))
+    if (shouldSkipExistingChapterTextZip(mode, remoteExists)) {
       skipped += 1
       continue
     }
 
-    webdavSyncStatus.value = `上传缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
+    webdavSyncStatus.value = mode === 'full'
+      ? `刷新章节正文 ZIP (${i + 1}/${bookIds.length})...`
+      : `上传缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
     const zipPath = await window.electronAPI.library.createBookChapterTextZip(bookId)
-    if (!zipPath) continue
+    if (!zipPath) {
+      throw new Error(`书籍 ${bookId} 的章节正文 ZIP 生成失败，本次备份未完成`)
+    }
     assertUploadSucceeded(
       await window.electronAPI.webdav.uploadFile(zipPath, remotePath, auth),
       '上传章节正文 ZIP'
@@ -337,22 +338,37 @@ const uploadBookChapterTextZips = async (auth: string) => {
   return { uploaded, skipped, total: bookIds.length }
 }
 
-const downloadChapterTextZips = async (auth: string) => {
-  const baseUrl = getCurrentPacilReadBaseUrl()
+const downloadChapterTextZips = async (
+  auth: string,
+  options: { resolvedBase?: string; manifest?: SyncManifest; strictSnapshot?: boolean } = {},
+) => {
+  const configuredBaseUrl = getCurrentPacilReadBaseUrl()
+  const baseUrl = options.resolvedBase ? `${options.resolvedBase.replace(/\/+$/, '')}/` : configuredBaseUrl
   // Fallback: old backups may be under a nested PacilRead/ prefix
-  const legacyBase = baseUrl + 'PacilRead/'
+  const legacyBase = configuredBaseUrl + 'PacilRead/'
   const appDataPath = await window.electronAPI.app.getPath('userData')
   const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
   let downloaded = 0
   let missing = 0
   let skipped = 0
 
-  const tryDownloadZip = async (remotePath: string, tempZipPath: string): Promise<boolean> => {
+  const tryDownloadZip = async (
+    remotePath: string,
+    tempZipPath: string,
+    bookId: number,
+    expected?: { size: number; sha256?: string },
+  ): Promise<boolean> => {
     try {
       const result = await window.electronAPI.webdav.downloadFile(remotePath, tempZipPath, auth)
       if (!result.success) return false
-      const extracted = await window.electronAPI.library.extractBookChapterTextZip(tempZipPath)
-      return extracted > 0
+      if (expected) {
+        const actual = await window.electronAPI.library.getManagedFileIntegrity(tempZipPath)
+        if (actual.size !== expected.size) return false
+        if (expected.sha256 && actual.sha256.toLowerCase() !== expected.sha256.toLowerCase()) return false
+      }
+      const extracted = await window.electronAPI.library.extractBookChapterTextZip(tempZipPath, bookId)
+      const hasAllExpectedFiles = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
+      return isChapterTextZipRestoreComplete(extracted, hasAllExpectedFiles)
     } catch (_) {
       return false
     }
@@ -362,7 +378,7 @@ const downloadChapterTextZips = async (auth: string) => {
     const bookId = bookIds[i]
     webdavSyncStatus.value = `检查本地章节正文 (${i + 1}/${bookIds.length})...`
     const hasLocalText = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
-    if (hasLocalText) {
+    if (hasLocalText && !options.strictSnapshot) {
       skipped += 1
       continue
     }
@@ -370,105 +386,26 @@ const downloadChapterTextZips = async (auth: string) => {
     webdavSyncStatus.value = `下载缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
 
     const tempZipPath = appDataPath + '/book_' + bookId + '.tmp.zip'
-    const ok = await tryDownloadZip(
-      baseUrl + 'chapter_text/' + chapterTextZipFileName(bookId), tempZipPath
-    ) || await tryDownloadZip(
-      legacyBase + 'chapter_text/' + chapterTextZipFileName(bookId), tempZipPath
-    ) || await tryDownloadZip(
-      baseUrl + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath
-    ) || await tryDownloadZip(
-      legacyBase + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath
-    )
+    const assetKey = `chapter_text/${chapterTextZipFileName(bookId)}`
+    const expected = options.manifest?.assets?.[assetKey]
+    const ok = options.strictSnapshot
+      ? Boolean(expected) && await tryDownloadZip(
+          baseUrl + assetKey, tempZipPath, bookId, expected
+        )
+      : await tryDownloadZip(
+          baseUrl + assetKey, tempZipPath, bookId, expected
+        ) || await tryDownloadZip(
+          legacyBase + 'chapter_text/' + chapterTextZipFileName(bookId), tempZipPath, bookId
+        ) || await tryDownloadZip(
+          configuredBaseUrl + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath, bookId
+        ) || await tryDownloadZip(
+          legacyBase + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath, bookId
+        )
     if (ok) { downloaded += 1; continue }
     missing += 1
   }
 
   return { downloaded, missing, skipped, total: bookIds.length }
-}
-
-const cleanRemoteOrphans = async (auth: string) => {
-  const baseUrl = getCurrentPacilReadBaseUrl()
-
-  // 1. Clean orphan chapter text ZIPs
-  try {
-    const chapterTextDir = baseUrl + 'chapter_text/'
-    const chapterFilesResult = await window.electronAPI.webdav.request({
-      url: chapterTextDir, method: 'PROPFIND',
-      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
-    })
-    if (chapterFilesResult.status === 207 && chapterFilesResult.data) {
-      const hrefs = extractHrefValues(chapterFilesResult.data)
-      const zipFiles = hrefs.filter((f: string) => /(?:book|chapters)_\d+\.zip$/.test(f))
-      const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
-      const bookIdSet = new Set(bookIds)
-      for (const zipFile of zipFiles) {
-        const match = zipFile.match(/(?:book|chapters)_(\d+)\.zip$/)
-        if (match) {
-          const remoteBookId = parseInt(match[1])
-          if (!bookIdSet.has(remoteBookId)) {
-            await window.electronAPI.webdav.request({
-              url: resolveRemoteHref(zipFile, chapterTextDir), method: 'DELETE',
-              headers: { Authorization: `Basic ${auth}` }
-            })
-          }
-        }
-      }
-    }
-  } catch (_) {}
-
-  // 2. Clean orphan covers
-  try {
-    const coversDir = baseUrl + 'covers/'
-    const coversResult = await window.electronAPI.webdav.request({
-      url: coversDir, method: 'PROPFIND',
-      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
-    })
-    if (coversResult.status === 207 && coversResult.data) {
-      const coverFiles = extractHrefValues(coversResult.data)
-      const dataStore = useDataStore()
-      if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-      const usedCovers = dataStore.books.value
-        .map(book => book.coverFile ? getFileNameFromPath(book.coverFile) : '')
-        .filter(Boolean)
-      const usedSet = new Set(usedCovers)
-      for (const coverFile of coverFiles) {
-        const fileName = coverFile.split('/').pop() || ''
-        if (fileName && !usedSet.has(fileName)) {
-          await window.electronAPI.webdav.request({
-            url: resolveRemoteHref(coverFile, coversDir), method: 'DELETE',
-            headers: { Authorization: `Basic ${auth}` }
-          })
-        }
-      }
-    }
-  } catch (_) {}
-
-  // 3. Clean orphan book source files
-  try {
-    const booksDir = baseUrl + 'books/'
-    const booksResult = await window.electronAPI.webdav.request({
-      url: booksDir, method: 'PROPFIND',
-      headers: { Authorization: `Basic ${auth}`, Depth: '1' }
-    })
-    if (booksResult.status === 207 && booksResult.data) {
-      const bookFiles = extractHrefValues(booksResult.data)
-      const dataStore = useDataStore()
-      if (!dataStore.dataLoaded.value) await dataStore.loadAllData()
-      const usedBooks = dataStore.books.value
-        .map(book => book.sourceFile ? getFileNameFromPath(book.sourceFile) : '')
-        .filter(Boolean)
-      const usedSet = new Set(usedBooks)
-      for (const bookFile of bookFiles) {
-        const fileName = bookFile.split('/').pop() || ''
-        if (fileName && !usedSet.has(fileName)) {
-          await window.electronAPI.webdav.request({
-            url: resolveRemoteHref(bookFile, booksDir), method: 'DELETE',
-            headers: { Authorization: `Basic ${auth}` }
-          })
-        }
-      }
-    }
-  } catch (_) {}
 }
 
 const refreshReadingStatsSummary = async () => {
@@ -597,15 +534,17 @@ const fullBackup = async () => {
     if (webdavSyncBookshelf.value) {
       // v8: Upload JSON data files.
       webdavSyncStatus.value = '上传 v8 JSON 数据...'
-      const v8Result = await fullBackupV8((msg) => { webdavSyncStatus.value = msg })
+      const v8Result = await fullBackupV8(
+        (msg) => { webdavSyncStatus.value = msg },
+        { includeSourceFiles: webdavSyncFiles.value },
+      )
       if (!v8Result.success) {
         throw new Error(`v8 备份失败: ${v8Result.error}`)
       }
-      await uploadBookChapterTextZips(auth)
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
-    if (webdavSyncFiles.value) {
+    if (webdavSyncFiles.value && !webdavSyncBookshelf.value) {
       const booksDir = appDataPath + '/books/'
       const store = useDataStore()
       if (!store.dataLoaded.value) await store.loadAllData()
@@ -624,9 +563,6 @@ const fullBackup = async () => {
       webdavSyncStatus.value = '上传阅读统计...'
       await uploadReadingStatsSnapshot()
     }
-
-    webdavSyncStatus.value = '清理远端孤立文件...'
-    await cleanRemoteOrphans(auth)
 
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
@@ -745,7 +681,7 @@ const applySyncDiffPreview = async () => {
     await reloadRestoredState()
     webdavSyncStatus.value = `差异已应用，更新 ${result.appliedFiles.length} 个同步文件`
     closeSyncDiffPreview()
-    alert('WebDAV 差异已按选择应用，并已创建本地恢复点。')
+    alert('WebDAV 差异已按选择应用。')
   } catch (e: any) {
     webdavSyncStatus.value = '应用差异失败: ' + (e.message || '网络错误')
   } finally {
@@ -768,12 +704,23 @@ const fullRestore = async () => {
     let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
 
     webdavSyncStatus.value = '恢复 v8 JSON 数据...'
-    const v8Result = await fullRestoreV8((msg) => { webdavSyncStatus.value = msg })
+    const v8Result = await fullRestoreV8(
+      (msg) => { webdavSyncStatus.value = msg },
+      { includeSourceFiles: webdavSyncFiles.value },
+    )
     await restoreLocalOnlySettings(preservedLocalOnlySettings)
-    if (v8Result.success) {
+    if (v8Result.success && v8Result.manifest?.scopes?.chapterText !== false) {
+      const strictChapterTextRestore = v8Result.strictSnapshot === true
       webdavSyncStatus.value = '补齐缺失章节正文...'
-      chapterTextRestore = await downloadChapterTextZips(auth)
-    } else {
+      chapterTextRestore = await downloadChapterTextZips(auth, {
+        resolvedBase: v8Result.resolvedBase,
+        manifest: v8Result.manifest,
+        strictSnapshot: strictChapterTextRestore,
+      })
+      if (strictChapterTextRestore && chapterTextRestore.missing > 0) {
+        throw new Error(`完整快照正文校验失败：${chapterTextRestore.missing}/${chapterTextRestore.total} 本未恢复`)
+      }
+    } else if (!v8Result.success) {
       webdavSyncStatus.value = 'v8 书架数据不可用，尝试恢复桌面设置...'
     }
 
@@ -835,7 +782,10 @@ const incrementalBackup = async () => {
       webdavSyncStatus.value = v8Result.uploadedFiles.length > 0
         ? `上传了 ${v8Result.uploadedFiles.length} 个文件`
         : '没有文件需要更新'
-      await uploadBookChapterTextZips(auth)
+      await uploadBookChapterTextZips(
+        auth,
+        v8Result.uploadedFiles.includes('chapters.json') ? 'full' : 'incremental',
+      )
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -862,9 +812,6 @@ const incrementalBackup = async () => {
       webdavSyncStatus.value = '上传阅读统计...'
       await uploadReadingStatsSnapshot()
     }
-
-    webdavSyncStatus.value = '清理远端孤立文件...'
-    await cleanRemoteOrphans(auth)
 
     webdavLastLiteSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastLiteSync', webdavLastLiteSync.value)
@@ -914,7 +861,6 @@ const activeCategoryItems = computed<SettingsPaneItem[]>(() => {
             onOpenStats: openReadingStats,
           },
         },
-        { key: 'snapshots', loader: settingsLoaders.snapshots },
       ]
     case 'sync':
       return [{
