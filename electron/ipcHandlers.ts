@@ -23,10 +23,8 @@ import { getCurrentDisplayRefreshRate, getMainWindow } from './appWindow'
 import {
   batchClassifyBooksJson,
   createBookChapterTextZip,
-  createLocalSnapshot,
   deleteBookJson,
   deleteBooksJson,
-  deleteLocalSnapshot,
   exportBooksJson,
   extractBookChapterTextZip,
   getBookChapterListJson,
@@ -35,14 +33,13 @@ import {
   getChapterContentBatchJson,
   getChapterTextExcerptJson,
   getMostRecentBookJson,
+  getManagedFileIntegrity,
   getBookshelfBooksJson,
   getStorageSizeInfo,
   hasBookChapterTextFiles,
   importBookJson,
   isBookSearchIndexReady,
-  listLocalSnapshots,
   readJsonEntity,
-  restoreLocalSnapshot,
   searchBookJson,
   updateBookJson,
   writeJsonEntity,
@@ -213,14 +210,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('library:getBookIdsWithFileGzipChapters', async () => getBookIdsWithFileGzipChapters())
   ipcMain.handle('library:hasBookChapterTextFiles', async (_, bookId: number) => hasBookChapterTextFiles(bookId))
   ipcMain.handle('library:createBookChapterTextZip', async (_, bookId: number) => createBookChapterTextZip(bookId))
-  ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string) => extractBookChapterTextZip(zipPath))
+  ipcMain.handle('library:extractBookChapterTextZip', async (_, zipPath: string, bookId?: number) => extractBookChapterTextZip(zipPath, bookId))
+  ipcMain.handle('library:getManagedFileIntegrity', async (_, filePath: string) => getManagedFileIntegrity(filePath))
   ipcMain.handle('library:isSearchIndexReady', async (_, bookId: number) => isBookSearchIndexReady(bookId))
   ipcMain.handle('library:searchBook', async (_, bookId: number, query: string) => searchBookJson(bookId, query))
-  
-  ipcMain.handle('snapshot:create', async (_, reason?: string) => createLocalSnapshot(reason || '手动创建'))
-  ipcMain.handle('snapshot:list', async () => listLocalSnapshots())
-  ipcMain.handle('snapshot:restore', async (_, id: string) => restoreLocalSnapshot(id))
-  ipcMain.handle('snapshot:delete', async (_, id: string) => deleteLocalSnapshot(id))
   
   ipcMain.handle('webdav:uploadFile', async (_, localPath: string, remoteUrl: string, auth: string) => {
     try {

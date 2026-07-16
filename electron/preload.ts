@@ -24,7 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBookIdsWithFileGzipChapters: () => ipcRenderer.invoke('library:getBookIdsWithFileGzipChapters'),
     hasBookChapterTextFiles: (bookId: number) => ipcRenderer.invoke('library:hasBookChapterTextFiles', bookId),
     createBookChapterTextZip: (bookId: number) => ipcRenderer.invoke('library:createBookChapterTextZip', bookId),
-    extractBookChapterTextZip: (zipPath: string) => ipcRenderer.invoke('library:extractBookChapterTextZip', zipPath),
+    extractBookChapterTextZip: (zipPath: string, bookId?: number) => ipcRenderer.invoke('library:extractBookChapterTextZip', zipPath, bookId),
+    getManagedFileIntegrity: (filePath: string) => ipcRenderer.invoke('library:getManagedFileIntegrity', filePath),
     isSearchIndexReady: (bookId: number) => ipcRenderer.invoke('library:isSearchIndexReady', bookId),
     searchBook: (bookId: number, query: string) => ipcRenderer.invoke('library:searchBook', bookId, query),
   },
@@ -40,12 +41,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   clipboard: {
     writeImage: (dataUrl: string) => ipcRenderer.invoke('clipboard:writeImage', dataUrl),
-  },
-  snapshot: {
-    create: (reason?: string) => ipcRenderer.invoke('snapshot:create', reason),
-    list: () => ipcRenderer.invoke('snapshot:list'),
-    restore: (id: string) => ipcRenderer.invoke('snapshot:restore', id),
-    delete: (id: string) => ipcRenderer.invoke('snapshot:delete', id),
   },
   win: {
     setAspectRatio: (ratio: number) => ipcRenderer.invoke('win:setAspectRatio', ratio),

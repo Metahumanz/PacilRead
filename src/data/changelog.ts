@@ -7,6 +7,21 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.5',
+    date: '2026-07-16',
+    changes: [
+      'Full Backup（正文镜像）：电脑版全量备份会重新生成并覆盖每本书的章节正文 ZIP，不再因远端存在同名旧包而误跳过',
+      'Full Restore（正文验收）：电脑版恢复 ZIP 后会按当前章节清单核对正文是否齐全，错误或陈旧包不再被误判为恢复成功，并会继续尝试兼容路径',
+      'Snapshot Commit（快照提交）：全量备份在 JSON 与资源全部上传后写入 generationId、资源 manifest 和 commit 标记，未完成或被篡改的快照会拒绝恢复',
+      'Strict Validation（强校验）：全量与增量 JSON 按 manifest 校验大小、SHA-256、数组结构和记录类型，正文 ZIP、封面与源文件同步进行完整性验收',
+      'Cross-device IDs（跨设备主键）：合并前按书籍身份重映射书籍、章节、书籍规则和书签关联 ID，避免不同设备数值主键碰撞或串书',
+      'Incremental Safety（增量防误删）：增量备份会保留云端独有记录，不再自动清理另一设备上传但本机尚未拥有的数据与资源',
+      'Source Restore（源文件恢复）：全量恢复可按资源清单下载并校验原始书籍文件，桌面端与移动端路径会重定位到各自应用目录',
+      'ZIP Compatibility（跨端正文）：电脑版统一正文 ZIP 资源路径并兼容旧版包结构，提升不同设备之间的正文可恢复性',
+      'Local Snapshots（本地恢复点）：移除旧本地恢复点入口及残留数据，统一由校验后的 WebDAV 完整快照承担跨设备恢复',
+    ]
+  },
+  {
     version: '1.4.4',
     date: '2026-07-05',
     changes: [
