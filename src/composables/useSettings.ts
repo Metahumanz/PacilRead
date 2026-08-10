@@ -116,8 +116,8 @@ const marginY = computed({
   },
 })
 const fontFamily = ref('system-ui')
-const fontColor = ref('#e2e8f0')
-const coverColor = ref('#0f172a')
+const fontColor = ref('#dde7ee')
+const coverColor = ref('#0b1320')
 const bgImage = ref('')
 const blurAmount = ref(0)
 const textAlign = ref('left')
@@ -249,8 +249,8 @@ function resetSettingsState() {
   marginTop.value = 40
   marginBottom.value = 40
   fontFamily.value = 'system-ui'
-  fontColor.value = '#e2e8f0'
-  coverColor.value = '#0f172a'
+  fontColor.value = '#dde7ee'
+  coverColor.value = '#0b1320'
   bgImage.value = ''
   blurAmount.value = 0
   textAlign.value = 'left'
@@ -349,8 +349,8 @@ export function useSettings() {
       marginTop.value = parseSettingInt(v('reader_marginTop'), legacyMarginY)
       marginBottom.value = parseSettingInt(v('reader_marginBottom'), legacyMarginY)
       if (v('reader_fontFamily') !== undefined) fontFamily.value = v('reader_fontFamily')! || 'system-ui'
-      if (v('reader_fontColor') !== undefined) fontColor.value = v('reader_fontColor')! || '#e2e8f0'
-      if (v('reader_coverColor') !== undefined) coverColor.value = v('reader_coverColor')! || '#0f172a'
+      if (v('reader_fontColor') !== undefined) fontColor.value = v('reader_fontColor')! || '#dde7ee'
+      if (v('reader_coverColor') !== undefined) coverColor.value = v('reader_coverColor')! || '#0b1320'
       if (v('bgImage') !== undefined) bgImage.value = v('bgImage')! || ''
       if (v('reader_flipMode') !== undefined) {
         flipMode.value = normalizeFlipMode(v('reader_flipMode'))

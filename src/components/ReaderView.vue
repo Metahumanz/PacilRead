@@ -358,7 +358,7 @@ const currentRightSlice = computed(() => effectivePageMode.value === 'double'
 
 const readerPaperColor = computed(() => (
   readerAutoNightEnabled.value && resolvedBucket.value === 'dark' && readerAutoNightCustomPolicy.value === 'override'
-    ? '#0f172a'
+    ? '#0b1320'
     : coverColor.value
 ))
 const readerPaperImage = computed(() => (
@@ -660,10 +660,10 @@ const isAutoNightActive = computed(() => readerAutoNightEnabled.value && resolve
 const shouldOverrideAutoNight = computed(() => (
   isAutoNightActive.value && readerAutoNightCustomPolicy.value === 'override'
 ))
-const effectiveFontColor = computed(() => shouldOverrideAutoNight.value ? '#e2e8f0' : fontColor.value)
+const effectiveFontColor = computed(() => shouldOverrideAutoNight.value ? '#dde7ee' : fontColor.value)
 const effectiveReaderBgStyle = computed(() => (
   shouldOverrideAutoNight.value
-    ? { backgroundColor: '#0f172a' }
+    ? { backgroundColor: '#0b1320' }
     : readerBgStyle.value
 ))
 const readerPageBgFilter = computed(() => (
@@ -1879,7 +1879,7 @@ onUnmounted(async () => {
     <!-- Background layer -->
     <div class="fixed inset-0 pointer-events-none transition-all duration-300 transform-gpu origin-center" 
          :style="[effectiveReaderBgStyle, { filter: blurAmount > 0 && !shouldOverrideAutoNight ? `blur(${blurAmount}px)` : 'none', transform: blurAmount > 0 && !shouldOverrideAutoNight ? 'scale(1.1)' : 'none' }]"
-         :class="{ 'bg-[#0f172a]': !bgImage }">
+         :class="{ 'bg-[#0b1320]': !bgImage }">
     </div>
     <div v-if="bgImage && blurAmount > 0 && !shouldOverrideAutoNight" class="fixed inset-0 pointer-events-none bg-black/40"></div>
     <div v-if="isAutoNightActive && !shouldOverrideAutoNight" class="fixed inset-0 pointer-events-none bg-black/25"></div>
