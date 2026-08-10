@@ -35,7 +35,7 @@ export function useTheme(opts?: { onStyleChanged?: () => void }) {
   }
 
   const applyTheme = (type: string) => {
-    if (type === 'dark') { applyThemeConfig({ bgImage: darkThemeBg, coverColor: '#0f172a', fontColor: '#e2e8f0' }) }
+    if (type === 'dark') { applyThemeConfig({ bgImage: darkThemeBg, coverColor: '#0b1320', fontColor: '#dde7ee' }) }
     else if (type === 'paper') { applyThemeConfig({ bgImage: paperThemeBg, coverColor: '#f4ecd8', fontColor: '#5c4b37' }) }
     else if (type === 'green') { applyThemeConfig({ bgImage: greenThemeBg, coverColor: '#cce8cf', fontColor: '#2a4b2a' }) }
   }

@@ -1,36 +1,103 @@
-# PacilRead 📚
+# PacilRead
 
-> 一款基于 Windows 11 Fluent Design（云母质感）打造的本地电子书阅读器。
+PacilRead 是我给自己做的一款 Windows 本地电子书阅读器。
 
-一开始做这个阅读器的初衷很简单：想在 Windows 电脑上好好看会儿电子书，但市面上的软件要么界面不够现代，要么功能花里胡哨，甚至夹带一堆广告，要么很贵。于是做出了 PacilRead。
+起因很简单：我只是想在电脑上安静看会儿书，但不少阅读器不是界面有点旧，就是功能塞得太满，或者干脆带广告、账号和一堆我用不到的东西。于是就自己做了一个，重点放在本地阅读、翻页手感和跨设备续读上。
 
-它主打**纯净、美观、顺手**，并且在底层对接了安卓端“阅读 (Legado)”的 WebDAV 进度同步协议（仅支持本地txt、epub文件，不支持书源！以后也不会支持），让你可以直接在电脑和手机之间无缝衔接阅读进度。
+它不提供书源，也不会推荐内容。书从哪里来、要读什么，都由你自己决定。
 
-## ✨ 特色功能
+## 界面
 
-*   **真正的 Win11 云母质感**：窗口背景半透明，颜色会根据你的桌面壁纸自然变化，沉浸感拉满。
-*   **支持触控与 9宫格单手翻页**：专门为 Windows 平板/触屏设备优化。支持单点左右屏幕翻页（九宫格判定）、也支持平滑的左右划动手势防抖。
-*   **三种仿真翻页效果**：覆盖、平移，以及伪 3D 纸张卷边翻开 (Curl Flip)效果。
-*   **看书不怕断档 (Legado 同步)**：内置 WebDAV 同步，手机上的“阅读”APP 看到哪，电脑上打开就能同步看。
-*   **智能分章算法**：不管你下的 TXT 小说排版多乱，它都能精准挑出复杂的“第 X 章”/“卷 X”并生成完美的侧边目录。
-*   **打扰更少，阅读更多**：隐藏了繁杂的系统边框，看书时还能随意开启“窗口任意置顶贴边”。
+书架尽量留得简单一些。导入后的书可以按标签、系列和阅读状态整理，平时打开就是接着读。
 
-## 🚀 立即下载 (快速开启阅读)
+![PacilRead Windows 书架](docs/screenshots/bookshelf.jpg)
 
-目前 PacilRead **仅支持 Windows 系统终端 (推荐 Windows 10 / 11)**。
-如果你只是想简单看本小说，不需要配置什么复杂的环境，只需点点鼠标即可开始：
+阅读页内置了纸控、护眼和夜航三套预设。字体、字号、行距、页边距、背景图等也都可以继续细调。
 
-1. 前往本仓库右侧的 [Releases 页面](https://github.com/Metahumanz/PacilRead/releases)（发布页）。
-2. 在最新版本下，找到并下载后缀为 **`.exe`** 的应用程序安装包。
-3. 双击直接安装，马上就能开始点开你心爱的本地 `.txt` 电子书啦！
+<table>
+  <tr>
+    <td><img src="docs/screenshots/reader-paper.jpg" alt="纸控主题"></td>
+    <td><img src="docs/screenshots/reader-green.jpg" alt="护眼主题"></td>
+    <td><img src="docs/screenshots/reader-dark.jpg" alt="夜航主题"></td>
+  </tr>
+  <tr>
+    <td align="center">纸控</td>
+    <td align="center">护眼</td>
+    <td align="center">夜航</td>
+  </tr>
+</table>
 
-<br/>
+## 现在能做什么
 
-> **🛠️ 致二次开发的小伙伴们 (开发者指引)：**
-> 如果你想拉取源码自己魔改：
-> `git clone https://github.com/Metahumanz/PacilRead.git` -> `npm install` -> `npm run dev` 即可在本地跑起来。
-> 本项目主要技术栈为：`Vue 3` + `Vite` + `Electron` + 本地 JSON 实体存储。
+- 导入本地 TXT、EPUB 和 PDF，自动整理书名、作者、封面与章节
+- 书架支持网格和列表视图，也能按标签、系列和阅读状态筛选、批量管理
+- 单页、双页会跟着窗口方向调整，适合桌面、触屏电脑和 Windows 平板
+- 支持平移、覆盖、仿真卷页、上下滚动和无动画等翻页方式
+- 鼠标、触控、键盘、滚轮都能翻页，也可以设置自动翻页
+- 有目录、全文搜索、书签和替换规则，搜索结果能直接跳回正文位置
+- 选中文字后可以复制、搜索、替换、朗读，也可以生成引用分享卡
+- 支持 Edge TTS 和小米 MiMo 听书，窗口最小化后也能继续播放
+- 记录阅读时间，按日、周、月、年查看，还能导出图片报告
+- 通过 WebDAV 同步阅读进度，并和 Android 版 PacilRead 共享书签、规则、统计等阅读数据
+- 支持 WebDAV 全量和增量备份，书架数据、章节正文、封面与原始书籍文件都能恢复
 
-## 📜 许可证
+界面主要按 Windows 11 的样子来做，窗口背景支持云母效果。看书时也可以把窗口置顶，放在屏幕一边慢慢读。
 
-本项目开源并在 [GPLv3 License](LICENSE) 协议下发布。如果遇到什么 Bug 或有新奇的点子，非常欢迎来提交 Issue 一起讨论。
+## 图片报告
+
+阅读统计可以按日、周、月、年查看。图片报告会从本地统计里整理阅读时长、字数、连续阅读、常读书籍和月份趋势，导出前还能调整风格、浅深主题和摘要字段。
+
+![PacilRead Windows 年度阅读报告](docs/screenshots/year-report.jpg)
+
+## 和 Android 版一起用
+
+Android 版在这里：[Metahumanz/PacilReadMobile](https://github.com/Metahumanz/PacilReadMobile)
+
+两端都可以单独使用。配置同一个 WebDAV 目录后，可以在电脑上读到一半，再到手机上接着读。阅读数据会跨端共享，窗口布局、主题细节这类平台设置则各自保存，避免电脑端的习惯覆盖手机端。
+
+PacilRead 也兼容 Legado 的本地 TXT、EPUB 阅读进度格式，但不支持书源，以后也没有接入书源的计划。
+
+## 下载安装
+
+目前桌面版面向 Windows 10 / 11。
+
+1. 打开仓库的 [Releases](https://github.com/Metahumanz/PacilRead/releases)。
+2. 下载最新的 `PacilRead-版本号-Setup.exe`。
+3. 双击安装即可。
+
+程序数据默认保存在系统应用数据目录，不会改动你导入的原始书籍文件。需要迁移设备时，可以使用 WebDAV 备份恢复，也可以在书架里导出原文件。
+
+## 本地开发
+
+桌面端使用 Vue 3、Vite、Electron 和 TypeScript，本地数据以 JSON 实体文件和压缩章节正文保存。
+
+```powershell
+git clone https://github.com/Metahumanz/PacilRead.git
+cd PacilRead
+npm install
+npm run dev
+```
+
+常用命令：
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+npm run electron:build
+```
+
+## 开源与反馈
+
+本项目使用 [GPLv3](LICENSE) 许可证。
+
+遇到问题可以直接提 Issue。功能建议也欢迎，不过我会优先处理自己实际用得到、并且不会让阅读界面越来越复杂的东西。
+
+## 致谢 / 灵感来源
+
+做 PacilRead 时，我参考过下面两个项目的功能和交互：
+
+- [Legado（阅读）](https://github.com/gedoor/legado)
+- [ReadAny](https://github.com/codedogQBY/ReadAny)
+
+感谢它们把代码和思路公开出来。

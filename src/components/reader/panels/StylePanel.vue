@@ -180,7 +180,7 @@ onBeforeUnmount(() => { if (stylingSaveTimer) void flushStylingSave() })
     <div class="sr themes-sr">
       <label>预设主题</label>
       <div class="btn-group theme-btns">
-        <button @click="applyTheme('dark')">深色</button>
+        <button @click="applyTheme('dark')">夜航</button>
         <button @click="applyTheme('paper')">纸控</button>
         <button @click="applyTheme('green')">护眼</button>
       </div>
@@ -223,7 +223,7 @@ onBeforeUnmount(() => { if (stylingSaveTimer) void flushStylingSave() })
 .sn.w72 { width:72px; }
 .su { font-size:10px; opacity:0.3; font-family:monospace; min-width:20px; }
 .ss { flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:8px 12px; font-size:13px; color:white; outline:none; cursor:pointer; }
-.ss option { background:#0f172a; color:white; }
+.ss option { background:#0b1320; color:white; }
 .sc { width:36px; height:30px; border:1px solid rgba(255,255,255,0.15); border-radius:8px; background:transparent; cursor:pointer; padding:2px; }
 .sw-note { font-size:10px; color:rgba(255,255,255,0.3); margin-left:4px; }
 .sp-divider { height:1px; background:rgba(255,255,255,0.06); margin:20px 0; }
