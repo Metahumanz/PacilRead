@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { assertHttpUrl } from './ipcGuards'
+import { isPortableBuild } from './runtime'
 
 let mainWindow: BrowserWindow | null = null
 const MIN_DISPLAY_REFRESH_RATE = 24
@@ -98,6 +99,7 @@ function migrateOldData(): void {
 
 // ---- Auto updater setup ----
 export function setupAutoUpdater(): void {
+  if (isPortableBuild()) return
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.on('checking-for-update', () => {
@@ -161,8 +163,8 @@ export function createWindow(): void {
     minWidth: 300,
     minHeight: 300,
     show: true,
-    autoHideMenuBar: true,
-    titleBarStyle: 'hidden',
+    autoHideMenuBar: process.platform !== 'darwin',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     icon: join(app.getAppPath(), 'public/icon.png'),
     backgroundMaterial: process.platform === 'win32' ? 'mica' : 'none',
     webPreferences: {

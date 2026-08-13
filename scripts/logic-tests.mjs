@@ -160,6 +160,8 @@ assert.deepEqual(
   { title: 'A', tags: ['科幻', '长篇'], series: '', readingStatus: 'unread' },
 )
 assert.equal(bookMetadata.normalizeBookMetadata({ progressIndex: 1 }).readingStatus, 'reading')
+assert.equal(bookMetadata.normalizeBookMetadata({ progressOffsetKind: 'char' }).progressOffsetKind, 'char')
+assert.equal('progressOffsetKind' in bookMetadata.normalizeBookMetadata({ progressOffsetKind: 'invalid' }), false)
 assert.equal(bookMetadata.shouldAutoMarkFinished({
   status: 'reading',
   chapterCount: 2,
@@ -167,6 +169,10 @@ assert.equal(bookMetadata.shouldAutoMarkFinished({
   progressOffset: 4,
   totalPages: 5,
 }), true)
+
+const readingProgress = loadTsModule('src/utils/readingProgress.ts')
+assert.deepEqual(plain(readingProgress.restoreReadingPosition(628, 'char')), { pageIndex: 0, charOffset: 628 })
+assert.deepEqual(plain(readingProgress.restoreReadingPosition(5, undefined)), { pageIndex: 5, charOffset: null })
 
 const syncDiff = loadTsModule('src/utils/syncDiff.ts')
 const diffPreview = syncDiff.buildSyncDiffPreview({

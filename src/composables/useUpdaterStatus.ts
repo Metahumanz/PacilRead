@@ -19,6 +19,7 @@ export function useUpdaterStatus(silentUpdate: Ref<boolean>) {
       case 'downloading': updateStatus.value = `⏬ 下载中 ${data.percent}%`; isDownloading.value = true; break
       case 'downloaded': updateStatus.value = '✅ 下载完成'; updateReady.value = true; updateAvailable.value = false; isDownloading.value = false; break
       case 'error': updateStatus.value = '❌ 更新失败'; updateDetail.value = data.message || ''; isDownloading.value = false; break
+      case 'unsupported': updateStatus.value = 'ℹ️ 免安装版需手动更新'; updateDetail.value = data.message || ''; isDownloading.value = false; break
     }
   }
 

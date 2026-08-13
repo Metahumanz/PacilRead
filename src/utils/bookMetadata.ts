@@ -1,8 +1,10 @@
 export type ReadingStatus = 'unread' | 'reading' | 'finished'
+export type ProgressOffsetKind = 'page' | 'char'
 
 export interface BookMetadataShape {
   progressIndex?: unknown
   progressOffset?: unknown
+  progressOffsetKind?: unknown
   lastReadAt?: unknown
   tags?: unknown
   series?: unknown
@@ -12,6 +14,10 @@ export interface BookMetadataShape {
 
 export function isReadingStatus(value: unknown): value is ReadingStatus {
   return value === 'unread' || value === 'reading' || value === 'finished'
+}
+
+export function isProgressOffsetKind(value: unknown): value is ProgressOffsetKind {
+  return value === 'page' || value === 'char'
 }
 
 export function normalizeTags(value: unknown): string[] {
@@ -55,6 +61,7 @@ export function normalizeBookMetadata<T extends BookMetadataShape>(book: T): T &
   series: string
   seriesIndex?: number
   readingStatus: ReadingStatus
+  progressOffsetKind?: ProgressOffsetKind
 } {
   const seriesIndex = normalizeSeriesIndex(book.seriesIndex)
   const normalized = {
@@ -67,12 +74,19 @@ export function normalizeBookMetadata<T extends BookMetadataShape>(book: T): T &
     series: string
     seriesIndex?: number
     readingStatus: ReadingStatus
+    progressOffsetKind?: ProgressOffsetKind
   }
 
   if (seriesIndex === undefined) {
     delete normalized.seriesIndex
   } else {
     normalized.seriesIndex = seriesIndex
+  }
+
+  if (!isProgressOffsetKind(book.progressOffsetKind)) {
+    delete normalized.progressOffsetKind
+  } else {
+    normalized.progressOffsetKind = book.progressOffsetKind
   }
 
   return normalized
@@ -89,6 +103,9 @@ export function normalizeBookPatch(fields: Record<string, unknown>): Record<stri
   }
   if ('readingStatus' in next && !isReadingStatus(next.readingStatus)) {
     delete next.readingStatus
+  }
+  if ('progressOffsetKind' in next && !isProgressOffsetKind(next.progressOffsetKind)) {
+    delete next.progressOffsetKind
   }
   return next
 }

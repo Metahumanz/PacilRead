@@ -43,6 +43,7 @@ const showStatsNav = ref(false)
 const isImmersive = ref(false)
 const showQuitConfirm = ref(false)
 const isWindowMaximized = ref(false)
+const isMacOS = ref(false)
 const windowWidth = ref(typeof window === 'undefined' ? 1200 : window.innerWidth)
 const windowHeight = ref(typeof window === 'undefined' ? 800 : window.innerHeight)
 let offWindowMaximized: (() => void) | null = null
@@ -248,6 +249,7 @@ onMounted(async () => {
   window.addEventListener('touchstart', handleTouchStart, { passive: true })
   window.addEventListener('touchend', handleTouchEnd, { passive: true })
   updateWindowSize()
+  try { isMacOS.value = (await window.electronAPI.app.getPlatform()) === 'darwin' } catch {}
   
   await loadAllSettings()
   await refreshHomeAvailability()
@@ -333,7 +335,7 @@ watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
         <!-- Sidebar -->
         <aside
           v-if="!useBottomNav"
-          :class="['app-sidebar flex flex-col pt-6 shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]', effectiveSidebarCollapsed ? 'w-[68px]' : 'w-[260px]']"
+          :class="['app-sidebar flex flex-col shrink-0 z-10 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]', isMacOS ? 'pt-[52px]' : 'pt-6', effectiveSidebarCollapsed ? 'w-[68px]' : 'w-[260px]']"
         >
           <div class="px-4 mb-6 flex items-center window-drag relative min-h-[32px]">
             <button @click="toggleSidebar" class="app-icon-button absolute left-4 w-9 h-9 flex items-center justify-center text-lg active:scale-95 no-drag cursor-pointer z-50" title="折叠导航栏">
@@ -388,7 +390,7 @@ watch([readingTimeTrackingEnabled, readingTimeStatsHidden], () => {
         >
           <!-- Draggable Top Bar Area with Controls -->
           <div class="h-10 max-h-10 w-full window-drag shrink-0 rounded-tl-lg flex justify-end items-center relative">
-            <div class="flex items-center h-10 no-drag">
+            <div v-if="!isMacOS" class="flex items-center h-10 no-drag">
               <button @click="minimizeWindow" class="app-window-button w-12 h-10 flex items-center justify-center group cursor-pointer">
                 <span class="text-[14px] opacity-70 group-hover:opacity-100">⎯</span>
               </button>

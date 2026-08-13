@@ -22,6 +22,7 @@ export interface ElectronAPI {
     getBookSummary: (bookId: number) => Promise<BookSummary | null>
     getMostRecentBook: () => Promise<BookSummary | null>
     updateBook: (bookId: number, fields: Partial<BookSummary>) => Promise<BookSummary | null>
+    flushProgressSync: (bookId: number, fields: Partial<BookSummary>) => BookSummary | null
     getBookChapterList: (bookId: number) => Promise<ChapterMeta[]>
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => Promise<ChapterContent[]>
     getChapterTextExcerpt: (bookId: number, chapterId: number, charOffset: number, maxChars?: number) => Promise<string>
@@ -76,6 +77,7 @@ export interface ElectronAPI {
   }
   app: {
     getVersion: () => Promise<string>
+    getPlatform: () => Promise<string>
     getPath: (name: string) => Promise<string>
     quit: () => Promise<void>
     copyCover: (sourcePath: string) => Promise<{ success: boolean; filename?: string; error?: string }>
@@ -109,6 +111,7 @@ export interface BookSummary {
   readingStatus: 'unread' | 'reading' | 'finished'
   progressIndex: number
   progressOffset: number
+  progressOffsetKind?: 'page' | 'char'
   lastReadAt: number
   pinned: boolean
   currentChapterTitle: string

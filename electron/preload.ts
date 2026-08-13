@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBookSummary: (bookId: number) => ipcRenderer.invoke('library:getBookSummary', bookId),
     getMostRecentBook: () => ipcRenderer.invoke('library:getMostRecentBook'),
     updateBook: (bookId: number, fields: Record<string, unknown>) => ipcRenderer.invoke('library:updateBook', bookId, fields),
+    flushProgressSync: (bookId: number, fields: Record<string, unknown>) => ipcRenderer.sendSync('library:flushProgressSync', bookId, fields),
     getBookChapterList: (bookId: number) => ipcRenderer.invoke('library:getBookChapterList', bookId),
     getChapterContentBatch: (bookId: number, chapterIds: number[]) => ipcRenderer.invoke('library:getChapterContentBatch', bookId, chapterIds),
     getChapterTextExcerpt: (bookId: number, chapterId: number, charOffset: number, maxChars?: number) => (
@@ -84,6 +85,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
     getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
     quit: () => ipcRenderer.invoke('app:quit'),
     copyCover: (sourcePath: string) => ipcRenderer.invoke('fs:copyCover', sourcePath),

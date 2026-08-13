@@ -3,13 +3,11 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
-
-permissions:
-  contents: write
+      - 'v*.*.*'
 
 jobs:
-  build:
+  build-windows:
+    name: Build Windows installer and portable executable
     runs-on: windows-latest
 
     steps:
@@ -20,12 +18,95 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and Publish
-        run: npx vue-tsc && npx vite build && npx electron-builder --win --publish always
+      - name: Verify release tag matches package version
+        shell: pwsh
+        run: |
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+          $packageVersion = node -p "require('./package.json').version"
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag v$tagVersion does not match package version $packageVersion."
+          }
+
+      - name: Build Windows artifacts
+        run: npm run electron:build:release:win
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest*.yml
+
+  build-macos:
+    name: Build macOS Intel and Apple Silicon artifacts
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build signed and notarized macOS artifacts
+        if: ${{ secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+        run: npm run electron:build:release:mac
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Leave these secrets unset for an unsigned test build. Set all of
+          # them on the repository before publishing a public macOS release.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      - name: Build unsigned macOS artifacts
+        if: ${{ !(secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '') }}
+        run: npm run electron:build:release:mac
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Create release and upload artifacts
+        uses: softprops/action-gh-release@v2.6.2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

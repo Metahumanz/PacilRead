@@ -28,6 +28,7 @@ export interface ReaderBook {
   readingStatus: ReadingStatus
   progressIndex: number
   progressOffset: number
+  progressOffsetKind?: 'page' | 'char'
   lastReadAt: number
   readingStatsKey: string
   chapterCount: number

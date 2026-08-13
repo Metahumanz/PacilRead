@@ -15,6 +15,7 @@ export interface Book {
   readingStatus: ReadingStatus
   progressIndex: number
   progressOffset: number
+  progressOffsetKind?: 'page' | 'char'
   lastReadAt: number
   pinned: boolean
   chapterCount: number

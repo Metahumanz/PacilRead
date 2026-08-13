@@ -1,6 +1,6 @@
 # PacilRead
 
-PacilRead 是我给自己做的一款 Windows 本地电子书阅读器。
+PacilRead 是我给自己做的一款本地电子书阅读器，目前提供 Windows 和 macOS 桌面版。
 
 起因很简单：我只是想在电脑上安静看会儿书，但不少阅读器不是界面有点旧，就是功能塞得太满，或者干脆带广告、账号和一堆我用不到的东西。于是就自己做了一个，重点放在本地阅读、翻页手感和跨设备续读上。
 
@@ -41,7 +41,7 @@ PacilRead 是我给自己做的一款 Windows 本地电子书阅读器。
 - 通过 WebDAV 同步阅读进度，并和 Android 版 PacilRead 共享书签、规则、统计等阅读数据
 - 支持 WebDAV 全量和增量备份，书架数据、章节正文、封面与原始书籍文件都能恢复
 
-界面主要按 Windows 11 的样子来做，窗口背景支持云母效果。看书时也可以把窗口置顶，放在屏幕一边慢慢读。
+界面主要按 Windows 11 的样子来做，Windows 窗口背景支持云母效果；在 macOS 上会保留系统原生的窗口控制按钮。看书时也可以把窗口置顶，放在屏幕一边慢慢读。
 
 ## 图片报告
 
@@ -59,11 +59,12 @@ PacilRead 也兼容 Legado 的本地 TXT、EPUB 阅读进度格式，但不支�
 
 ## 下载安装
 
-目前桌面版面向 Windows 10 / 11。
+桌面版支持 Windows 10 / 11 与 macOS（Intel 和 Apple Silicon）。
 
 1. 打开仓库的 [Releases](https://github.com/Metahumanz/PacilRead/releases)。
-2. 下载最新的 `PacilRead-版本号-Setup.exe`。
-3. 双击安装即可。
+2. Windows 安装版下载 `PacilRead-版本号-x64-Setup.exe`，双击安装即可。
+3. 不想安装可下载 `PacilRead-版本号-x64-Portable.exe`：它可以直接运行，但应用内更新不可用，更新时请下载新版后替换该文件。
+4. macOS 下载与芯片对应的 `PacilRead-版本号-mac-x64.dmg`（Intel）或 `PacilRead-版本号-mac-arm64.dmg`（Apple Silicon）。
 
 程序数据默认保存在系统应用数据目录，不会改动你导入的原始书籍文件。需要迁移设备时，可以使用 WebDAV 备份恢复，也可以在书架里导出原文件。
 
@@ -85,7 +86,11 @@ npm run typecheck
 npm test
 npm run build
 npm run electron:build
+npm run electron:build:portable
+npm run electron:build:mac
 ```
+
+推送形如 `v1.4.6` 的标签后，GitHub Actions 会自动构建 Windows 安装版、Windows 免安装版，以及 macOS 的 Intel/Apple Silicon DMG 与 ZIP，并创建对应的 GitHub Release。macOS 公共发布的签名与公证所需密钥见 [macOS 发布说明](docs/macos-release.md)。
 
 ## 开源与反馈
 

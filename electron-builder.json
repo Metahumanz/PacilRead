@@ -14,14 +14,20 @@
     "repo": "PacilRead",
     "releaseType": "release"
   },
-  "artifactName": "${productName}-${version}-Setup.${ext}",
   "win": {
     "target": "nsis",
-    "icon": "public/icon.png"
+    "icon": "public/icon.png",
+    "artifactName": "${productName}-${version}-${arch}-Setup.${ext}"
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-${arch}-Portable.${ext}"
   },
   "mac": {
-    "target": "dmg",
-    "icon": "public/icon.png"
+    "target": ["dmg", "zip"],
+    "icon": "public/icon.png",
+    "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+    "category": "public.app-category.books",
+    "hardenedRuntime": true
   },
   "linux": {
     "target": "AppImage",

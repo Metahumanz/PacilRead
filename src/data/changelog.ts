@@ -7,6 +7,17 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.6',
+    date: '2026-08-13',
+    changes: [
+      'Exact Resume（精确续读）：桌面端阅读进度改为保存章节字符位置，重新打开书籍或直接关闭窗口后可恢复到上次阅读段落附近，不再依赖会变化的分页页码',
+      'Progress Compatibility（进度兼容）：旧版只保存页码的本地记录会继续按原方式恢复；下一次正常保存后会自动升级为精确字符位置',
+      'macOS Distribution（Mac 发布）：增加 Intel 与 Apple Silicon 的 DMG、ZIP 构建配置，macOS 窗口使用原生控制按钮',
+      'Portable Windows（免安装版）：增加单文件 Windows Portable 构建；免安装包可直接运行，更新时手动替换可执行文件即可',
+      'Release Automation（自动发布）：推送语义化版本标签后，GitHub Actions 会汇集 Windows 与 macOS 产物并自动创建 Release',
+    ]
+  },
+  {
     version: '1.4.5',
     date: '2026-07-16',
     changes: [

@@ -13,6 +13,11 @@ dist
 dist-ssr
 dist-electron
 release
+release-portable
+release-verify
+release-mac-verify
+release-final-verify
+main.js
 *.local
 
 PacilReadMobile/*
