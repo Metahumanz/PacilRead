@@ -48,6 +48,12 @@ jobs:
   build-macos:
     name: Build macOS Intel and Apple Silicon artifacts
     runs-on: macos-latest
+    env:
+      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
     steps:
       - name: Checkout
@@ -63,19 +69,16 @@ jobs:
         run: npm ci
 
       - name: Build signed and notarized macOS artifacts
-        if: ${{ secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+        if: ${{ env.MAC_CSC_LINK != '' && env.MAC_CSC_KEY_PASSWORD != '' && env.APPLE_API_KEY != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != '' }}
         run: npm run electron:build:release:mac
         env:
           # Leave these secrets unset for an unsigned test build. Set all of
           # them on the repository before publishing a public macOS release.
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ env.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ env.MAC_CSC_KEY_PASSWORD }}
 
       - name: Build unsigned macOS artifacts
-        if: ${{ !(secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '') }}
+        if: ${{ !(env.MAC_CSC_LINK != '' && env.MAC_CSC_KEY_PASSWORD != '' && env.APPLE_API_KEY != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != '') }}
         run: npm run electron:build:release:mac
 
       - name: Upload macOS artifacts
