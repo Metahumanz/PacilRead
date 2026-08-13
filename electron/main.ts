@@ -1,11 +1,10 @@
 import { app, BrowserWindow, dialog, screen } from 'electron'
-import { existsSync, rmSync } from 'fs'
-import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createWindow, getMainWindow, notifyDisplayRefreshRate, saveBounds, setupAutoUpdater } from './appWindow'
 import { initializeJsonStore } from './libraryService'
 import { registerIpcHandlers } from './ipcHandlers'
+import { isPortableBuild } from './runtime'
 
 registerIpcHandlers()
 
@@ -37,22 +36,9 @@ app.whenReady().then(async () => {
     console.error('JSON data store init failed:', String(error))
     dialog.showErrorBox('数据初始化失败', String(error))
   }
-  setupAutoUpdater()
+  if (!isPortableBuild()) setupAutoUpdater()
 
-  try {
-    const updaterCacheDirs = [
-      join(app.getPath('userData'), '../pacil-read-updater'),
-      join(app.getPath('userData'), '../ele-win-reader-updater')
-    ]
-    for (const dir of updaterCacheDirs) {
-      if (existsSync(dir)) {
-        rmSync(dir, { recursive: true, force: true })
-        console.log('Cleaned up old updater cache:', dir)
-      }
-    }
-  } catch (e) { console.error('Failed to clean updater cache:', e) }
-
-  if (!is.dev) {
+  if (!is.dev && !isPortableBuild()) {
     setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 3000)
   }
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

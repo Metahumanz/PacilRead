@@ -20,6 +20,7 @@ import {
   rememberUserSelectedPath,
 } from './ipcGuards'
 import { getCurrentDisplayRefreshRate, getMainWindow } from './appWindow'
+import { isPortableBuild } from './runtime'
 import {
   batchClassifyBooksJson,
   createBookChapterTextZip,
@@ -176,19 +177,32 @@ export function registerIpcHandlers(): void {
     } catch (e) { console.error('Font error:', e); return [] }
   })
   
-  ipcMain.handle('updater:check', async () => {
+  ipcMain.handle('updater:check', async (event) => {
+    if (isPortableBuild()) {
+      event.sender.send('updater:status', { status: 'unsupported', message: '免安装版请手动下载并替换程序文件。' })
+      return false
+    }
     try { await autoUpdater.checkForUpdates(); return true } catch (e) { return false }
   })
   
-  ipcMain.handle('updater:download', async () => {
+  ipcMain.handle('updater:download', async (event) => {
+    if (isPortableBuild()) {
+      event.sender.send('updater:status', { status: 'unsupported', message: '免安装版请手动下载并替换程序文件。' })
+      return false
+    }
     try { await autoUpdater.downloadUpdate(); return true } catch (e) { return false }
   })
   
-  ipcMain.handle('updater:install', async (_, silent?: boolean) => {
+  ipcMain.handle('updater:install', async (event, silent?: boolean) => {
+    if (isPortableBuild()) {
+      event.sender.send('updater:status', { status: 'unsupported', message: '免安装版请手动下载并替换程序文件。' })
+      return false
+    }
     autoUpdater.quitAndInstall(silent === true, true)
   })
   
   ipcMain.handle('app:getVersion', async () => app.getVersion())
+  ipcMain.handle('app:getPlatform', async () => process.platform)
   ipcMain.handle('app:getPath', async (_, name: any) => app.getPath(assertAllowedAppPathName(name)))
   ipcMain.handle('app:quit', async () => app.quit())
   
@@ -201,6 +215,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('library:getBookSummary', async (_, bookId: number) => getBookSummaryJson(bookId))
   ipcMain.handle('library:getMostRecentBook', async () => getMostRecentBookJson())
   ipcMain.handle('library:updateBook', async (_, bookId: number, fields: Record<string, unknown>) => updateBookJson(bookId, fields))
+  ipcMain.on('library:flushProgressSync', (event, bookId: number, fields: Record<string, unknown>) => {
+    event.returnValue = updateBookJson(bookId, fields)
+  })
   ipcMain.handle('library:getBookChapterList', async (_, bookId: number) => getBookChapterListJson(bookId))
   ipcMain.handle('library:getChapterContentBatch', async (_, bookId: number, chapterIds: number[]) => getChapterContentBatchJson(bookId, chapterIds))
   ipcMain.handle('library:getChapterTextExcerpt', async (_, bookId: number, chapterId: number, charOffset: number, maxChars?: number) => (
