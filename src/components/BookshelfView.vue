@@ -19,6 +19,7 @@ interface BookDisplay {
   sourceFile: string | null
   progressIndex: number
   progressOffset: number
+  progressOffsetKind?: 'page' | 'char'
   lastReadAt: number
   pinned: boolean
   currentChapterTitle: string
@@ -132,7 +133,8 @@ const prefetchBookshelfProgress = async () => {
 
       const progressPatch = {
         progressIndex: remote.durChapterIndex,
-        progressOffset: 0,
+        progressOffset: Math.max(0, remote.durChapterPos),
+        progressOffsetKind: 'char' as const,
         lastReadAt: remote.durChapterTime,
         currentChapterTitle: remote.durChapterTitle || book.currentChapterTitle,
         readingStatus: (book.readingStatus === 'finished' ? 'finished' : 'reading') as ReadingStatus,
@@ -142,6 +144,7 @@ const prefetchBookshelfProgress = async () => {
       const syncedProgress = {
         progressIndex: updatedBook.progressIndex,
         progressOffset: updatedBook.progressOffset,
+        progressOffsetKind: updatedBook.progressOffsetKind,
         lastReadAt: updatedBook.lastReadAt,
         currentChapterTitle: updatedBook.currentChapterTitle,
         readingStatus: updatedBook.readingStatus,

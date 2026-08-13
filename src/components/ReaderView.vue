@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed, onUnmounted, nextTick, type CSSProperties } from 'vue'
+import { restoreReadingPosition } from '../utils/readingProgress'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useTTS } from '../composables/useTTS'
@@ -261,6 +262,7 @@ const fetchBook = async () => {
         readingStatus: b.readingStatus || 'unread',
         progressIndex: b.progressIndex,
         progressOffset: b.progressOffset,
+        progressOffsetKind: b.progressOffsetKind,
         lastReadAt: b.lastReadAt,
         readingStatsKey: b.readingStatsKey,
         chapterCount: b.chapterCount,
@@ -312,6 +314,7 @@ const {
   setProgressReady,
   saveProgress,
   flushProgress,
+  flushProgressSync,
 } = useReaderProgress({
   bookId: props.bookId,
   book,
@@ -597,7 +600,7 @@ const handlePageFlipReady = () => {
 const getChapterOffset = () => {
   const slice = currentSlice.value
   if (slice && slice.bodyStartInSlice >= 0) return slice.bodyStartInSlice
-  return 0
+  return pendingWebdavPos.value >= 0 ? pendingWebdavPos.value : 0
 }
 
 const buildBookmarkSummary = (offset: number) => {
@@ -1698,6 +1701,11 @@ const handleWindowBlur = () => {
   })
 }
 
+const handleBeforeUnload = () => {
+  flushProgressSync()
+  handleWindowBlur()
+}
+
 const handleVisibilityChange = () => {
   if (!document.hidden) return
   flushProgress().catch((error) => {
@@ -1805,11 +1813,19 @@ onMounted(async () => {
     pendingWebdavPos.value = Math.max(0, prefetchedRemote.durChapterPos)
     currentPage.value = 0
     book.value.progressIndex = targetIndex
-    book.value.progressOffset = 0
+    book.value.progressOffset = pendingWebdavPos.value
+    book.value.progressOffsetKind = 'char'
     book.value.lastReadAt = Math.max(book.value.lastReadAt || 0, prefetchedRemote.durChapterTime)
     appliedPrefetchedProgress = true
   } else if (book.value) {
-    currentPage.value = book.value.progressOffset || 0
+    const restoredPosition = restoreReadingPosition(
+      book.value.progressOffset,
+      book.value.progressOffsetKind,
+    )
+    currentPage.value = restoredPosition.pageIndex
+    if (restoredPosition.charOffset !== null) {
+      pendingWebdavPos.value = restoredPosition.charOffset
+    }
   }
   const shouldCheckRemoteProgress = !props.initialBookmark
     && !appliedPrefetchedProgress
@@ -1842,6 +1858,7 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleKeydown, true)
   window.addEventListener('blur', handleWindowBlur)
+  window.addEventListener('beforeunload', handleBeforeUnload)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   loadVoices()
   injectHighlightStyles()
@@ -1862,6 +1879,7 @@ onUnmounted(async () => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleKeydown, true)
   window.removeEventListener('blur', handleWindowBlur)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>

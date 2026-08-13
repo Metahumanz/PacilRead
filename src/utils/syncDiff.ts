@@ -126,7 +126,7 @@ function getDescription(entity: SyncDiffEntity, item: any): string {
 function fieldsForEntity(entity: SyncDiffEntity): string[] {
   switch (entity) {
     case 'books':
-      return ['title', 'author', 'tags', 'series', 'seriesIndex', 'readingStatus', 'progressIndex', 'progressOffset', 'currentChapterTitle', 'updatedAt']
+      return ['title', 'author', 'tags', 'series', 'seriesIndex', 'readingStatus', 'progressIndex', 'progressOffset', 'progressOffsetKind', 'currentChapterTitle', 'updatedAt']
     case 'chapters':
       return ['title', 'bookId', 'orderIndex', 'bodyTextSize']
     case 'rules':
