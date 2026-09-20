@@ -96,6 +96,15 @@ function buildSyncEntities(dataStore = useDataStore()): SyncEntityPayloads {
   }
 }
 
+async function ensureDataStoreLoaded(onProgress?: (message: string) => void) {
+  const dataStore = useDataStore()
+  if (!dataStore.dataLoaded.value) {
+    onProgress?.('正在加载本地数据...')
+    await dataStore.loadAllData()
+  }
+  return dataStore
+}
+
 function normalizeSettingsMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const settings: Record<string, string> = {}
@@ -181,11 +190,21 @@ async function assertManagedFileIntegrity(
 function getWebdavContext() {
   const store = useDataStore()
   const s = store.settingsMap.value
-  const url = s['webdavUrl'] || ''
-  const dir = s['webdavDir'] || ''
-  const user = s['webdavUser'] || ''
-  const pass = s['webdavPass'] || ''
+  const url = String(s['webdavUrl'] || '').trim()
+  const dir = String(s['webdavDir'] || '').trim()
+  const user = String(s['webdavUser'] || '')
+  const pass = String(s['webdavPass'] || '')
+  if (!url) throw new Error('WebDAV配置尚未加载')
   const baseUrl = buildPacilReadBaseUrl(url, dir).replace(/\/+$/, '')
+  const contextLogKey = `${url}|${dir}|${Boolean(user)}|${Boolean(pass)}`
+  if (contextLogKey !== lastWebdavContextLogKey) {
+    lastWebdavContextLogKey = contextLogKey
+    console.info('[V8Sync] WebDAV context', {
+      baseUrl,
+      hasUser: Boolean(user),
+      hasPassword: Boolean(pass),
+    })
+  }
   return {
     url,
     user,
@@ -194,6 +213,8 @@ function getWebdavContext() {
     baseUrl,
   }
 }
+
+let lastWebdavContextLogKey: string | null = null
 
 function getWebdavClient(baseOverride?: string) {
   const ctx = getWebdavContext()
@@ -258,7 +279,7 @@ export async function previewSyncDiff(): Promise<{
   error?: string
 }> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded()
     const localEntities = buildSyncEntities(dataStore)
     const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
     return {
@@ -275,7 +296,7 @@ export async function applySyncResolution(
   onProgress?: (message: string) => void,
 ): Promise<{ success: boolean; appliedFiles: string[]; error?: string }> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded(onProgress)
     onProgress?.('正在下载远端差异数据...')
     const localEntities = buildSyncEntities(dataStore)
     const remoteEntities = remapRemoteSyncEntityIds(localEntities, await downloadRemoteSyncEntities())
@@ -844,7 +865,7 @@ export async function fullBackupV8(
   options: { includeSourceFiles?: boolean } = {},
 ): Promise<{ success: boolean; error?: string; warnings?: string[] }> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded(onProgress)
     onProgress?.('正在读取本地数据...')
 
     const entities = buildSyncEntities(dataStore)
@@ -935,7 +956,7 @@ export async function fullRestoreV8(
   options: { includeSourceFiles?: boolean } = {},
 ): Promise<FullRestoreV8Result> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded(onProgress)
     const desktopSettingsFallback: Record<string, string> = {}
     onProgress?.('正在检查远程数据格式...')
 
@@ -1042,7 +1063,7 @@ export async function incrementalBackupV8(
   onProgress?: (message: string) => void,
 ): Promise<{ success: boolean; uploadedFiles: string[]; error?: string }> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded(onProgress)
     const uploadedFiles: string[] = []
 
     const localEntities = buildSyncEntities(dataStore)
@@ -1126,7 +1147,7 @@ export async function incrementalRestoreV8(
   desktopSettingsFallback?: Record<string, string>
 }> {
   try {
-    const dataStore = useDataStore()
+    const dataStore = await ensureDataStoreLoaded(onProgress)
     const mergedFiles: string[] = []
     const desktopSettingsFallback: Record<string, string> = {}
 
@@ -1181,6 +1202,7 @@ export async function checkRemoteV8Availability(): Promise<{
   hasV7Full: boolean
   hasV7Incremental: boolean
 }> {
+  await ensureDataStoreLoaded()
   const [fullManifest, syncManifest] = await Promise.all([
     webdavFileExists('database/manifest.json'),
     webdavFileExists('sync/manifest.json'),
@@ -1199,6 +1221,7 @@ export async function checkRemoteV8Availability(): Promise<{
 export async function cleanupRemoteV7Files(
   onProgress?: (message: string) => void,
 ): Promise<{ success: boolean; deletedFiles: string[] }> {
+  await ensureDataStoreLoaded(onProgress)
   const deleted: string[] = []
 
   // Only clean up if v8 data already exists

@@ -48,6 +48,8 @@ function loadTsModule(relativePath, baseDir = rootDir) {
     clearTimeout,
     process,
     btoa: globalThis.btoa,
+    crypto: globalThis.crypto,
+    window: globalThis.__logicTestWindow,
   }
   vm.runInNewContext(outputText, sandbox, { filename })
   return module.exports
@@ -169,7 +171,75 @@ assert.deepEqual(
   [],
 )
 
+const v8Requests = []
+const diskEntities = {
+  books: [{ id: 1, title: 'Loaded book', author: 'Test', sourceFile: null, coverFile: null }],
+  chapters: [{
+    id: 11,
+    bookId: 1,
+    title: 'Chapter 1',
+    orderIndex: 0,
+    bodyTextStorage: 'inline',
+    bodyTextPath: null,
+    bodyTextSize: 12,
+  }],
+  rules: [],
+  themes: [],
+  bookmarks: [],
+  readingStats: [],
+  settings: {
+    webdavUrl: 'https://116.62.37.193/',
+    webdavDir: 'Books/',
+    webdavUser: 'user',
+    webdavPass: 'pass',
+  },
+}
+globalThis.__logicTestWindow = {
+  electronAPI: {
+    data: {
+      readEntity: async (entity) => diskEntities[entity],
+    },
+    app: {
+      getPath: async () => tmpdir(),
+    },
+    library: {
+      getBookIdsWithFileGzipChapters: async () => [],
+    },
+    webdav: {
+      request: async (request) => {
+        v8Requests.push(request)
+        return { status: request.method === 'GET' ? 404 : 201, data: '' }
+      },
+      uploadFile: async () => ({ success: true, status: 201 }),
+    },
+  },
+}
+
 const v8Sync = loadTsModule('src/composables/useV8Sync.ts')
+const v8DataStore = loadTsModule('src/composables/useDataStore.ts')
+const v8Store = v8DataStore.useDataStore()
+v8Store.dataLoaded.value = false
+const v8Progress = []
+const v8BackupResult = await v8Sync.fullBackupV8((message) => v8Progress.push(message))
+assert.equal(v8BackupResult.success, true)
+assert.equal(v8Progress[0], '正在加载本地数据...')
+assert.equal(v8Store.dataLoaded.value, true)
+const uploadedBooksJson = v8Requests.find((request) => (
+  request.method === 'PUT' && request.url.includes('/database/books.json')
+))
+assert.ok(uploadedBooksJson)
+assert.equal(JSON.parse(uploadedBooksJson.body).length, 1)
+assert.ok(v8Requests.some((request) => (
+  request.method === 'PUT' && request.url.startsWith('https://116.62.37.193/Books/snapshots/')
+)))
+assert.ok(v8Requests.some((request) => (
+  request.method === 'PUT' && request.url.endsWith('/database/commit.json')
+)))
+v8Store.settingsMap.value = {}
+const missingV8ConfigResult = await v8Sync.fullBackupV8()
+assert.equal(missingV8ConfigResult.success, false)
+assert.equal(missingV8ConfigResult.error, 'WebDAV配置尚未加载')
+
 const snapshotManifest = (generationId, snapshotPrefix) => ({
   schemaVersion: 1,
   generatedAt: 1,
