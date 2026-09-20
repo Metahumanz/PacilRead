@@ -289,15 +289,18 @@ export async function applySyncResolution(
 
 async function checkManifestAt(baseUrl: string): Promise<boolean> {
   const ctx = getWebdavContext()
-  const url = `${baseUrl}/database/manifest.json`
-  try {
-    const response = await window.electronAPI.webdav.request({
-      url,
-      method: 'HEAD',
-      headers: { Authorization: `Basic ${ctx.auth}` },
-    })
-    return response.status === 200
-  } catch { return false }
+  const paths = ['database/manifest.json', `database/${SNAPSHOT_COMMIT_FILE}`]
+  for (const path of paths) {
+    try {
+      const response = await window.electronAPI.webdav.request({
+        url: `${baseUrl}/${path}`,
+        method: 'HEAD',
+        headers: { Authorization: `Basic ${ctx.auth}` },
+      })
+      if (response.status === 200) return true
+    } catch {}
+  }
+  return false
 }
 
 async function getJsonAt(baseUrl: string, path: string): Promise<string | null> {
