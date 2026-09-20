@@ -20,6 +20,20 @@ interface ManifestFileEntry {
   size: number
 }
 
+export function getManifestFileIntegrityError(
+  fileName: string,
+  expected: ManifestFileEntry | undefined,
+  actualSize: number,
+  actualSha256: string,
+): string | null {
+  if (!expected?.sha256) return `manifest 缺少 ${fileName} 校验信息`
+  if (actualSize !== expected.size) return `${fileName} 大小校验失败`
+  if (actualSha256.toLowerCase() !== expected.sha256.toLowerCase()) {
+    return `${fileName} SHA-256 校验失败`
+  }
+  return null
+}
+
 export interface ManifestAssetEntry {
   size: number
   sha256?: string
@@ -287,20 +301,26 @@ export async function applySyncResolution(
 
 // ---- Backward-compat helpers ----
 
-async function checkManifestAt(baseUrl: string): Promise<boolean> {
+type FullSnapshotAvailability = 'snapshot' | 'legacy' | 'none'
+
+async function detectFullSnapshotAt(baseUrl: string): Promise<FullSnapshotAvailability> {
   const ctx = getWebdavContext()
-  const paths = ['database/manifest.json', `database/${SNAPSHOT_COMMIT_FILE}`]
-  for (const path of paths) {
+  const existsAt = async (path: string): Promise<boolean> => {
     try {
       const response = await window.electronAPI.webdav.request({
         url: `${baseUrl}/${path}`,
         method: 'HEAD',
         headers: { Authorization: `Basic ${ctx.auth}` },
       })
-      if (response.status === 200) return true
-    } catch {}
+      return response.status === 200
+    } catch {
+      return false
+    }
   }
-  return false
+
+  if (await existsAt(`database/${SNAPSHOT_COMMIT_FILE}`)) return 'snapshot'
+  if (await existsAt('database/manifest.json')) return 'legacy'
+  return 'none'
 }
 
 async function getJsonAt(baseUrl: string, path: string): Promise<string | null> {
@@ -567,6 +587,8 @@ interface ResolvedManifest {
   manifest: Manifest
   raw: string
   dataPrefix: string
+  mode: 'snapshot' | 'legacy'
+  manifestSource: string
 }
 
 function parseManifest(raw: string, label: string): Manifest {
@@ -583,54 +605,159 @@ async function parseSnapshotCommitAt(baseUrl: string, dir: 'database' | 'sync'):
   try {
     return JSON.parse(commitRaw) as SnapshotCommit
   } catch {
-    throw new Error(`${dir}/commit.json 提交标记损坏`)
+    throw new Error(dir === 'database' ? '完整快照提交信息不一致' : 'sync 提交信息不一致')
   }
 }
 
-async function resolveManifestAt(baseUrl: string, dir: 'database' | 'sync'): Promise<ResolvedManifest | null> {
-  const rootRaw = await getJsonAt(baseUrl, `${dir}/manifest.json`)
-  const rootManifest = rootRaw ? parseManifest(rootRaw, `${dir}/manifest.json`) : null
+function snapshotCommitError(): Error {
+  return new Error('完整快照提交信息不一致')
+}
 
-  // Incremental sync continues to publish a root manifest without generationId.
-  // It is authoritative for sync/ and must not be shadowed by an older full-snapshot pointer.
-  if (rootManifest && !rootManifest.generationId) {
-    return { manifest: rootManifest, raw: rootRaw!, dataPrefix: '' }
+export function resolveManifestRecord(
+  dir: 'database' | 'sync',
+  root: { manifest: Manifest; raw: string } | null,
+  commit: SnapshotCommit | null,
+  snapshot: { manifest: Manifest; raw: string; sha256: string } | null,
+): ResolvedManifest | null {
+  if (dir === 'database') {
+    // database/commit.json is the sole authority for the new full-snapshot format.
+    if (commit) {
+      if (
+        typeof commit.generationId !== 'string'
+        || !commit.generationId
+        || typeof commit.snapshotPrefix !== 'string'
+        || !commit.snapshotPrefix
+        || typeof commit.manifestSha256 !== 'string'
+        || !snapshot
+        || snapshot.manifest.generationId !== commit.generationId
+        || snapshot.manifest.snapshotPrefix !== commit.snapshotPrefix
+        || snapshot.sha256.toLowerCase() !== commit.manifestSha256.toLowerCase()
+      ) {
+        throw snapshotCommitError()
+      }
+      return {
+        manifest: snapshot.manifest,
+        raw: snapshot.raw,
+        dataPrefix: commit.snapshotPrefix,
+        mode: 'snapshot',
+        manifestSource: snapshotPath(commit.snapshotPrefix, 'database/manifest.json'),
+      }
+    }
+
+    if (!root) return null
+    return {
+      manifest: root.manifest,
+      raw: root.raw,
+      dataPrefix: '',
+      mode: 'legacy',
+      manifestSource: 'database/manifest.json',
+    }
   }
 
-  const commit = await parseSnapshotCommitAt(baseUrl, dir)
+  // sync/ keeps its existing incremental behavior: a root manifest without a
+  // generationId is authoritative even if an older full-snapshot commit exists.
+  if (root && !root.manifest.generationId) {
+    return {
+      manifest: root.manifest,
+      raw: root.raw,
+      dataPrefix: '',
+      mode: 'legacy',
+      manifestSource: 'sync/manifest.json',
+    }
+  }
 
+  if (commit) {
+    if (
+      typeof commit.generationId !== 'string'
+      || !commit.generationId
+      || typeof commit.snapshotPrefix !== 'string'
+      || !commit.snapshotPrefix
+      || typeof commit.manifestSha256 !== 'string'
+      || !snapshot
+      || snapshot.manifest.generationId !== commit.generationId
+      || snapshot.manifest.snapshotPrefix !== commit.snapshotPrefix
+      || snapshot.sha256.toLowerCase() !== commit.manifestSha256.toLowerCase()
+    ) {
+      throw new Error('sync 提交信息不一致')
+    }
+    return {
+      manifest: snapshot.manifest,
+      raw: snapshot.raw,
+      dataPrefix: commit.snapshotPrefix,
+      mode: 'snapshot',
+      manifestSource: snapshotPath(commit.snapshotPrefix, 'sync/manifest.json'),
+    }
+  }
+
+  if (root) {
+    throw new Error('sync 完整快照尚未提交完成，请重新执行全量备份')
+  }
+  return null
+}
+
+async function resolveManifestAt(baseUrl: string, dir: 'database' | 'sync'): Promise<ResolvedManifest | null> {
+  if (dir === 'database') {
+    // Read commit first so a stale root manifest can never shadow a committed snapshot.
+    const commitRaw = await getJsonAt(baseUrl, `database/${SNAPSHOT_COMMIT_FILE}`)
+    if (commitRaw) {
+      let commit: SnapshotCommit
+      try {
+        commit = JSON.parse(commitRaw) as SnapshotCommit
+      } catch {
+        throw snapshotCommitError()
+      }
+      let snapshot: { manifest: Manifest; raw: string; sha256: string } | null = null
+      if (commit.snapshotPrefix) {
+        const snapshotRaw = await getJsonAt(
+          baseUrl,
+          snapshotPath(commit.snapshotPrefix, 'database/manifest.json'),
+        )
+        if (snapshotRaw) {
+          try {
+            snapshot = {
+              manifest: parseManifest(snapshotRaw, 'database/manifest.json'),
+              raw: snapshotRaw,
+              sha256: await sha256TextHex(snapshotRaw),
+            }
+          } catch {
+            throw snapshotCommitError()
+          }
+        }
+      }
+      return resolveManifestRecord('database', null, commit, snapshot)
+    }
+
+    const rootRaw = await getJsonAt(baseUrl, 'database/manifest.json')
+    const root = rootRaw
+      ? { manifest: parseManifest(rootRaw, 'database/manifest.json'), raw: rootRaw }
+      : null
+    return resolveManifestRecord('database', root, null, null)
+  }
+
+  const rootRaw = await getJsonAt(baseUrl, 'sync/manifest.json')
+  const root = rootRaw
+    ? { manifest: parseManifest(rootRaw, 'sync/manifest.json'), raw: rootRaw }
+    : null
+  const commit = await parseSnapshotCommitAt(baseUrl, 'sync')
+  let snapshot: { manifest: Manifest; raw: string; sha256: string } | null = null
   if (commit?.snapshotPrefix) {
     const snapshotRaw = await getJsonAt(
       baseUrl,
-      snapshotPath(commit.snapshotPrefix, `${dir}/manifest.json`),
+      snapshotPath(commit.snapshotPrefix, 'sync/manifest.json'),
     )
-    if (!snapshotRaw) throw new Error(`${dir} 完整快照数据不完整，找不到已提交的 manifest`)
-    const snapshotManifest = parseManifest(snapshotRaw, `${dir}/manifest.json`)
-    if (snapshotManifest.generationId !== commit.generationId) {
-      throw new Error(`${dir} 完整快照提交标记与 manifest 不匹配`)
-    }
-    const manifestSha256 = await sha256TextHex(snapshotRaw)
-    if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
-      throw new Error(`${dir} 完整快照 manifest 校验失败`)
-    }
-    return {
-      manifest: snapshotManifest,
-      raw: snapshotRaw,
-      dataPrefix: commit.snapshotPrefix,
+    if (snapshotRaw) {
+      try {
+        snapshot = {
+          manifest: parseManifest(snapshotRaw, 'sync/manifest.json'),
+          raw: snapshotRaw,
+          sha256: await sha256TextHex(snapshotRaw),
+        }
+      } catch {
+        throw new Error('sync 提交信息不一致')
+      }
     }
   }
-
-  if (!rootRaw || !rootManifest) return null
-  const manifest = rootManifest
-  if (!commit) throw new Error(`${dir} 完整快照尚未提交完成，请重新执行全量备份`)
-  if (commit.generationId !== manifest.generationId) {
-    throw new Error(`${dir} 完整快照提交标记与 manifest 不匹配`)
-  }
-  const manifestSha256 = await sha256TextHex(rootRaw)
-  if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
-    throw new Error(`${dir} 完整快照 manifest 校验失败`)
-  }
-  return { manifest, raw: rootRaw, dataPrefix: manifest.snapshotPrefix || '' }
+  return resolveManifestRecord(dir, root, commit, snapshot)
 }
 
 async function downloadRemoteSyncEntities(): Promise<Partial<SyncEntityPayloads>> {
@@ -762,26 +889,30 @@ export async function fullRestoreV8(
 
     // Check if v8 JSON format exists at configured subdir
     let base = getWebdavContext().baseUrl
-    let manifestExists = await checkManifestAt(base)
-    if (!manifestExists) {
+    let availability = await detectFullSnapshotAt(base)
+    if (availability === 'none') {
       // Fallback: old code uploaded to root/PacilRead (without webdavDir)
       const rootBase = `${getWebdavContext().url.replace(/\/+$/, '')}/PacilRead`
       if (rootBase !== base) {
         onProgress?.('子目录未找到 v8 数据，尝试根目录 PacilRead...')
-        manifestExists = await checkManifestAt(rootBase)
-        if (manifestExists) {
+        availability = await detectFullSnapshotAt(rootBase)
+        if (availability !== 'none') {
           // Use root-level base for all subsequent downloads
           base = rootBase
         }
       }
     }
-    if (!manifestExists) {
+    if (availability === 'none') {
       return { success: false, error: '远程没有 v8 JSON 格式数据，请尝试旧格式恢复' }
     }
 
     const resolvedManifest = await resolveManifestAt(base, 'database')
     if (!resolvedManifest) return { success: false, error: '远程 manifest.json 无法读取' }
-    const { manifest, dataPrefix } = resolvedManifest
+    const { manifest, dataPrefix, mode, manifestSource } = resolvedManifest
+    console.info(`[FullRestore] mode=${mode}`)
+    console.info(`[FullRestore] generationId=${manifest.generationId || '(legacy)'}`)
+    console.info(`[FullRestore] snapshotPrefix=${manifest.snapshotPrefix || '(root)'}`)
+    console.info(`[FullRestore] manifestSource=${manifestSource}`)
     if (!manifest.files || typeof manifest.files !== 'object') {
       return { success: false, error: '远程 manifest.json 缺少文件清单' }
     }
@@ -796,10 +927,13 @@ export async function fullRestoreV8(
       onProgress?.(`正在下载 ${entity}.json...`)
       const raw = await getJsonAt(base, snapshotPath(dataPrefix, `database/${fileName}`))
       if (raw === null) throw new Error(`完整快照缺少 ${fileName}`)
-      if (utf8Size(raw) !== expected.size) throw new Error(`${fileName} 大小校验失败`)
-      if ((await sha256TextHex(raw)).toLowerCase() !== expected.sha256.toLowerCase()) {
-        throw new Error(`${fileName} SHA-256 校验失败`)
-      }
+      const integrityError = getManifestFileIntegrityError(
+        fileName,
+        expected,
+        utf8Size(raw),
+        await sha256TextHex(raw),
+      )
+      if (integrityError) throw new Error(integrityError)
       entities[entity] = parseEntityArrayJson(raw, fileName)
     }
 
