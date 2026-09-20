@@ -29,6 +29,7 @@ export interface SyncManifest {
   schemaVersion: number
   generatedAt: number
   generationId?: string
+  snapshotPrefix?: string
   files: Record<string, ManifestFileEntry>
   assets: Record<string, ManifestAssetEntry>
   scopes?: {
@@ -43,6 +44,7 @@ interface SnapshotCommit {
   generationId: string
   manifestSha256: string
   committedAt: number
+  snapshotPrefix?: string
 }
 
 interface PreparedAsset {
@@ -130,8 +132,12 @@ function assetFileName(value: unknown): string {
   return clean.split('/').pop() || ''
 }
 
-function encodeAssetKey(key: string): string {
-  return key.split('/').map(encodeURIComponent).join('/')
+function snapshotPath(prefix: string | undefined, path: string): string {
+  return prefix ? `${prefix.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}` : path
+}
+
+function encodeRemotePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
 }
 
 async function assertManagedFileIntegrity(
@@ -372,6 +378,7 @@ async function prepareFullBackupAssets(
 
 async function uploadPreparedAssets(
   assets: PreparedAsset[],
+  remotePrefix = '',
   onProgress?: (message: string) => void,
 ): Promise<void> {
   const ctx = getWebdavContext()
@@ -380,7 +387,7 @@ async function uploadPreparedAssets(
     onProgress?.(`正在上传资源 (${index + 1}/${assets.length})：${asset.key}`)
     const result = await window.electronAPI.webdav.uploadFile(
       asset.localPath,
-      remoteUrl(encodeAssetKey(asset.key)),
+      remoteUrl(encodeRemotePath(snapshotPath(remotePrefix, asset.key))),
       ctx.auth,
     )
     if (!result.success) {
@@ -424,6 +431,7 @@ async function downloadCovers(
   onProgress?: (message: string) => void,
   baseOverride?: string,
   assets: Record<string, ManifestAssetEntry> = {},
+  remotePrefix = '',
 ): Promise<string[]> {
   const downloaded: string[] = []
   const coversDir = await getCoversDir()
@@ -437,7 +445,7 @@ async function downloadCovers(
     const expected = assets[assetKey]
     try {
       const response = await window.electronAPI.webdav.downloadFile(
-        `${base}/covers/${encodeURIComponent(filename)}`,
+        `${base}/${encodeRemotePath(snapshotPath(remotePrefix, `covers/${filename}`))}`,
         localPath,
         ctx.auth,
       )
@@ -463,6 +471,7 @@ async function downloadSourceFiles(
   onProgress?: (message: string) => void,
   baseOverride?: string,
   assets: Record<string, ManifestAssetEntry> = {},
+  remotePrefix = '',
 ): Promise<string[]> {
   const userData = (await window.electronAPI.app.getPath('userData')).replace(/\\/g, '/')
   const ctx = getWebdavContext()
@@ -478,7 +487,7 @@ async function downloadSourceFiles(
     const localPath = `${userData}/books/${filename}`
     onProgress?.(`正在下载源文件 (${index + 1}/${filenames.length})...`)
     const response = await window.electronAPI.webdav.downloadFile(
-      `${base}/books/${encodeURIComponent(filename)}`,
+      `${base}/${encodeRemotePath(snapshotPath(remotePrefix, `books/${filename}`))}`,
       localPath,
       ctx.auth,
     )
@@ -495,6 +504,7 @@ async function generateManifest(
   entities: SyncEntityPayloads,
   options: {
     generationId?: string
+    snapshotPrefix?: string
     assets?: PreparedAsset[]
     scopes?: Manifest['scopes']
   } = {},
@@ -519,6 +529,7 @@ async function generateManifest(
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     generatedAt: Date.now(),
     ...(options.generationId ? { generationId: options.generationId } : {}),
+    ...(options.snapshotPrefix ? { snapshotPrefix: options.snapshotPrefix } : {}),
     files,
     assets,
     ...(options.scopes ? { scopes: options.scopes } : {}),
@@ -533,46 +544,104 @@ async function downloadManifest(dir: 'database' | 'sync'): Promise<Manifest | nu
   return webdavGetJson<Manifest>(`${dir}/manifest.json`)
 }
 
-async function uploadSnapshotCommit(manifest: Manifest, dir: 'database' | 'sync'): Promise<boolean> {
+async function uploadSnapshotCommit(
+  manifest: Manifest,
+  dir: 'database' | 'sync',
+  snapshotPrefix = manifest.snapshotPrefix,
+): Promise<boolean> {
   if (!manifest.generationId) return false
   const commit: SnapshotCommit = {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     generationId: manifest.generationId,
     manifestSha256: await sha256TextHex(manifestJson(manifest)),
     committedAt: Date.now(),
+    ...(snapshotPrefix ? { snapshotPrefix } : {}),
   }
   return webdavPut(`${dir}/${SNAPSHOT_COMMIT_FILE}`, JSON.stringify(commit, null, 2), 'application/json')
 }
 
-async function validateSnapshotCommitAt(baseUrl: string, manifest: Manifest, manifestRaw: string): Promise<void> {
-  if (!manifest.generationId) return
-  const commitRaw = await getJsonAt(baseUrl, `database/${SNAPSHOT_COMMIT_FILE}`)
-  if (!commitRaw) throw new Error('完整快照尚未提交完成，请重新执行全量备份')
-  let commit: SnapshotCommit
+interface ResolvedManifest {
+  manifest: Manifest
+  raw: string
+  dataPrefix: string
+}
+
+function parseManifest(raw: string, label: string): Manifest {
   try {
-    commit = JSON.parse(commitRaw) as SnapshotCommit
+    return JSON.parse(raw) as Manifest
   } catch {
-    throw new Error('完整快照提交标记损坏')
-  }
-  if (commit.generationId !== manifest.generationId) {
-    throw new Error('完整快照提交标记与 manifest 不匹配')
-  }
-  const manifestSha256 = await sha256TextHex(manifestRaw)
-  if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
-    throw new Error('完整快照 manifest 校验失败')
+    throw new Error(`${label} 已损坏`)
   }
 }
 
+async function parseSnapshotCommitAt(baseUrl: string, dir: 'database' | 'sync'): Promise<SnapshotCommit | null> {
+  const commitRaw = await getJsonAt(baseUrl, `${dir}/${SNAPSHOT_COMMIT_FILE}`)
+  if (!commitRaw) return null
+  try {
+    return JSON.parse(commitRaw) as SnapshotCommit
+  } catch {
+    throw new Error(`${dir}/commit.json 提交标记损坏`)
+  }
+}
+
+async function resolveManifestAt(baseUrl: string, dir: 'database' | 'sync'): Promise<ResolvedManifest | null> {
+  const rootRaw = await getJsonAt(baseUrl, `${dir}/manifest.json`)
+  const rootManifest = rootRaw ? parseManifest(rootRaw, `${dir}/manifest.json`) : null
+
+  // Incremental sync continues to publish a root manifest without generationId.
+  // It is authoritative for sync/ and must not be shadowed by an older full-snapshot pointer.
+  if (rootManifest && !rootManifest.generationId) {
+    return { manifest: rootManifest, raw: rootRaw!, dataPrefix: '' }
+  }
+
+  const commit = await parseSnapshotCommitAt(baseUrl, dir)
+
+  if (commit?.snapshotPrefix) {
+    const snapshotRaw = await getJsonAt(
+      baseUrl,
+      snapshotPath(commit.snapshotPrefix, `${dir}/manifest.json`),
+    )
+    if (!snapshotRaw) throw new Error(`${dir} 完整快照数据不完整，找不到已提交的 manifest`)
+    const snapshotManifest = parseManifest(snapshotRaw, `${dir}/manifest.json`)
+    if (snapshotManifest.generationId !== commit.generationId) {
+      throw new Error(`${dir} 完整快照提交标记与 manifest 不匹配`)
+    }
+    const manifestSha256 = await sha256TextHex(snapshotRaw)
+    if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
+      throw new Error(`${dir} 完整快照 manifest 校验失败`)
+    }
+    return {
+      manifest: snapshotManifest,
+      raw: snapshotRaw,
+      dataPrefix: commit.snapshotPrefix,
+    }
+  }
+
+  if (!rootRaw || !rootManifest) return null
+  const manifest = rootManifest
+  if (!commit) throw new Error(`${dir} 完整快照尚未提交完成，请重新执行全量备份`)
+  if (commit.generationId !== manifest.generationId) {
+    throw new Error(`${dir} 完整快照提交标记与 manifest 不匹配`)
+  }
+  const manifestSha256 = await sha256TextHex(rootRaw)
+  if (commit.manifestSha256.toLowerCase() !== manifestSha256.toLowerCase()) {
+    throw new Error(`${dir} 完整快照 manifest 校验失败`)
+  }
+  return { manifest, raw: rootRaw, dataPrefix: manifest.snapshotPrefix || '' }
+}
+
 async function downloadRemoteSyncEntities(): Promise<Partial<SyncEntityPayloads>> {
-  const remoteManifest = await downloadManifest('sync')
-  if (!remoteManifest) throw new Error('远程没有增量同步数据')
+  const base = getWebdavContext().baseUrl
+  const resolved = await resolveManifestAt(base, 'sync')
+  if (!resolved) throw new Error('远程没有增量同步数据')
+  const { manifest: remoteManifest, dataPrefix } = resolved
 
   const entities: Partial<SyncEntityPayloads> = {}
   for (const entity of ENTITY_TYPES) {
     const fileName = `${entity}.json`
     const expected = remoteManifest.files[fileName]
     if (!expected?.sha256) throw new Error(`远程 manifest 缺少 ${fileName} 校验信息`)
-    const remoteText = await webdavGet(`sync/${fileName}`)
+    const remoteText = await getJsonAt(base, snapshotPath(dataPrefix, `sync/${fileName}`))
     if (remoteText === null) throw new Error(`远程缺少 sync/${fileName}`)
     if (utf8Size(remoteText) !== expected.size) throw new Error(`sync/${fileName} 大小校验失败`)
     if ((await sha256TextHex(remoteText)).toLowerCase() !== expected.sha256.toLowerCase()) {
@@ -612,28 +681,12 @@ export async function fullBackupV8(
 
     const entities = buildSyncEntities(dataStore)
     const generationId = createGenerationId()
+    const snapshotPrefix = `snapshots/${generationId}`
     const assets = await prepareFullBackupAssets(entities, options.includeSourceFiles === true, onProgress)
 
-    // Upload each entity JSON file to database/ directory for mobile compatibility.
-    for (const entity of ENTITY_TYPES) {
-      onProgress?.(`正在上传 ${entity}.json...`)
-      const jsonStr = entityJson(entities, entity)
-      const ok = await webdavPut(`database/${entity}.json`, jsonStr, 'application/json')
-      if (!ok) throw new Error(`上传 ${entity}.json 失败`)
-    }
-
-    onProgress?.('正在上传增量同步文件...')
-    for (const entity of ENTITY_TYPES) {
-      const jsonStr = entityJson(entities, entity)
-      const ok = await webdavPut(`sync/${entity}.json`, jsonStr, 'application/json')
-      if (!ok) throw new Error(`上传 sync/${entity}.json 失败`)
-    }
-
-    await uploadPreparedAssets(assets, onProgress)
-
-    onProgress?.('正在生成完整资源清单...')
     const manifest = await generateManifest(entities, {
       generationId,
+      snapshotPrefix,
       assets,
       scopes: {
         chapterText: true,
@@ -641,10 +694,49 @@ export async function fullBackupV8(
         sourceFiles: options.includeSourceFiles === true,
       },
     })
+
+    const snapshotDirs = new Set([
+      'snapshots',
+      snapshotPrefix,
+      `${snapshotPrefix}/database`,
+      `${snapshotPrefix}/sync`,
+      ...assets.map(asset => snapshotPath(snapshotPrefix, asset.key).split('/').slice(0, -1).join('/')),
+    ])
+    for (const directory of snapshotDirs) {
+      if (directory) await getWebdavClient().ensureCollection(encodeRemotePath(directory))
+    }
+
+    const uploadEntities = async (dir: 'database' | 'sync', prefix: string) => {
+      for (const entity of ENTITY_TYPES) {
+        onProgress?.(`正在上传 ${dir}/${entity}.json...`)
+        const jsonStr = entityJson(entities, entity)
+        const ok = await webdavPut(snapshotPath(prefix, `${dir}/${entity}.json`), jsonStr, 'application/json')
+        if (!ok) throw new Error(`上传 ${dir}/${entity}.json 失败`)
+      }
+    }
+
+    // Stage the complete snapshot first. The commit files are the only published pointers.
+    await uploadEntities('database', snapshotPrefix)
+    await uploadEntities('sync', snapshotPrefix)
+    await uploadPreparedAssets(assets, snapshotPrefix, onProgress)
+    if (!await webdavPut(snapshotPath(snapshotPrefix, 'database/manifest.json'), manifestJson(manifest), 'application/json')) {
+      throw new Error('上传快照 database/manifest.json 失败')
+    }
+    if (!await webdavPut(snapshotPath(snapshotPrefix, 'sync/manifest.json'), manifestJson(manifest), 'application/json')) {
+      throw new Error('上传快照 sync/manifest.json 失败')
+    }
+
+    // Publish the commit pointers only after the immutable generation is complete.
+    if (!await uploadSnapshotCommit(manifest, 'database', snapshotPrefix)) throw new Error('提交完整快照失败')
+    if (!await uploadSnapshotCommit(manifest, 'sync', snapshotPrefix)) throw new Error('提交增量基线失败')
+
+    // Keep the legacy root paths as compatibility mirrors. They are never used by a
+    // new client while a generation commit is available.
+    await uploadEntities('database', '')
+    await uploadEntities('sync', '')
+    await uploadPreparedAssets(assets, '', onProgress)
     if (!await uploadManifest(manifest, 'database')) throw new Error('上传 database/manifest.json 失败')
     if (!await uploadManifest(manifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
-    if (!await uploadSnapshotCommit(manifest, 'database')) throw new Error('提交完整快照失败')
-    if (!await uploadSnapshotCommit(manifest, 'sync')) throw new Error('提交增量基线失败')
     await cleanupLegacySettingsFiles()
 
     onProgress?.('全量备份完成!')
@@ -684,18 +776,12 @@ export async function fullRestoreV8(
       return { success: false, error: '远程没有 v8 JSON 格式数据，请尝试旧格式恢复' }
     }
 
-    const manifestRaw = await getJsonAt(base, 'database/manifest.json')
-    if (!manifestRaw) return { success: false, error: '远程 manifest.json 无法读取' }
-    let manifest: Manifest
-    try {
-      manifest = JSON.parse(manifestRaw) as Manifest
-    } catch {
-      return { success: false, error: '远程 manifest.json 已损坏' }
-    }
+    const resolvedManifest = await resolveManifestAt(base, 'database')
+    if (!resolvedManifest) return { success: false, error: '远程 manifest.json 无法读取' }
+    const { manifest, dataPrefix } = resolvedManifest
     if (!manifest.files || typeof manifest.files !== 'object') {
       return { success: false, error: '远程 manifest.json 缺少文件清单' }
     }
-    await validateSnapshotCommitAt(base, manifest, manifestRaw)
 
     onProgress?.('正在下载并校验 JSON 数据...')
     const entities: Record<string, any> = {}
@@ -705,7 +791,7 @@ export async function fullRestoreV8(
       const expected = manifest.files[fileName]
       if (!expected?.sha256) throw new Error(`manifest 缺少 ${fileName} 校验信息`)
       onProgress?.(`正在下载 ${entity}.json...`)
-      const raw = await getJsonAt(base, `database/${fileName}`)
+      const raw = await getJsonAt(base, snapshotPath(dataPrefix, `database/${fileName}`))
       if (raw === null) throw new Error(`完整快照缺少 ${fileName}`)
       if (utf8Size(raw) !== expected.size) throw new Error(`${fileName} 大小校验失败`)
       if ((await sha256TextHex(raw)).toLowerCase() !== expected.sha256.toLowerCase()) {
@@ -733,10 +819,10 @@ export async function fullRestoreV8(
     if (entities.books) {
       if (manifest.scopes?.covers !== false) {
         onProgress?.('正在下载封面文件...')
-        await downloadCovers(entities.books, onProgress, base, assets)
+        await downloadCovers(entities.books, onProgress, base, assets, dataPrefix)
       }
       if (options.includeSourceFiles && manifest.scopes?.sourceFiles !== false) {
-        sourceFilesDownloaded = (await downloadSourceFiles(entities.books, onProgress, base, assets)).length
+        sourceFilesDownloaded = (await downloadSourceFiles(entities.books, onProgress, base, assets, dataPrefix)).length
       }
     }
 

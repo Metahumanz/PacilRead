@@ -369,6 +369,7 @@ const downloadChapterTextZips = async (
 ): Promise<ChapterTextRestoreResult> => {
   const configuredBaseUrl = getCurrentPacilReadBaseUrl()
   const baseUrl = options.resolvedBase ? `${options.resolvedBase.replace(/\/+$/, '')}/` : configuredBaseUrl
+  const snapshotPrefix = options.manifest?.snapshotPrefix || ''
   // Fallback: old backups may be under a nested PacilRead/ prefix
   const legacyBase = configuredBaseUrl + 'PacilRead/'
   const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -390,6 +391,7 @@ const downloadChapterTextZips = async (
   })
   console.info('[ChapterTextRestore] resolved base:', baseUrl)
   console.info('[ChapterTextRestore] strict snapshot:', strictSnapshot)
+  console.info('[ChapterTextRestore] snapshot prefix:', snapshotPrefix || '(root)')
   console.info('[ChapterTextRestore] chapter-required book ids:', requiredBookIds)
   console.info('[ChapterTextRestore] manifest assets:', manifestAssets.map(asset => asset.key))
 
@@ -554,7 +556,7 @@ const downloadChapterTextZips = async (
     }
 
     const candidates = strictSnapshot
-      ? [baseUrl + assetKey]
+      ? [baseUrl + snapshotPrefix.replace(/^\/+|\/+$/g, '') + (snapshotPrefix ? '/' : '') + assetKey]
       : [
           baseUrl + assetKey,
           legacyBase + 'chapter_text/' + chapterTextZipFileName(bookId),
@@ -952,9 +954,11 @@ const fullRestore = async () => {
       ? (chapterTextRestore.missing > 0
           ? `数据已恢复，${desktopSettingsStatus}，章节正文：${restoredChapterBooks}/${chapterTextRestore.total} 本恢复完成，${chapterTextRestore.missing} 本失败。`
           : `数据已从云端成功恢复，${desktopSettingsStatus}，章节正文：${restoredChapterBooks}/${chapterTextRestore.total} 本恢复完成。`)
-      : `未找到完整书架备份，但${desktopSettingsStatus}。`
+      : `书架数据恢复失败：${v8Result.error || '远程完整快照不可用'}；但${desktopSettingsStatus}。`
     alert(msg)
-    webdavSyncStatus.value = '从云端恢复成功'
+    webdavSyncStatus.value = v8Result.success
+      ? '从云端恢复成功'
+      : '桌面设置已恢复，但书架数据恢复失败'
   } catch (e: any) {
     webdavSyncStatus.value = '恢复失败: ' + (e.message || '网络错误')
   } finally { webdavSyncing.value = false }
