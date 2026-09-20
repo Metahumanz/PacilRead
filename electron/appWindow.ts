@@ -101,7 +101,7 @@ function migrateOldData(): void {
 export function setupAutoUpdater(): void {
   if (isPortableBuild()) return
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.on('checking-for-update', () => {
     mainWindow?.webContents.send('updater:status', { status: 'checking' })
   })
