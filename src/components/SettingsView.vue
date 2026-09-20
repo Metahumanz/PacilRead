@@ -16,6 +16,7 @@ import type { ReadingStatsOverview } from '../composables/useReadingStats'
 import { hasReadingStatsHistory } from '../utils/readingStatsAvailability'
 import { buildPacilReadBaseUrl, sanitizeWebdavDirectorySegment } from '../utils/webdav'
 import {
+  collectManifestChapterTextAssets,
   isChapterTextZipRestoreComplete,
   shouldSkipExistingChapterTextZip,
   type ChapterTextBackupMode,
@@ -338,74 +339,264 @@ const uploadBookChapterTextZips = async (auth: string, mode: ChapterTextBackupMo
   return { uploaded, skipped, total: bookIds.length }
 }
 
+interface ChapterZipDownloadResult {
+  success: boolean
+  stage: 'download' | 'integrity' | 'extract' | 'verify' | 'complete'
+  reason?: string
+  status?: number
+  extracted?: number
+}
+
+interface ChapterTextRestoreFailure {
+  bookId: number
+  assetKey?: string
+  remotePath?: string
+  stage: string
+  reason: string
+}
+
+interface ChapterTextRestoreResult {
+  downloaded: number
+  missing: number
+  skipped: number
+  total: number
+  failures: ChapterTextRestoreFailure[]
+}
+
 const downloadChapterTextZips = async (
   auth: string,
   options: { resolvedBase?: string; manifest?: SyncManifest; strictSnapshot?: boolean } = {},
-) => {
+): Promise<ChapterTextRestoreResult> => {
   const configuredBaseUrl = getCurrentPacilReadBaseUrl()
   const baseUrl = options.resolvedBase ? `${options.resolvedBase.replace(/\/+$/, '')}/` : configuredBaseUrl
   // Fallback: old backups may be under a nested PacilRead/ prefix
   const legacyBase = configuredBaseUrl + 'PacilRead/'
   const appDataPath = await window.electronAPI.app.getPath('userData')
-  const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
-  let downloaded = 0
-  let missing = 0
+  const requiredBookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
+  const manifestAssets = collectManifestChapterTextAssets(options.manifest?.assets)
+  const strictSnapshot = options.strictSnapshot === true
+  const failures: ChapterTextRestoreFailure[] = []
   let skipped = 0
+
+  console.info('[ChapterTextRestore] restore plan', {
+    resolvedBase: baseUrl,
+    strictSnapshot,
+    requiredBookIds,
+    manifestAssets: manifestAssets.map(asset => ({
+      bookId: asset.bookId,
+      key: asset.key,
+      size: asset.integrity.size,
+    })),
+  })
+  console.info('[ChapterTextRestore] resolved base:', baseUrl)
+  console.info('[ChapterTextRestore] strict snapshot:', strictSnapshot)
+  console.info('[ChapterTextRestore] chapter-required book ids:', requiredBookIds)
+  console.info('[ChapterTextRestore] manifest assets:', manifestAssets.map(asset => asset.key))
+
+  const manifestBookIds = manifestAssets.map(asset => asset.bookId)
+  const requiredBookIdSet = new Set(requiredBookIds)
+  const manifestBookIdSet = new Set(manifestBookIds)
+  const missingAssets = requiredBookIds.filter(id => !manifestBookIdSet.has(id))
+  const orphanAssets = manifestAssets.filter(asset => !requiredBookIdSet.has(asset.bookId))
+  const subtract = (left: number[], right: Set<number>) => left.filter(id => !right.has(id))
+  console.info('[ChapterTextRestore] book sets', {
+    A: requiredBookIds,
+    B: manifestBookIds,
+    C: [],
+    'A-B': subtract(requiredBookIds, manifestBookIdSet),
+    'B-A': orphanAssets.map(asset => asset.bookId),
+    'B-C': manifestBookIds,
+  })
+
+  if (strictSnapshot) {
+    if (requiredBookIds.length > 0 && manifestAssets.length === 0) {
+      throw new Error('完整快照声明包含章节正文，但manifest.assets没有chapter_text正文ZIP记录')
+    }
+    if (missingAssets.length > 0) {
+      throw new Error(`完整快照manifest缺少${missingAssets.length}本书的章节正文ZIP：${missingAssets.join(', ')}`)
+    }
+    if (orphanAssets.length > 0) {
+      console.warn(
+        '[ChapterTextRestore] manifest contains chapter assets without matching restored chapter rows',
+        orphanAssets,
+      )
+    }
+  }
 
   const tryDownloadZip = async (
     remotePath: string,
     tempZipPath: string,
     bookId: number,
     expected?: { size: number; sha256?: string },
-  ): Promise<boolean> => {
+    assetKey?: string,
+    progress?: string,
+  ): Promise<ChapterZipDownloadResult> => {
     try {
+      webdavSyncStatus.value = `下载章节正文 (${progress || bookId})...`
+      console.info('[ChapterTextRestore] downloading', {
+        bookId,
+        assetKey,
+        remotePath,
+        expectedSize: expected?.size,
+      })
       const result = await window.electronAPI.webdav.downloadFile(remotePath, tempZipPath, auth)
-      if (!result.success) return false
-      if (expected) {
-        const actual = await window.electronAPI.library.getManagedFileIntegrity(tempZipPath)
-        if (actual.size !== expected.size) return false
-        if (expected.sha256 && actual.sha256.toLowerCase() !== expected.sha256.toLowerCase()) return false
+      if (!result.success) {
+        const failure = {
+          success: false as const,
+          stage: 'download' as const,
+          reason: result.error || `HTTP ${result.status || 'unknown'}`,
+          status: result.status,
+        }
+        console.warn('[ChapterTextRestore] download failed', { bookId, remotePath, ...failure })
+        return failure
       }
+
+      let actual: { size: number; sha256: string } | undefined
+      if (expected) {
+        actual = await window.electronAPI.library.getManagedFileIntegrity(tempZipPath)
+        console.info('[ChapterTextRestore] download integrity', {
+          bookId,
+          remotePath,
+          expectedSize: expected.size,
+          actualSize: actual.size,
+          expectedSha256: expected.sha256,
+          actualSha256: actual.sha256,
+        })
+        if (actual.size !== expected.size) {
+          return {
+            success: false,
+            stage: 'integrity',
+            reason: `size mismatch: expected=${expected.size}, actual=${actual.size}`,
+          }
+        }
+        if (expected.sha256 && actual.sha256.toLowerCase() !== expected.sha256.toLowerCase()) {
+          return {
+            success: false,
+            stage: 'integrity',
+            reason: `sha256 mismatch: expected=${expected.sha256}, actual=${actual.sha256}`,
+          }
+        }
+      }
+
+      webdavSyncStatus.value = `解压章节正文 (${progress || bookId})...`
       const extracted = await window.electronAPI.library.extractBookChapterTextZip(tempZipPath, bookId)
+      webdavSyncStatus.value = `验证本地正文 (${progress || bookId})...`
       const hasAllExpectedFiles = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
-      return isChapterTextZipRestoreComplete(extracted, hasAllExpectedFiles)
-    } catch (_) {
-      return false
+      console.info('[ChapterTextRestore] extracted', {
+        bookId,
+        remotePath,
+        extracted,
+        hasAllExpectedFiles,
+      })
+      if (extracted === 0) {
+        return { success: false, stage: 'extract', reason: 'ZIP解压后没有提取出正文文件', extracted }
+      }
+      if (!isChapterTextZipRestoreComplete(extracted, hasAllExpectedFiles)) {
+        return { success: false, stage: 'verify', reason: 'ZIP解压后仍缺少预期章节正文或正文无法gunzip', extracted }
+      }
+      return { success: true, stage: 'complete', extracted }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error('[ChapterTextRestore] unexpected failure', { bookId, remotePath, reason })
+      return { success: false, stage: 'extract', reason }
     }
   }
 
-  for (let i = 0; i < bookIds.length; i++) {
-    const bookId = bookIds[i]
-    webdavSyncStatus.value = `检查本地章节正文 (${i + 1}/${bookIds.length})...`
-    const hasLocalText = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
-    if (hasLocalText && !options.strictSnapshot) {
-      skipped += 1
-      continue
-    }
-
-    webdavSyncStatus.value = `下载缺失章节正文 ZIP (${i + 1}/${bookIds.length})...`
-
+  const successfulBookIds: number[] = []
+  const restoreOne = async (
+    bookId: number,
+    assetKey: string,
+    expected?: { size: number; sha256?: string },
+    candidates: string[] = [],
+    progress?: string,
+  ) => {
     const tempZipPath = appDataPath + '/book_' + bookId + '.tmp.zip'
-    const assetKey = `chapter_text/${chapterTextZipFileName(bookId)}`
-    const expected = options.manifest?.assets?.[assetKey]
-    const ok = options.strictSnapshot
-      ? Boolean(expected) && await tryDownloadZip(
-          baseUrl + assetKey, tempZipPath, bookId, expected
-        )
-      : await tryDownloadZip(
-          baseUrl + assetKey, tempZipPath, bookId, expected
-        ) || await tryDownloadZip(
-          legacyBase + 'chapter_text/' + chapterTextZipFileName(bookId), tempZipPath, bookId
-        ) || await tryDownloadZip(
-          configuredBaseUrl + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath, bookId
-        ) || await tryDownloadZip(
-          legacyBase + 'chapter_text/' + legacyChapterTextZipFileName(bookId), tempZipPath, bookId
-        )
-    if (ok) { downloaded += 1; continue }
-    missing += 1
+    const candidateFailures: ChapterZipDownloadResult[] = []
+    for (const candidate of candidates) {
+      const result = await tryDownloadZip(candidate, tempZipPath, bookId, expected, assetKey, progress)
+      if (result.success) {
+        successfulBookIds.push(bookId)
+        return true
+      }
+      candidateFailures.push(result)
+    }
+    const lastFailure = candidateFailures[candidateFailures.length - 1] || {
+      success: false,
+      stage: 'download' as const,
+      reason: '没有可用的远程正文资源地址',
+    }
+    failures.push({
+      bookId,
+      assetKey,
+      remotePath: candidates[candidates.length - 1],
+      stage: lastFailure.stage,
+      reason: candidateFailures.length > 1
+        ? candidateFailures.map((failure, index) => `${index + 1}:${failure.reason || failure.stage}`).join('; ')
+        : (lastFailure.reason || lastFailure.stage),
+    })
+    return false
   }
 
-  return { downloaded, missing, skipped, total: bookIds.length }
+  const restoreBookCount = strictSnapshot ? manifestAssets.length : requiredBookIds.length
+  for (let i = 0; i < restoreBookCount; i++) {
+    const asset = strictSnapshot ? manifestAssets[i] : undefined
+    const bookId = asset?.bookId ?? requiredBookIds[i]
+    const assetKey = asset?.key || `chapter_text/${chapterTextZipFileName(bookId)}`
+    const expected = asset?.integrity || options.manifest?.assets?.[assetKey]
+
+    if (!strictSnapshot) {
+      webdavSyncStatus.value = `检查本地章节正文 (${i + 1}/${restoreBookCount})...`
+      const hasLocalText = await window.electronAPI.library.hasBookChapterTextFiles(bookId)
+      if (hasLocalText) {
+        skipped += 1
+        continue
+      }
+    }
+
+    const candidates = strictSnapshot
+      ? [baseUrl + assetKey]
+      : [
+          baseUrl + assetKey,
+          legacyBase + 'chapter_text/' + chapterTextZipFileName(bookId),
+          configuredBaseUrl + 'chapter_text/' + legacyChapterTextZipFileName(bookId),
+          legacyBase + 'chapter_text/' + legacyChapterTextZipFileName(bookId),
+        ]
+    await restoreOne(
+      bookId,
+      assetKey,
+      strictSnapshot ? expected : undefined,
+      candidates,
+      `${i + 1}/${restoreBookCount}`,
+    )
+  }
+
+  const completedBookIds = Array.from(new Set(successfulBookIds)).sort((a, b) => a - b)
+  const downloaded = completedBookIds.length
+  const skippedCount = strictSnapshot ? 0 : skipped
+  const missing = Math.max(0, restoreBookCount - downloaded - skippedCount)
+  console.info('[ChapterTextRestore] book sets', {
+    A: requiredBookIds,
+    B: manifestBookIds,
+    C: completedBookIds,
+    'A-B': subtract(requiredBookIds, manifestBookIdSet),
+    'B-A': subtract(manifestBookIds, requiredBookIdSet),
+    'B-C': subtract(manifestBookIds, new Set(completedBookIds)),
+  })
+  console.info('[ChapterTextRestore] summary', {
+    manifestAssets: manifestAssets.length,
+    requiredBooks: requiredBookIds.length,
+    downloaded,
+    missing,
+    skipped: skippedCount,
+  })
+
+  return {
+    downloaded,
+    missing,
+    skipped: skippedCount,
+    total: restoreBookCount,
+    failures,
+  }
 }
 
 const refreshReadingStatsSummary = async () => {
@@ -701,7 +892,13 @@ const fullRestore = async () => {
     webdavSyncing.value = true
     const preservedLocalOnlySettings = await getLocalOnlySettingsSnapshot()
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
-    let chapterTextRestore = { downloaded: 0, missing: 0, skipped: 0, total: 0 }
+    let chapterTextRestore: ChapterTextRestoreResult = {
+      downloaded: 0,
+      missing: 0,
+      skipped: 0,
+      total: 0,
+      failures: [],
+    }
 
     webdavSyncStatus.value = '恢复 v8 JSON 数据...'
     const v8Result = await fullRestoreV8(
@@ -711,14 +908,23 @@ const fullRestore = async () => {
     await restoreLocalOnlySettings(preservedLocalOnlySettings)
     if (v8Result.success && v8Result.manifest?.scopes?.chapterText !== false) {
       const strictChapterTextRestore = v8Result.strictSnapshot === true
-      webdavSyncStatus.value = '补齐缺失章节正文...'
+      webdavSyncStatus.value = '分析章节正文资源...'
       chapterTextRestore = await downloadChapterTextZips(auth, {
         resolvedBase: v8Result.resolvedBase,
         manifest: v8Result.manifest,
         strictSnapshot: strictChapterTextRestore,
       })
-      if (strictChapterTextRestore && chapterTextRestore.missing > 0) {
-        throw new Error(`完整快照正文校验失败：${chapterTextRestore.missing}/${chapterTextRestore.total} 本未恢复`)
+      if (
+        strictChapterTextRestore
+        && (chapterTextRestore.downloaded !== chapterTextRestore.total || chapterTextRestore.missing > 0)
+      ) {
+        const details = chapterTextRestore.failures
+          .slice(0, 3)
+          .map(failure => `book ${failure.bookId}：${failure.reason}`)
+          .join('；')
+        throw new Error(
+          `完整快照正文恢复失败：${chapterTextRestore.missing}/${chapterTextRestore.total} 本未恢复${details ? `。${details}` : ''}`,
+        )
       }
     } else if (!v8Result.success) {
       webdavSyncStatus.value = 'v8 书架数据不可用，尝试恢复桌面设置...'
@@ -741,10 +947,11 @@ const fullRestore = async () => {
     }
     await reloadRestoredState()
 
+    const restoredChapterBooks = chapterTextRestore.downloaded + chapterTextRestore.skipped
     const msg = v8Result.success
       ? (chapterTextRestore.missing > 0
-          ? `数据已恢复，${desktopSettingsStatus}，但有 ${chapterTextRestore.missing}/${chapterTextRestore.total} 个章节正文 ZIP 未下载或解压失败。`
-          : `数据已从云端成功恢复，${desktopSettingsStatus}，补齐 ${chapterTextRestore.downloaded} 个正文 ZIP。`)
+          ? `数据已恢复，${desktopSettingsStatus}，章节正文：${restoredChapterBooks}/${chapterTextRestore.total} 本恢复完成，${chapterTextRestore.missing} 本失败。`
+          : `数据已从云端成功恢复，${desktopSettingsStatus}，章节正文：${restoredChapterBooks}/${chapterTextRestore.total} 本恢复完成。`)
       : `未找到完整书架备份，但${desktopSettingsStatus}。`
     alert(msg)
     webdavSyncStatus.value = '从云端恢复成功'
