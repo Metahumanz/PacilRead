@@ -69,6 +69,67 @@ assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', fal
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, true), true)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, false), false)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(0, true), false)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'file_gzip',
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), true)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), true)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'inline',
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), false)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'file_gzip',
+  bodyTextPath: '',
+}), false)
+assert.deepEqual(
+  plain(chapterTextSync.collectFileGzipBookIds([
+    {
+      bookId: 4,
+      bodyTextStorage: 'file_gzip',
+      bodyTextPath: 'book_4/chapter_1.txt.gz',
+    },
+    {
+      bookId: 7,
+      bodyTextPath: 'book_7/chapter_2.txt.gz',
+    },
+    {
+      bookId: 4,
+      bodyTextStorage: 'file_gzip',
+      bodyTextPath: 'book_4/chapter_3.txt.gz',
+    },
+  ])),
+  [4, 7],
+)
+assert.deepEqual(
+  plain(chapterTextSync.collectManifestChapterTextAssets({
+    'chapter_text/book_12.zip': { size: 100, sha256: 'aaa' },
+    'covers/12.jpg': { size: 50 },
+    'chapter_text/book_7.zip': { size: 200, sha256: 'bbb' },
+  })),
+  [
+    {
+      key: 'chapter_text/book_7.zip',
+      bookId: 7,
+      integrity: { size: 200, sha256: 'bbb' },
+    },
+    {
+      key: 'chapter_text/book_12.zip',
+      bookId: 12,
+      integrity: { size: 100, sha256: 'aaa' },
+    },
+  ],
+)
+assert.deepEqual(
+  plain(chapterTextSync.collectManifestChapterTextAssets({
+    'chapter_text/chapters_12.zip': { size: 100 },
+    'chapter_text/book_x.zip': { size: 100 },
+    'books/book_12.zip': { size: 100 },
+  })),
+  [],
+)
 
 const remoteProgress = loadTsModule('src/utils/remoteProgress.ts')
 assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 2, 450), true)

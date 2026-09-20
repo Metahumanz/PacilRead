@@ -17,6 +17,7 @@ import {
   type DuplicateMatchType,
 } from '../src/utils/bookshelfManagement'
 import { buildRemoteProgressExcerpt } from '../src/utils/remoteProgress'
+import { collectFileGzipBookIds, isFileGzipChapter } from '../src/utils/chapterTextSync'
 import { ALLOWED_BOOK_EXTENSIONS, assertAllowedLocalReadPath, assertFileExtension, assertNonEmptyString } from './ipcGuards'
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
@@ -305,8 +306,7 @@ function resolveChapterTextPath(bodyTextPath: string, dataDir: string): string |
 
 function getFileGzipChapterRowsForBook(bookId: number): any[] {
   return getChapterRowsForBook(bookId)
-    .filter((chapter) => chapter.bodyTextStorage === 'file_gzip'
-      && chapter.bodyTextPath)
+    .filter(isFileGzipChapter)
     .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
 }
 
@@ -380,13 +380,15 @@ function extractBookChapterTextZip(zipPath: string, expectedBookId?: number): nu
 }
 
 function getBookIdsWithFileGzipChapters(): number[] {
-  const ids = new Set<number>()
-  for (const chapter of readJsonEntity('chapters', []) as any[]) {
-    if (chapter.bodyTextStorage === 'file_gzip' && chapter.bodyTextPath) {
-      ids.add(Number(chapter.bookId))
-    }
-  }
-  return Array.from(ids).filter(Number.isFinite).sort((a, b) => a - b)
+  const chapters = readJsonEntity('chapters', []) as any[]
+  const ids = collectFileGzipBookIds(chapters)
+
+  console.info('[ChapterText] discovered file_gzip books', {
+    chapters: chapters.length,
+    bookIds: ids,
+  })
+
+  return ids
 }
 
 function hasBookChapterTextFiles(bookId: number): boolean {
@@ -1019,8 +1021,7 @@ function getChapterRowsForBook(bookId: number): any[] {
 }
 
 function chapterRowTextStorage(chapter: any): 'file_gzip' | 'inline' {
-  const rawStorage = String(chapter.bodyTextStorage || (chapter.bodyTextPath ? 'file_gzip' : 'inline'))
-  return rawStorage === 'file_gzip' ? 'file_gzip' : 'inline'
+  return isFileGzipChapter(chapter) ? 'file_gzip' : 'inline'
 }
 
 function chapterRowToMeta(chapter: any) {
