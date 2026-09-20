@@ -1,6 +1,7 @@
 name: Build and Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*.*.*'
@@ -24,6 +25,7 @@ jobs:
         run: npm ci
 
       - name: Verify release tag matches package version
+        if: ${{ github.event_name == 'push' }}
         shell: pwsh
         run: |
           $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
@@ -46,14 +48,18 @@ jobs:
             release/latest*.yml
 
   build-macos:
-    name: Build macOS Intel and Apple Silicon artifacts
-    runs-on: macos-latest
-    env:
-      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+    name: Build macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            build_script: electron:build:release:mac:arm64
+          - arch: x64
+            runner: macos-15-intel
+            build_script: electron:build:release:mac:x64
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -68,23 +74,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build signed and notarized macOS artifacts
-        if: ${{ env.MAC_CSC_LINK != '' && env.MAC_CSC_KEY_PASSWORD != '' && env.APPLE_API_KEY != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != '' }}
-        run: npm run electron:build:release:mac
-        env:
-          # Leave these secrets unset for an unsigned test build. Set all of
-          # them on the repository before publishing a public macOS release.
-          CSC_LINK: ${{ env.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ env.MAC_CSC_KEY_PASSWORD }}
+      - name: Show build environment
+        run: |
+          uname -m
+          node -p "process.platform + ' ' + process.arch"
 
-      - name: Build unsigned macOS artifacts
-        if: ${{ !(env.MAC_CSC_LINK != '' && env.MAC_CSC_KEY_PASSWORD != '' && env.APPLE_API_KEY != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != '') }}
-        run: npm run electron:build:release:mac
+      - name: Verify native dependencies
+        run: |
+          node -e "console.log('node arch:', process.arch); require('@napi-rs/canvas'); console.log('@napi-rs/canvas loaded successfully')"
+
+      - name: Build macOS artifact
+        run: npm run ${{ matrix.build_script }}
+
+      - name: Verify macOS app
+        run: node scripts/verify-macos-build.mjs ${{ matrix.arch }}
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-release
+          name: macos-release-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             release/*.dmg
@@ -93,6 +101,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
+    if: ${{ github.event_name == 'push' }}
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:

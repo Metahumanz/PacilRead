@@ -1,13 +1,31 @@
-# macOS release signing
+# macOS release
 
-The release workflow builds Intel (`x64`) and Apple Silicon (`arm64`) DMG and ZIP files on every `v*.*.*` tag. A macOS app can be built without credentials, but Gatekeeper will warn users about an unsigned app.
+## 当前发布模式
 
-For a public release, add these repository Actions secrets before pushing the tag:
+当前 GitHub Release 的 macOS 包：
 
-- `MAC_CSC_LINK`: base64-encoded Developer ID Application `.p12` certificate
-- `MAC_CSC_KEY_PASSWORD`: password for that certificate
-- `APPLE_API_KEY`: base64-encoded App Store Connect API key `.p8`
-- `APPLE_API_KEY_ID`: App Store Connect key ID
-- `APPLE_API_ISSUER`: App Store Connect issuer ID
+- 分别在原生 Apple Silicon 和 Intel runner 上构建 `arm64` 与 `x64`
+- 使用 ad-hoc code signing（`identity: "-"`）
+- 未经过 Apple notarization
+- 不需要 Apple Developer Program 或 Developer ID 证书
 
-With all five values present, Electron Builder signs the app and submits it for notarization automatically. This requires an active Apple Developer Program membership and a Developer ID Application certificate. If the secrets are absent, the workflow still creates an unsigned test build, which is not appropriate for a public macOS release.
+首次运行时，macOS 可能会拦截应用。请按以下方式手动放行：
+
+1. 将 PacilRead 拖入 `Applications`。
+2. 尝试打开 PacilRead。
+3. 如果 macOS 拦截，右键 PacilRead，选择“打开”。
+4. 也可以进入“系统设置”→“隐私与安全性”，点击“仍要打开”。
+
+`workflow_dispatch` 仅用于手动验证构建；正式 GitHub Release 仍只在 `v*.*.*` tag push 时发布。
+
+## 未来正式模式
+
+切换到 Developer ID 签名和 notarization 时，再配置以下 GitHub Actions secrets：
+
+- `MAC_CSC_LINK`：base64 编码的 Developer ID Application `.p12` 证书
+- `MAC_CSC_KEY_PASSWORD`：证书密码
+- `APPLE_API_KEY`：base64 编码的 App Store Connect API key `.p8`
+- `APPLE_API_KEY_ID`：App Store Connect key ID
+- `APPLE_API_ISSUER`：App Store Connect issuer ID
+
+这五项只在未来启用 Developer ID + notarization 时使用。该模式需要有效的 Apple Developer Program 会员资格和 Developer ID Application 证书，并可让 Electron Builder 自动提交 notarization。

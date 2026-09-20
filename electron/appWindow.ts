@@ -155,6 +155,10 @@ export function createWindow(): void {
       if (saved.y < wa.y) saved.y = wa.y
     }
   }
+  const windowIcon = is.dev
+    ? join(app.getAppPath(), 'public/icon.png')
+    : join(__dirname, '../dist/icon.png')
+
   mainWindow = new BrowserWindow({
     width: saved?.width || 1200,
     height: saved?.height || 800,
@@ -165,7 +169,7 @@ export function createWindow(): void {
     show: true,
     autoHideMenuBar: process.platform !== 'darwin',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
-    icon: join(app.getAppPath(), 'public/icon.png'),
+    icon: windowIcon,
     backgroundMaterial: process.platform === 'win32' ? 'mica' : 'none',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),

@@ -1,6 +1,7 @@
 {
   "appId": "com.metahumanz.pacilread",
   "productName": "PacilRead",
+  "npmRebuild": true,
   "directories": {
     "output": "release"
   },
@@ -27,7 +28,8 @@
     "icon": "public/icon.png",
     "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
     "category": "public.app-category.books",
-    "hardenedRuntime": true
+    "identity": "-",
+    "hardenedRuntime": false
   },
   "linux": {
     "target": "AppImage",

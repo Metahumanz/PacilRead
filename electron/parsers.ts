@@ -3,7 +3,6 @@ import * as iconv from 'iconv-lite'
 import * as jschardet from 'jschardet'
 import AdmZip from 'adm-zip'
 import { dirname, resolve } from 'path'
-import { PDFParse } from 'pdf-parse'
 
 export interface Chapter {
   title: string
@@ -137,6 +136,8 @@ export function parseTxt(filePath: string): Chapter[] {
 }
 
 export async function parsePdf(filePath: string): Promise<Chapter[]> {
+  const { PDFParse } = await import('pdf-parse')
+
   const dataBuffer = fs.readFileSync(filePath)
   const parser = new PDFParse(new Uint8Array(dataBuffer))
   const data = await parser.getText()
