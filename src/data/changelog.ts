@@ -7,6 +7,16 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.7',
+    date: '2026-09-20',
+    changes: [
+      'macOS Architecture（原生架构）：ARM64 与 Intel x64 改为分别在对应 runner 上原生构建，避免下载包混入错误架构依赖',
+      'Ad-hoc Signing（应用签名）：无 Developer ID 证书时使用完整 ad-hoc code signing，提升 macOS 手动放行后的启动稳定性',
+      'Native Validation（原生验证）：发布构建自动检查 Electron 主程序、@napi-rs/canvas native module 架构与 app bundle 签名',
+      'PDF Loading（PDF 加载）：PDF 解析依赖改为按需加载，避免 PDF native 依赖异常阻塞应用主进程启动',
+    ]
+  },
+  {
     version: '1.4.6',
     date: '2026-08-13',
     changes: [
