@@ -69,6 +69,44 @@ assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', fal
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, true), true)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, false), false)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(0, true), false)
+assert.equal(
+  chapterTextSync.isChapterTextZipEntryCountValid(2, 2),
+  true,
+)
+assert.equal(
+  chapterTextSync.formatChapterTextPreflightError(12, 2, [], []).includes('预检失败'),
+  true,
+)
+assert.match(
+  chapterTextSync.formatChapterTextPreflightError(
+    12,
+    100,
+    ['book_12/chapter_31.txt.gz'],
+    [],
+  ),
+  /预期 100 章，缺失 1 章，损坏 0 章[\s\S]*缺失：book_12\/chapter_31\.txt\.gz/,
+)
+assert.match(
+  chapterTextSync.formatChapterTextPreflightError(
+    12,
+    100,
+    [],
+    ['book_12/chapter_52.txt.gz'],
+  ),
+  /预期 100 章，缺失 0 章，损坏 1 章[\s\S]*损坏：book_12\/chapter_52\.txt\.gz/,
+)
+assert.equal(
+  chapterTextSync.formatOptionalAssetWarning('封面 abc.jpg', '同步文件不存在: abc.jpg'),
+  '封面 abc.jpg 本地不存在，已跳过',
+)
+assert.equal(
+  chapterTextSync.shouldSkipSourceFileForSnapshot(true, false),
+  true,
+)
+assert.equal(
+  chapterTextSync.shouldSkipSourceFileForSnapshot(false, false),
+  false,
+)
 assert.equal(chapterTextSync.isFileGzipChapter({
   bodyTextStorage: 'file_gzip',
   bodyTextPath: 'book_1/chapter_1.txt.gz',

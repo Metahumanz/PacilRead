@@ -7,6 +7,10 @@ import { createWebdavClient } from './useWebdavClient'
 import { buildPacilReadBaseUrl } from '../utils/webdav'
 import { normalizeBookMetadata } from '../utils/bookMetadata'
 import {
+  formatOptionalAssetWarning,
+  shouldSkipSourceFileForSnapshot,
+} from '../utils/chapterTextSync'
+import {
   applySyncDiffResolution,
   buildSyncDiffPreview,
   remapRemoteSyncEntityIds,
@@ -65,6 +69,11 @@ interface PreparedAsset {
   key: string
   localPath: string
   integrity: ManifestAssetEntry & { sha256: string }
+}
+
+interface PreparedFullBackupAssets {
+  assets: PreparedAsset[]
+  warnings: string[]
 }
 
 type Manifest = SyncManifest
@@ -368,35 +377,56 @@ async function prepareFullBackupAssets(
   entities: SyncEntityPayloads,
   includeSourceFiles: boolean,
   onProgress?: (message: string) => void,
-): Promise<PreparedAsset[]> {
+): Promise<PreparedFullBackupAssets> {
   const userData = (await window.electronAPI.app.getPath('userData')).replace(/\\/g, '/')
   const assets: PreparedAsset[] = []
-  const addAsset = async (key: string, localPath: string, label: string) => {
+  const warnings: string[] = []
+  const addRequiredAsset = async (key: string, localPath: string, label: string) => {
     const integrity = await window.electronAPI.library.getManagedFileIntegrity(localPath)
     assets.push({ key, localPath, integrity })
-    onProgress?.(`已校验 ${label}`)
+    onProgress?.(`校验${label}完成`)
+  }
+  const addOptionalAsset = async (key: string, localPath: string, label: string) => {
+    try {
+      const integrity = await window.electronAPI.library.getManagedFileIntegrity(localPath)
+      assets.push({ key, localPath, integrity })
+      onProgress?.(`校验${label}完成`)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      const warning = formatOptionalAssetWarning(label, reason)
+      warnings.push(warning)
+      console.warn(`[FullBackup] ${warning}`)
+    }
   }
 
   const bookIds = await window.electronAPI.library.getBookIdsWithFileGzipChapters()
   for (let index = 0; index < bookIds.length; index++) {
     const bookId = bookIds[index]
-    onProgress?.(`正在打包章节正文 (${index + 1}/${bookIds.length})...`)
+    onProgress?.(`检查章节正文 ${index + 1}/${bookIds.length}...`)
+    onProgress?.(`打包章节正文 ${index + 1}/${bookIds.length}...`)
     const zipPath = await window.electronAPI.library.createBookChapterTextZip(bookId)
     if (!zipPath) throw new Error(`书籍 ${bookId} 的章节正文 ZIP 生成失败`)
-    await addAsset(`chapter_text/book_${bookId}.zip`, zipPath, `书籍 ${bookId} 正文包`)
+    onProgress?.(`校验章节正文 ${index + 1}/${bookIds.length}...`)
+    await addRequiredAsset(`chapter_text/book_${bookId}.zip`, zipPath, `书籍 ${bookId} 正文包`)
   }
 
-  for (const filename of getCoverFilenames(entities.books)) {
-    await addAsset(`covers/${filename}`, `${userData}/covers/${filename}`, `封面 ${filename}`)
+  const coverFilenames = getCoverFilenames(entities.books)
+  for (let index = 0; index < coverFilenames.length; index++) {
+    const filename = coverFilenames[index]
+    onProgress?.(`检查封面 ${index + 1}/${coverFilenames.length}...`)
+    await addOptionalAsset(`covers/${filename}`, `${userData}/covers/${filename}`, `封面 ${filename}`)
   }
 
   if (includeSourceFiles) {
-    for (const filename of getSourceFilenames(entities.books)) {
-      await addAsset(`books/${filename}`, `${userData}/books/${filename}`, `源文件 ${filename}`)
+    const sourceFilenames = getSourceFilenames(entities.books)
+    for (let index = 0; index < sourceFilenames.length; index++) {
+      const filename = sourceFilenames[index]
+      onProgress?.(`检查原始书籍 ${index + 1}/${sourceFilenames.length}...`)
+      await addOptionalAsset(`books/${filename}`, `${userData}/books/${filename}`, `源文件 ${filename}`)
     }
   }
 
-  return assets
+  return { assets, warnings }
 }
 
 async function uploadPreparedAssets(
@@ -495,6 +525,7 @@ async function downloadSourceFiles(
   baseOverride?: string,
   assets: Record<string, ManifestAssetEntry> = {},
   remotePrefix = '',
+  strictSnapshot = false,
 ): Promise<string[]> {
   const userData = (await window.electronAPI.app.getPath('userData')).replace(/\\/g, '/')
   const ctx = getWebdavContext()
@@ -506,7 +537,11 @@ async function downloadSourceFiles(
     const filename = filenames[index]
     const assetKey = `books/${filename}`
     const expected = assets[assetKey]
-    if (Object.keys(assets).length > 0 && !expected) continue
+    if (shouldSkipSourceFileForSnapshot(strictSnapshot, Boolean(expected))) {
+      console.warn(`快照未包含源文件：${filename}`)
+      continue
+    }
+    if (!strictSnapshot && Object.keys(assets).length > 0 && !expected) continue
     const localPath = `${userData}/books/${filename}`
     onProgress?.(`正在下载源文件 (${index + 1}/${filenames.length})...`)
     const response = await window.electronAPI.webdav.downloadFile(
@@ -807,7 +842,7 @@ function findChangedFiles(local: Manifest, remote: Manifest): string[] {
 export async function fullBackupV8(
   onProgress?: (message: string) => void,
   options: { includeSourceFiles?: boolean } = {},
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; warnings?: string[] }> {
   try {
     const dataStore = useDataStore()
     onProgress?.('正在读取本地数据...')
@@ -815,33 +850,44 @@ export async function fullBackupV8(
     const entities = buildSyncEntities(dataStore)
     const generationId = createGenerationId()
     const snapshotPrefix = `snapshots/${generationId}`
-    const assets = await prepareFullBackupAssets(entities, options.includeSourceFiles === true, onProgress)
+    onProgress?.('正在预检本地数据...')
+    const prepared = await prepareFullBackupAssets(entities, options.includeSourceFiles === true, onProgress)
 
     const manifest = await generateManifest(entities, {
       generationId,
       snapshotPrefix,
-      assets,
+      assets: prepared.assets,
       scopes: {
         chapterText: true,
         covers: true,
         sourceFiles: options.includeSourceFiles === true,
       },
     })
+    onProgress?.('本地预检通过')
 
     const snapshotDirs = new Set([
       'snapshots',
       snapshotPrefix,
       `${snapshotPrefix}/database`,
       `${snapshotPrefix}/sync`,
-      ...assets.map(asset => snapshotPath(snapshotPrefix, asset.key).split('/').slice(0, -1).join('/')),
+      `${snapshotPrefix}/chapter_text`,
+      `${snapshotPrefix}/covers`,
+      `${snapshotPrefix}/books`,
+      'database',
+      'sync',
+      'chapter_text',
+      'covers',
+      'books',
+      ...prepared.assets.map(asset => snapshotPath(snapshotPrefix, asset.key).split('/').slice(0, -1).join('/')),
     ])
+    onProgress?.('创建完整快照...')
     for (const directory of snapshotDirs) {
       if (directory) await getWebdavClient().ensureCollection(encodeRemotePath(directory))
     }
 
     const uploadEntities = async (dir: 'database' | 'sync', prefix: string) => {
       for (const entity of ENTITY_TYPES) {
-        onProgress?.(`正在上传 ${dir}/${entity}.json...`)
+        onProgress?.(`上传JSON ${dir}/${entity}.json...`)
         const jsonStr = entityJson(entities, entity)
         const ok = await webdavPut(snapshotPath(prefix, `${dir}/${entity}.json`), jsonStr, 'application/json')
         if (!ok) throw new Error(`上传 ${dir}/${entity}.json 失败`)
@@ -851,7 +897,8 @@ export async function fullBackupV8(
     // Stage the complete snapshot first. The commit files are the only published pointers.
     await uploadEntities('database', snapshotPrefix)
     await uploadEntities('sync', snapshotPrefix)
-    await uploadPreparedAssets(assets, snapshotPrefix, onProgress)
+    await uploadPreparedAssets(prepared.assets, snapshotPrefix, onProgress)
+    onProgress?.('上传快照 manifest...')
     if (!await webdavPut(snapshotPath(snapshotPrefix, 'database/manifest.json'), manifestJson(manifest), 'application/json')) {
       throw new Error('上传快照 database/manifest.json 失败')
     }
@@ -860,22 +907,24 @@ export async function fullBackupV8(
     }
 
     // Publish the commit pointers only after the immutable generation is complete.
+    onProgress?.('提交完整快照...')
     if (!await uploadSnapshotCommit(manifest, 'database', snapshotPrefix)) throw new Error('提交完整快照失败')
     if (!await uploadSnapshotCommit(manifest, 'sync', snapshotPrefix)) throw new Error('提交增量基线失败')
 
     // Keep the legacy root paths as compatibility mirrors. They are never used by a
     // new client while a generation commit is available.
+    onProgress?.('更新旧版兼容镜像...')
     await uploadEntities('database', '')
     await uploadEntities('sync', '')
-    await uploadPreparedAssets(assets, '', onProgress)
+    await uploadPreparedAssets(prepared.assets, '', onProgress)
     if (!await uploadManifest(manifest, 'database')) throw new Error('上传 database/manifest.json 失败')
     if (!await uploadManifest(manifest, 'sync')) throw new Error('上传 sync/manifest.json 失败')
     await cleanupLegacySettingsFiles()
 
     onProgress?.('全量备份完成!')
-    return { success: true }
+    return { success: true, warnings: prepared.warnings }
   } catch (e) {
-    return { success: false, error: String(e) }
+    return { success: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
@@ -962,7 +1011,14 @@ export async function fullRestoreV8(
         await downloadCovers(entities.books, onProgress, base, assets, dataPrefix)
       }
       if (options.includeSourceFiles && manifest.scopes?.sourceFiles !== false) {
-        sourceFilesDownloaded = (await downloadSourceFiles(entities.books, onProgress, base, assets, dataPrefix)).length
+        sourceFilesDownloaded = (await downloadSourceFiles(
+          entities.books,
+          onProgress,
+          base,
+          assets,
+          dataPrefix,
+          Boolean(manifest.generationId),
+        )).length
       }
     }
 

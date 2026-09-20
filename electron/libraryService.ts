@@ -17,7 +17,12 @@ import {
   type DuplicateMatchType,
 } from '../src/utils/bookshelfManagement'
 import { buildRemoteProgressExcerpt } from '../src/utils/remoteProgress'
-import { collectFileGzipBookIds, isFileGzipChapter } from '../src/utils/chapterTextSync'
+import {
+  collectFileGzipBookIds,
+  formatChapterTextPreflightError,
+  isChapterTextZipEntryCountValid,
+  isFileGzipChapter,
+} from '../src/utils/chapterTextSync'
 import { ALLOWED_BOOK_EXTENSIONS, assertAllowedLocalReadPath, assertFileExtension, assertNonEmptyString } from './ipcGuards'
 
 const CHAPTER_TEXT_DIR = 'chapter_text'
@@ -314,15 +319,50 @@ function createBookChapterTextZip(bookId: number): string | null {
   const rows = getFileGzipChapterRowsForBook(bookId)
   if (rows.length === 0) return null
 
-  const zip = new AdmZip()
+  const missingPaths: string[] = []
+  const corruptedPaths: string[] = []
+  const validatedRows: Array<{ absolutePath: string, relativePath: string }> = []
+
   for (const row of rows) {
     const relativePath = normalizeChapterTextStoragePath(row.bodyTextPath)
-    if (!relativePath) continue
+    if (!relativePath) {
+      missingPaths.push(String(row.bodyTextPath || `chapter_${row.id}.txt.gz`))
+      continue
+    }
+
     const absolutePath = getChapterTextAbsolutePath(relativePath)
-    if (!existsSync(absolutePath)) continue
+    let isRegularFile = false
+    try {
+      isRegularFile = existsSync(absolutePath) && statSync(absolutePath).isFile()
+    } catch {
+      isRegularFile = false
+    }
+    if (!isRegularFile) {
+      missingPaths.push(relativePath)
+      continue
+    }
+
+    try {
+      gunzipSync(readFileSync(absolutePath))
+      validatedRows.push({ absolutePath, relativePath })
+    } catch {
+      corruptedPaths.push(relativePath)
+    }
+  }
+
+  if (missingPaths.length > 0 || corruptedPaths.length > 0) {
+    throw new Error(formatChapterTextPreflightError(bookId, rows.length, missingPaths, corruptedPaths))
+  }
+
+  const zip = new AdmZip()
+  for (const { absolutePath, relativePath } of validatedRows) {
     zip.addLocalFile(absolutePath, dirname(relativePath))
   }
-  if (zip.getEntryCount() === 0) return null
+  if (!isChapterTextZipEntryCountValid(rows.length, zip.getEntryCount())) {
+    throw new Error(
+      `书籍 ${bookId} 正文 ZIP 校验失败：预期 ${rows.length} 个文件，实际 ${zip.getEntryCount()} 个文件`,
+    )
+  }
 
   const tempDir = app.getPath('temp')
   const zipPath = join(tempDir, `book_${bookId}_${Date.now()}.zip`)
