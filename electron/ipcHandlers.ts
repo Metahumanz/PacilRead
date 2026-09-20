@@ -311,13 +311,15 @@ export function registerIpcHandlers(): void {
         body: normalizeOptionalIpcBody(opts?.body),
       })
       const text = await res.text()
+      console.info('[WebDAV]', opts?.method, opts?.url, '→', res.status)
       return { status: res.status, data: text }
     } catch (error: any) {
       console.error('[WebDAV] request failed', {
         method: opts?.method,
         url: opts?.url,
-        error,
-        cause: error?.cause,
+        message: error?.message || String(error),
+        cause: error?.cause?.message,
+        code: error?.cause?.code,
       })
       return { error: describeFetchError(error) }
     }

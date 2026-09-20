@@ -887,8 +887,6 @@ export async function fullBackupV8(
     onProgress?.('本地预检通过')
 
     const snapshotDirs = new Set([
-      'snapshots',
-      snapshotPrefix,
       `${snapshotPrefix}/database`,
       `${snapshotPrefix}/sync`,
       `${snapshotPrefix}/chapter_text`,
@@ -905,7 +903,7 @@ export async function fullBackupV8(
     for (let index = 0; index < directories.length; index++) {
       const directory = directories[index]
       onProgress?.(`创建快照目录 ${index + 1}/${directories.length}：${directory}/`)
-      await getWebdavClient().ensureCollection(encodeRemotePath(directory))
+      await getWebdavClient().ensureCollectionTree(encodeRemotePath(directory))
     }
 
     const uploadEntities = async (dir: 'database' | 'sync', prefix: string) => {

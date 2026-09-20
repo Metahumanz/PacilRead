@@ -217,9 +217,18 @@ globalThis.__logicTestWindow = {
 
 const webdavClientModule = loadTsModule('src/composables/useWebdavClient.ts')
 const collectionRequests = []
+const existingCollections = new Set()
 globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
   collectionRequests.push(request)
-  return request.method === 'HEAD' ? { status: 404 } : { status: 201 }
+  const path = new URL(request.url).pathname
+  if (request.method === 'PROPFIND') {
+    return existingCollections.has(path) ? { status: 207 } : { status: 404 }
+  }
+  if (request.method === 'MKCOL') {
+    existingCollections.add(path)
+    return { status: 201 }
+  }
+  return { status: 404 }
 }
 const testWebdavClient = webdavClientModule.createWebdavClient({
   url: 'https://116.62.37.193/',
@@ -228,16 +237,33 @@ const testWebdavClient = webdavClientModule.createWebdavClient({
   pass: 'pass',
   baseUrl: 'https://116.62.37.193/Books',
 })
-await testWebdavClient.ensureCollection('snapshots/test')
+await testWebdavClient.ensureCollectionTree('snapshots/test/database')
+assert.equal(collectionRequests.some((request) => request.method === 'HEAD'), false)
 assert.deepEqual(
   collectionRequests.map((request) => [request.method, request.url]),
   [
-    ['HEAD', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/'],
     ['MKCOL', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/database/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/test/database/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/database/'],
   ],
 )
+collectionRequests.length = 0
+let probeCount = 0
 globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => (
-  request.method === 'HEAD' ? { status: 404 } : { error: 'fetch failed [ECONNRESET]' }
+  request.method === 'PROPFIND'
+    ? (++probeCount === 1 ? { status: 404 } : { status: 207 })
+    : { status: 405 }
+)
+await testWebdavClient.ensureCollection('snapshots/already-there')
+assert.equal(probeCount, 2)
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => (
+  request.method === 'PROPFIND' ? { status: 404 } : { error: 'fetch failed [ECONNRESET]' }
 )
 await assert.rejects(
   () => testWebdavClient.ensureCollection('snapshots/test'),
@@ -245,7 +271,10 @@ await assert.rejects(
 )
 globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
   v8Requests.push(request)
-  return { status: request.method === 'GET' ? 404 : 201, data: '' }
+  const status = request.method === 'PROPFIND'
+    ? 207
+    : (request.method === 'GET' ? 404 : 201)
+  return { status, data: '' }
 }
 
 const v8Sync = loadTsModule('src/composables/useV8Sync.ts')
