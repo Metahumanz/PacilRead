@@ -196,6 +196,16 @@ const legacyResolved = v8Sync.resolveManifestRecord(
 assert.equal(legacyResolved.mode, 'legacy')
 assert.equal(legacyResolved.manifestSource, 'database/manifest.json')
 
+assert.throws(
+  () => v8Sync.resolveManifestRecord(
+    'database',
+    { manifest: snapshotManifest('uncommitted', 'snapshots/uncommitted'), raw: '{uncommitted-root-manifest}' },
+    null,
+    null,
+  ),
+  /完整快照尚未提交完成/,
+)
+
 assert.match(
   v8Sync.getManifestFileIntegrityError(
     'books.json',

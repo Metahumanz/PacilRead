@@ -645,6 +645,9 @@ export function resolveManifestRecord(
     }
 
     if (!root) return null
+    if (root.manifest.generationId) {
+      throw new Error('完整快照尚未提交完成')
+    }
     return {
       manifest: root.manifest,
       raw: root.raw,
