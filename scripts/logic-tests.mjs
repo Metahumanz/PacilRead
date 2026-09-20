@@ -215,6 +215,39 @@ globalThis.__logicTestWindow = {
   },
 }
 
+const webdavClientModule = loadTsModule('src/composables/useWebdavClient.ts')
+const collectionRequests = []
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
+  collectionRequests.push(request)
+  return request.method === 'HEAD' ? { status: 404 } : { status: 201 }
+}
+const testWebdavClient = webdavClientModule.createWebdavClient({
+  url: 'https://116.62.37.193/',
+  dir: '',
+  user: 'user',
+  pass: 'pass',
+  baseUrl: 'https://116.62.37.193/Books',
+})
+await testWebdavClient.ensureCollection('snapshots/test')
+assert.deepEqual(
+  collectionRequests.map((request) => [request.method, request.url]),
+  [
+    ['HEAD', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/test/'],
+  ],
+)
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => (
+  request.method === 'HEAD' ? { status: 404 } : { error: 'fetch failed [ECONNRESET]' }
+)
+await assert.rejects(
+  () => testWebdavClient.ensureCollection('snapshots/test'),
+  /创建WebDAV目录失败：snapshots\/test\/：fetch failed \[ECONNRESET\]/,
+)
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
+  v8Requests.push(request)
+  return { status: request.method === 'GET' ? 404 : 201, data: '' }
+}
+
 const v8Sync = loadTsModule('src/composables/useV8Sync.ts')
 const v8DataStore = loadTsModule('src/composables/useDataStore.ts')
 const v8Store = v8DataStore.useDataStore()

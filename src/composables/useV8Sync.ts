@@ -901,9 +901,11 @@ export async function fullBackupV8(
       'books',
       ...prepared.assets.map(asset => snapshotPath(snapshotPrefix, asset.key).split('/').slice(0, -1).join('/')),
     ])
-    onProgress?.('创建完整快照...')
-    for (const directory of snapshotDirs) {
-      if (directory) await getWebdavClient().ensureCollection(encodeRemotePath(directory))
+    const directories = [...snapshotDirs].filter(Boolean)
+    for (let index = 0; index < directories.length; index++) {
+      const directory = directories[index]
+      onProgress?.(`创建快照目录 ${index + 1}/${directories.length}：${directory}/`)
+      await getWebdavClient().ensureCollection(encodeRemotePath(directory))
     }
 
     const uploadEntities = async (dir: 'database' | 'sync', prefix: string) => {

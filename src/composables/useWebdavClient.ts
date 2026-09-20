@@ -93,15 +93,40 @@ export function createWebdavClient(account: WebdavAccount & { baseUrl: string })
   }
 
   const ensureCollection = async (urlOrPath: string): Promise<void> => {
+    const collectionPath = urlOrPath.endsWith('/') ? urlOrPath : `${urlOrPath}/`
+    const collectionUrl = remoteUrl(collectionPath)
+
+    const existing = await request({
+      url: collectionUrl,
+      method: 'HEAD',
+      headers: withAuth(),
+    })
+    if (existing.status === 200) return
+
     const response = await request({
-      url: remoteUrl(urlOrPath),
+      url: collectionUrl,
       method: 'MKCOL',
       headers: withAuth(),
     })
-    if (response.error) throw new Error(response.error)
-    if (response.status && ![200, 201, 301, 302, 405].includes(response.status)) {
-      throw new Error(`MKCOL ${remoteUrl(urlOrPath)} 失败 (HTTP ${response.status})`)
+
+    if (response.error) {
+      throw new Error(`创建WebDAV目录失败：${collectionPath}：${response.error}`)
     }
+    if ([200, 201, 204].includes(response.status || 0)) return
+
+    // Some WebDAV servers return 405 for an already existing collection.
+    if (response.status === 405) {
+      const verify = await request({
+        url: collectionUrl,
+        method: 'HEAD',
+        headers: withAuth(),
+      })
+      if (verify.status === 200) return
+    }
+
+    throw new Error(
+      `创建WebDAV目录失败：${collectionPath} (HTTP ${response.status || 'unknown'})`,
+    )
   }
 
   const listFiles = async (dirUrlOrPath: string): Promise<string[]> => {
