@@ -7,6 +7,16 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.8',
+    date: '2026-09-20',
+    changes: [
+      'Committed Snapshots（完整快照）：恢复优先使用 database/commit.json 指向的不可变 snapshot，不再被旧根目录 manifest 覆盖',
+      'Atomic Full Backup（原子全量备份）：JSON、正文 ZIP 与资源全部进入 generation 快照后才发布提交指针，避免远端留下 manifest 与 JSON 不一致的半成品',
+      'Legacy Validation（旧版校验）：无 commit 的旧根目录备份继续兼容，但会严格校验 JSON 大小与 SHA-256，不一致时明确失败',
+      'Chapter Text Restore（正文恢复）：章节正文 ZIP 按完整快照资源清单恢复，并记录下载、完整性、解压和本地正文校验结果',
+    ]
+  },
+  {
     version: '1.4.7',
     date: '2026-09-20',
     changes: [

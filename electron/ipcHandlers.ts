@@ -254,7 +254,7 @@ export function registerIpcHandlers(): void {
         method: 'GET',
         headers: { 'Authorization': `Basic ${assertBasicAuthToken(auth)}` }
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) return { success: false, status: res.status, error: `HTTP ${res.status}` }
       const buffer = await res.arrayBuffer()
       mkdirSync(dirname(safeLocalPath), { recursive: true })
       writeFileSync(safeLocalPath, Buffer.from(buffer))

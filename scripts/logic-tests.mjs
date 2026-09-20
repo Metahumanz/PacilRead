@@ -69,6 +69,161 @@ assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', fal
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, true), true)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, false), false)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(0, true), false)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'file_gzip',
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), true)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), true)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'inline',
+  bodyTextPath: 'book_1/chapter_1.txt.gz',
+}), false)
+assert.equal(chapterTextSync.isFileGzipChapter({
+  bodyTextStorage: 'file_gzip',
+  bodyTextPath: '',
+}), false)
+assert.deepEqual(
+  plain(chapterTextSync.collectFileGzipBookIds([
+    {
+      bookId: 4,
+      bodyTextStorage: 'file_gzip',
+      bodyTextPath: 'book_4/chapter_1.txt.gz',
+    },
+    {
+      bookId: 7,
+      bodyTextPath: 'book_7/chapter_2.txt.gz',
+    },
+    {
+      bookId: 4,
+      bodyTextStorage: 'file_gzip',
+      bodyTextPath: 'book_4/chapter_3.txt.gz',
+    },
+  ])),
+  [4, 7],
+)
+assert.deepEqual(
+  plain(chapterTextSync.collectManifestChapterTextAssets({
+    'chapter_text/book_12.zip': { size: 100, sha256: 'aaa' },
+    'covers/12.jpg': { size: 50 },
+    'chapter_text/book_7.zip': { size: 200, sha256: 'bbb' },
+  })),
+  [
+    {
+      key: 'chapter_text/book_7.zip',
+      bookId: 7,
+      integrity: { size: 200, sha256: 'bbb' },
+    },
+    {
+      key: 'chapter_text/book_12.zip',
+      bookId: 12,
+      integrity: { size: 100, sha256: 'aaa' },
+    },
+  ],
+)
+assert.deepEqual(
+  plain(chapterTextSync.collectManifestChapterTextAssets({
+    'chapter_text/chapters_12.zip': { size: 100 },
+    'chapter_text/book_x.zip': { size: 100 },
+    'books/book_12.zip': { size: 100 },
+  })),
+  [],
+)
+
+const v8Sync = loadTsModule('src/composables/useV8Sync.ts')
+const snapshotManifest = (generationId, snapshotPrefix) => ({
+  schemaVersion: 1,
+  generatedAt: 1,
+  generationId,
+  snapshotPrefix,
+  files: {},
+  assets: {},
+})
+const legacyManifest = {
+  schemaVersion: 1,
+  generatedAt: 1,
+  files: {},
+  assets: {},
+}
+
+const committed = v8Sync.resolveManifestRecord(
+  'database',
+  { manifest: legacyManifest, raw: '{old-root-manifest}' },
+  {
+    schemaVersion: 1,
+    generationId: 'X',
+    snapshotPrefix: 'snapshots/X',
+    manifestSha256: 'abc123',
+    committedAt: 1,
+  },
+  {
+    manifest: snapshotManifest('X', 'snapshots/X'),
+    raw: '{snapshot-manifest}',
+    sha256: 'abc123',
+  },
+)
+assert.equal(committed.mode, 'snapshot')
+assert.equal(committed.dataPrefix, 'snapshots/X')
+assert.equal(committed.manifestSource, 'snapshots/X/database/manifest.json')
+
+assert.throws(
+  () => v8Sync.resolveManifestRecord(
+    'database',
+    { manifest: legacyManifest, raw: '{old-root-manifest}' },
+    {
+      schemaVersion: 1,
+      generationId: 'X',
+      snapshotPrefix: 'snapshots/X',
+      manifestSha256: 'wrong-sha',
+      committedAt: 1,
+    },
+    {
+      manifest: snapshotManifest('X', 'snapshots/X'),
+      raw: '{snapshot-manifest}',
+      sha256: 'abc123',
+    },
+  ),
+  /完整快照提交信息不一致/,
+)
+
+const legacyResolved = v8Sync.resolveManifestRecord(
+  'database',
+  { manifest: legacyManifest, raw: '{legacy-root-manifest}' },
+  null,
+  null,
+)
+assert.equal(legacyResolved.mode, 'legacy')
+assert.equal(legacyResolved.manifestSource, 'database/manifest.json')
+
+assert.throws(
+  () => v8Sync.resolveManifestRecord(
+    'database',
+    { manifest: snapshotManifest('uncommitted', 'snapshots/uncommitted'), raw: '{uncommitted-root-manifest}' },
+    null,
+    null,
+  ),
+  /完整快照尚未提交完成/,
+)
+
+assert.match(
+  v8Sync.getManifestFileIntegrityError(
+    'books.json',
+    { size: 100, sha256: 'abc123' },
+    101,
+    'abc123',
+  ),
+  /大小校验失败/,
+)
+assert.match(
+  v8Sync.getManifestFileIntegrityError(
+    'books.json',
+    { size: 100, sha256: 'abc123' },
+    100,
+    'wrong-sha',
+  ),
+  /SHA-256 校验失败/,
+)
 
 const remoteProgress = loadTsModule('src/utils/remoteProgress.ts')
 assert.equal(remoteProgress.isSimilarRemoteProgress(2, 1200, 2, 450), true)
