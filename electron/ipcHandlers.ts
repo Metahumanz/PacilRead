@@ -67,6 +67,16 @@ function assertKnownEntityType(entityType: unknown): JsonEntityType {
   return key as JsonEntityType
 }
 
+function describeFetchError(error: any): string {
+  const message = error?.message || String(error)
+  const cause = error?.cause
+  if (!cause) return message
+
+  const code = cause?.code ? ` [${cause.code}]` : ''
+  const causeMessage = cause?.message ? ` ${cause.message}` : ''
+  return `${message}${code}${causeMessage}`
+}
+
 export function registerIpcHandlers(): void {
   ipcMain.handle('dialog:openFile', async () => {
     const r = await dialog.showOpenDialog(getMainWindow()!, { properties: ['openFile'], filters: [{ name: 'E-books', extensions: ['txt', 'epub', 'pdf'] }, { name: 'All Files', extensions: ['*'] }] })
@@ -243,7 +253,13 @@ export function registerIpcHandlers(): void {
       })
       return { success: res.ok, status: res.status }
     } catch (error: any) {
-      return { success: false, error: error.message || String(error) }
+      console.error('[WebDAV] upload failed', {
+        localPath,
+        remoteUrl,
+        error,
+        cause: error?.cause,
+      })
+      return { success: false, error: describeFetchError(error) }
     }
   })
   
@@ -260,7 +276,13 @@ export function registerIpcHandlers(): void {
       writeFileSync(safeLocalPath, Buffer.from(buffer))
       return { success: true }
     } catch (error: any) {
-      return { success: false, error: error.message || String(error) }
+      console.error('[WebDAV] download failed', {
+        remoteUrl,
+        localPath,
+        error,
+        cause: error?.cause,
+      })
+      return { success: false, error: describeFetchError(error) }
     }
   })
   
@@ -289,9 +311,17 @@ export function registerIpcHandlers(): void {
         body: normalizeOptionalIpcBody(opts?.body),
       })
       const text = await res.text()
+      console.info('[WebDAV]', opts?.method, opts?.url, '→', res.status)
       return { status: res.status, data: text }
     } catch (error: any) {
-      return { error: error.message || String(error) }
+      console.error('[WebDAV] request failed', {
+        method: opts?.method,
+        url: opts?.url,
+        message: error?.message || String(error),
+        cause: error?.cause?.message,
+        code: error?.cause?.code,
+      })
+      return { error: describeFetchError(error) }
     }
   })
   

@@ -7,6 +7,16 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.9',
+    date: '2026-09-20',
+    changes: [
+      'Full Backup Preflight（全量预检）：备份前完整校验章节正文，缺失或损坏时明确报告并阻止生成残缺快照；封面和原始书籍缺失则记录警告并继续备份',
+      'WebDAV Snapshots（快照目录）：使用 PROPFIND 验证 Collection，并逐级创建 snapshots、generation 与数据目录，避免父目录缺失导致 404',
+      'WebDAV Diagnostics（网络诊断）：快照目录创建显示逐项进度，保留 fetch 的错误 cause、错误码和服务器响应内容，定位连接中断更直观',
+      'Sync Initialization（同步初始化）：所有 v8 入口在操作前自动加载本地数据和 WebDAV 配置，避免空状态拼出无效 URL 或上传空数据',
+    ]
+  },
+  {
     version: '1.4.8',
     date: '2026-09-20',
     changes: [

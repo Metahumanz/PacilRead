@@ -16,6 +16,7 @@ export interface WebdavClient {
   delete: (path: string) => Promise<boolean>
   exists: (path: string) => Promise<boolean>
   ensureCollection: (urlOrPath: string) => Promise<void>
+  ensureCollectionTree: (path: string) => Promise<void>
   listFiles: (dirUrlOrPath: string) => Promise<string[]>
   uploadFile: (localPath: string, path: string) => Promise<{ success: boolean; status?: number; error?: string }>
   downloadFile: (path: string, localPath: string) => Promise<{ success: boolean; status?: number; error?: string }>
@@ -92,15 +93,88 @@ export function createWebdavClient(account: WebdavAccount & { baseUrl: string })
     } catch { return false }
   }
 
-  const ensureCollection = async (urlOrPath: string): Promise<void> => {
+  const normalizeCollectionPath = (urlOrPath: string): string => (
+    urlOrPath.endsWith('/') ? urlOrPath : `${urlOrPath}/`
+  )
+
+  const probeCollection = async (urlOrPath: string): Promise<{
+    exists: boolean
+    status?: number
+    error?: string
+  }> => {
+    const collectionPath = normalizeCollectionPath(urlOrPath)
+    const collectionUrl = remoteUrl(collectionPath)
     const response = await request({
-      url: remoteUrl(urlOrPath),
+      url: collectionUrl,
+      method: 'PROPFIND',
+      headers: withAuth({ Depth: '0' }),
+    })
+    console.info(
+      '[WebDAV][collection]',
+      'PROPFIND',
+      collectionPath,
+      '→',
+      response.error || response.status || 'unknown',
+    )
+    return {
+      exists: response.status === 200 || response.status === 207,
+      status: response.status,
+      error: response.error,
+    }
+  }
+
+  const ensureCollection = async (urlOrPath: string): Promise<void> => {
+    const collectionPath = normalizeCollectionPath(urlOrPath)
+    const collectionUrl = remoteUrl(collectionPath)
+
+    const before = await probeCollection(collectionPath)
+    if (before.exists) return
+
+    const response = await request({
+      url: collectionUrl,
       method: 'MKCOL',
       headers: withAuth(),
     })
-    if (response.error) throw new Error(response.error)
-    if (response.status && ![200, 201, 301, 302, 405].includes(response.status)) {
-      throw new Error(`MKCOL ${remoteUrl(urlOrPath)} 失败 (HTTP ${response.status})`)
+    console.info(
+      '[WebDAV][collection]',
+      'MKCOL',
+      collectionPath,
+      '→',
+      response.error || response.status || 'unknown',
+    )
+
+    if (response.error) {
+      throw new Error(`创建WebDAV目录失败：${collectionPath}：${response.error}`)
+    }
+
+    if (![200, 201, 204, 405].includes(response.status || 0)) {
+      const detail = String(response.data || '').replace(/\s+/g, ' ').slice(0, 200)
+      throw new Error(
+        `创建WebDAV目录失败：${collectionPath}`
+        + ` (HTTP ${response.status || 'unknown'})`
+        + (detail ? `：${detail}` : ''),
+      )
+    }
+
+    const after = await probeCollection(collectionPath)
+    if (after.exists) return
+
+    throw new Error(
+      `WebDAV目录创建后验证失败：${collectionPath}`
+      + ` (PROPFIND HTTP ${after.status || 'unknown'})`,
+    )
+  }
+
+  const ensureCollectionTree = async (path: string): Promise<void> => {
+    const segments = path
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean)
+    let current = ''
+
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment
+      await ensureCollection(current)
     }
   }
 
@@ -136,6 +210,7 @@ export function createWebdavClient(account: WebdavAccount & { baseUrl: string })
     delete: deleteRemote,
     exists,
     ensureCollection,
+    ensureCollectionTree,
     listFiles,
     uploadFile: (localPath, path) => window.electronAPI.webdav.uploadFile(localPath, remoteUrl(path), auth),
     downloadFile: (path, localPath) => window.electronAPI.webdav.downloadFile(remoteUrl(path), localPath, auth),

@@ -715,18 +715,11 @@ const fullBackup = async () => {
     const auth = btoa(`${webdavUser.value}:${webdavPass.value}`)
     const baseUrl = getCurrentPacilReadBaseUrl()
     let desktopSettingsBackup: DesktopSettingsUploadResult | null = null
-
-    webdavSyncStatus.value = '创建云端目录...'
-    await ensureSyncDirectories(auth, { includeChapterText: true })
-
-    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
-      webdavSyncStatus.value = '上传桌面设置...'
-      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
-    }
+    let backupWarnings: string[] = []
 
     if (webdavSyncBookshelf.value) {
       // v8: Upload JSON data files.
-      webdavSyncStatus.value = '上传 v8 JSON 数据...'
+      webdavSyncStatus.value = '准备全量备份...'
       const v8Result = await fullBackupV8(
         (msg) => { webdavSyncStatus.value = msg },
         { includeSourceFiles: webdavSyncFiles.value },
@@ -734,6 +727,15 @@ const fullBackup = async () => {
       if (!v8Result.success) {
         throw new Error(`v8 备份失败: ${v8Result.error}`)
       }
+      backupWarnings = v8Result.warnings || []
+    }
+
+    webdavSyncStatus.value = '创建云端目录...'
+    await ensureSyncDirectories(auth, { includeChapterText: true })
+
+    if (webdavSyncUISettings.value || webdavSyncThemes.value || webdavSyncBackgrounds.value) {
+      webdavSyncStatus.value = '上传桌面设置...'
+      desktopSettingsBackup = await uploadDesktopSettingsSnapshot()
     }
 
     const appDataPath = await window.electronAPI.app.getPath('userData')
@@ -759,10 +761,17 @@ const fullBackup = async () => {
 
     webdavLastSync.value = new Date().toLocaleString()
     await saveSetting('webdavLastSync', webdavLastSync.value)
-    webdavSyncStatus.value = '备份成功'
-    alert(`所有选定数据已同步至 WebDAV 云端！${formatDesktopSettingsBackupStatus(desktopSettingsBackup)}`)
+    webdavSyncStatus.value = backupWarnings.length > 0
+      ? `完整备份成功，但有${backupWarnings.length}项可选资源未备份`
+      : '完整备份成功'
+    const warningText = backupWarnings.length > 0
+      ? `\n\n可选资源警告：\n${backupWarnings.join('\n')}`
+      : ''
+    alert(`所有选定数据已同步至 WebDAV 云端！${formatDesktopSettingsBackupStatus(desktopSettingsBackup)}${warningText}`)
   } catch (e: any) {
-    webdavSyncStatus.value = '备份失败: ' + (e.message || '网络错误')
+    const message = e?.message || String(e) || '网络错误'
+    webdavSyncStatus.value = `备份失败: ${message}`
+    notifyError(`备份失败：${message}`, 10000)
   } finally { webdavSyncing.value = false }
 }
 

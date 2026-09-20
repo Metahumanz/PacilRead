@@ -76,3 +76,33 @@ export function isChapterTextZipRestoreComplete(
 ): boolean {
   return extractedFiles > 0 && hasAllExpectedFiles
 }
+
+export function isChapterTextZipEntryCountValid(expectedCount: number, actualCount: number): boolean {
+  return expectedCount > 0 && actualCount === expectedCount
+}
+
+export function formatChapterTextPreflightError(
+  bookId: number,
+  expectedCount: number,
+  missingPaths: string[],
+  corruptedPaths: string[],
+): string {
+  const details = [
+    missingPaths.length > 0 ? `缺失：${missingPaths.join(', ')}` : '',
+    corruptedPaths.length > 0 ? `损坏：${corruptedPaths.join(', ')}` : '',
+  ].filter(Boolean).join('\n')
+  return `书籍 ${bookId} 正文预检失败：预期 ${expectedCount} 章，缺失 ${missingPaths.length} 章，损坏 ${corruptedPaths.length} 章${details ? `\n${details}` : ''}`
+}
+
+export function shouldSkipSourceFileForSnapshot(
+  strictSnapshot: boolean,
+  expectedAsset: boolean,
+): boolean {
+  return strictSnapshot && !expectedAsset
+}
+
+export function formatOptionalAssetWarning(label: string, reason: string): string {
+  return reason.includes('不存在')
+    ? `${label} 本地不存在，已跳过`
+    : `${label} 校验失败：${reason}，已跳过`
+}

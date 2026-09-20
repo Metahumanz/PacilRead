@@ -48,6 +48,8 @@ function loadTsModule(relativePath, baseDir = rootDir) {
     clearTimeout,
     process,
     btoa: globalThis.btoa,
+    crypto: globalThis.crypto,
+    window: globalThis.__logicTestWindow,
   }
   vm.runInNewContext(outputText, sandbox, { filename })
   return module.exports
@@ -69,6 +71,44 @@ assert.equal(chapterTextSync.shouldSkipExistingChapterTextZip('incremental', fal
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, true), true)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(3, false), false)
 assert.equal(chapterTextSync.isChapterTextZipRestoreComplete(0, true), false)
+assert.equal(
+  chapterTextSync.isChapterTextZipEntryCountValid(2, 2),
+  true,
+)
+assert.equal(
+  chapterTextSync.formatChapterTextPreflightError(12, 2, [], []).includes('预检失败'),
+  true,
+)
+assert.match(
+  chapterTextSync.formatChapterTextPreflightError(
+    12,
+    100,
+    ['book_12/chapter_31.txt.gz'],
+    [],
+  ),
+  /预期 100 章，缺失 1 章，损坏 0 章[\s\S]*缺失：book_12\/chapter_31\.txt\.gz/,
+)
+assert.match(
+  chapterTextSync.formatChapterTextPreflightError(
+    12,
+    100,
+    [],
+    ['book_12/chapter_52.txt.gz'],
+  ),
+  /预期 100 章，缺失 0 章，损坏 1 章[\s\S]*损坏：book_12\/chapter_52\.txt\.gz/,
+)
+assert.equal(
+  chapterTextSync.formatOptionalAssetWarning('封面 abc.jpg', '同步文件不存在: abc.jpg'),
+  '封面 abc.jpg 本地不存在，已跳过',
+)
+assert.equal(
+  chapterTextSync.shouldSkipSourceFileForSnapshot(true, false),
+  true,
+)
+assert.equal(
+  chapterTextSync.shouldSkipSourceFileForSnapshot(false, false),
+  false,
+)
 assert.equal(chapterTextSync.isFileGzipChapter({
   bodyTextStorage: 'file_gzip',
   bodyTextPath: 'book_1/chapter_1.txt.gz',
@@ -131,7 +171,137 @@ assert.deepEqual(
   [],
 )
 
+const v8Requests = []
+const diskEntities = {
+  books: [{ id: 1, title: 'Loaded book', author: 'Test', sourceFile: null, coverFile: null }],
+  chapters: [{
+    id: 11,
+    bookId: 1,
+    title: 'Chapter 1',
+    orderIndex: 0,
+    bodyTextStorage: 'inline',
+    bodyTextPath: null,
+    bodyTextSize: 12,
+  }],
+  rules: [],
+  themes: [],
+  bookmarks: [],
+  readingStats: [],
+  settings: {
+    webdavUrl: 'https://116.62.37.193/',
+    webdavDir: 'Books/',
+    webdavUser: 'user',
+    webdavPass: 'pass',
+  },
+}
+globalThis.__logicTestWindow = {
+  electronAPI: {
+    data: {
+      readEntity: async (entity) => diskEntities[entity],
+    },
+    app: {
+      getPath: async () => tmpdir(),
+    },
+    library: {
+      getBookIdsWithFileGzipChapters: async () => [],
+    },
+    webdav: {
+      request: async (request) => {
+        v8Requests.push(request)
+        return { status: request.method === 'GET' ? 404 : 201, data: '' }
+      },
+      uploadFile: async () => ({ success: true, status: 201 }),
+    },
+  },
+}
+
+const webdavClientModule = loadTsModule('src/composables/useWebdavClient.ts')
+const collectionRequests = []
+const existingCollections = new Set()
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
+  collectionRequests.push(request)
+  const path = new URL(request.url).pathname
+  if (request.method === 'PROPFIND') {
+    return existingCollections.has(path) ? { status: 207 } : { status: 404 }
+  }
+  if (request.method === 'MKCOL') {
+    existingCollections.add(path)
+    return { status: 201 }
+  }
+  return { status: 404 }
+}
+const testWebdavClient = webdavClientModule.createWebdavClient({
+  url: 'https://116.62.37.193/',
+  dir: '',
+  user: 'user',
+  pass: 'pass',
+  baseUrl: 'https://116.62.37.193/Books',
+})
+await testWebdavClient.ensureCollectionTree('snapshots/test/database')
+assert.equal(collectionRequests.some((request) => request.method === 'HEAD'), false)
+assert.deepEqual(
+  collectionRequests.map((request) => [request.method, request.url]),
+  [
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/database/'],
+    ['MKCOL', 'https://116.62.37.193/Books/snapshots/test/database/'],
+    ['PROPFIND', 'https://116.62.37.193/Books/snapshots/test/database/'],
+  ],
+)
+collectionRequests.length = 0
+let probeCount = 0
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => (
+  request.method === 'PROPFIND'
+    ? (++probeCount === 1 ? { status: 404 } : { status: 207 })
+    : { status: 405 }
+)
+await testWebdavClient.ensureCollection('snapshots/already-there')
+assert.equal(probeCount, 2)
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => (
+  request.method === 'PROPFIND' ? { status: 404 } : { error: 'fetch failed [ECONNRESET]' }
+)
+await assert.rejects(
+  () => testWebdavClient.ensureCollection('snapshots/test'),
+  /创建WebDAV目录失败：snapshots\/test\/：fetch failed \[ECONNRESET\]/,
+)
+globalThis.__logicTestWindow.electronAPI.webdav.request = async (request) => {
+  v8Requests.push(request)
+  const status = request.method === 'PROPFIND'
+    ? 207
+    : (request.method === 'GET' ? 404 : 201)
+  return { status, data: '' }
+}
+
 const v8Sync = loadTsModule('src/composables/useV8Sync.ts')
+const v8DataStore = loadTsModule('src/composables/useDataStore.ts')
+const v8Store = v8DataStore.useDataStore()
+v8Store.dataLoaded.value = false
+const v8Progress = []
+const v8BackupResult = await v8Sync.fullBackupV8((message) => v8Progress.push(message))
+assert.equal(v8BackupResult.success, true)
+assert.equal(v8Progress[0], '正在加载本地数据...')
+assert.equal(v8Store.dataLoaded.value, true)
+const uploadedBooksJson = v8Requests.find((request) => (
+  request.method === 'PUT' && request.url.includes('/database/books.json')
+))
+assert.ok(uploadedBooksJson)
+assert.equal(JSON.parse(uploadedBooksJson.body).length, 1)
+assert.ok(v8Requests.some((request) => (
+  request.method === 'PUT' && request.url.startsWith('https://116.62.37.193/Books/snapshots/')
+)))
+assert.ok(v8Requests.some((request) => (
+  request.method === 'PUT' && request.url.endsWith('/database/commit.json')
+)))
+v8Store.settingsMap.value = {}
+const missingV8ConfigResult = await v8Sync.fullBackupV8()
+assert.equal(missingV8ConfigResult.success, false)
+assert.equal(missingV8ConfigResult.error, 'WebDAV配置尚未加载')
+
 const snapshotManifest = (generationId, snapshotPrefix) => ({
   schemaVersion: 1,
   generatedAt: 1,
