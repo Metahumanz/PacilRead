@@ -7,6 +7,14 @@ export interface ChangelogItem {
 
 export const changelogItems: ChangelogItem[] = [
   {
+    version: '1.4.10',
+    date: '2026-09-20',
+    changes: [
+      'macOS Update Safety（手动更新）：ad-hoc 签名版本不再调用 ShipIt 自动替换应用，发现新版本后引导用户前往 GitHub Release 下载并覆盖安装',
+      'Updater Feedback（更新提示）：设置页明确显示 macOS 需要手动更新，并提供「前往下载」入口；Windows 安装版继续使用应用内下载与安装流程',
+    ]
+  },
+  {
     version: '1.4.9',
     date: '2026-09-20',
     changes: [
