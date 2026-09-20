@@ -13,6 +13,7 @@ const {
   updateAvailable,
   updateReady,
   isDownloading,
+  updateManual,
   downloadUpdate,
   installNow,
   checkForUpdate,
@@ -28,6 +29,7 @@ const {
   updateAvailable: boolean
   updateReady: boolean
   isDownloading: boolean
+  updateManual: boolean
   downloadUpdate: () => void
   installNow: () => void
   checkForUpdate: () => void
@@ -55,7 +57,8 @@ const { silentUpdate } = settings
         <div class="flex items-center gap-3">
            <span class="app-badge text-[12px] font-mono px-2 py-1">v{{ appVersion }}</span>
           <span v-if="dataSize" class="text-[12px] app-muted font-mono">{{ dataSize }}</span>
-          <template v-if="updateAvailable">
+          <button v-if="updateManual" @click="downloadUpdate" class="app-button app-button-primary px-4 py-1.5 text-[13px]">前往下载</button>
+          <template v-else-if="updateAvailable">
             <button @click="downloadUpdate" class="app-button app-button-primary px-4 py-1.5 text-[13px]">后台下载最新版</button>
           </template>
           <button v-else-if="updateReady" @click="installNow" class="app-button app-button-positive px-4 py-1.5 text-[13px]">立即安装</button>

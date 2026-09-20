@@ -72,6 +72,7 @@ const {
   updateAvailable,
   updateReady,
   isDownloading,
+  updateManual,
   initializeUpdaterStatus,
   checkForUpdate,
   downloadUpdate,
@@ -1110,6 +1111,7 @@ const activeCategoryItems = computed<SettingsPaneItem[]>(() => {
           updateAvailable: updateAvailable.value,
           updateReady: updateReady.value,
           isDownloading: isDownloading.value,
+          updateManual: updateManual.value,
           downloadUpdate, installNow, checkForUpdate, toggleSilentUpdate,
         },
       }]

@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, nativeImage } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { dirname, extname, join } from 'path'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
@@ -76,6 +76,8 @@ function describeFetchError(error: any): string {
   const causeMessage = cause?.message ? ` ${cause.message}` : ''
   return `${message}${code}${causeMessage}`
 }
+
+const MAC_RELEASE_URL = 'https://github.com/Metahumanz/PacilRead/releases/latest'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle('dialog:openFile', async () => {
@@ -196,6 +198,14 @@ export function registerIpcHandlers(): void {
   })
   
   ipcMain.handle('updater:download', async (event) => {
+    if (process.platform === 'darwin') {
+      event.sender.send('updater:status', {
+        status: 'manual',
+        message: 'macOS当前版本使用手动更新，请下载新版本后覆盖安装。',
+      })
+      await shell.openExternal(MAC_RELEASE_URL)
+      return true
+    }
     if (isPortableBuild()) {
       event.sender.send('updater:status', { status: 'unsupported', message: '免安装版请手动下载并替换程序文件。' })
       return false
@@ -204,6 +214,14 @@ export function registerIpcHandlers(): void {
   })
   
   ipcMain.handle('updater:install', async (event, silent?: boolean) => {
+    if (process.platform === 'darwin') {
+      event.sender.send('updater:status', {
+        status: 'manual',
+        message: 'macOS当前版本需要手动安装更新。',
+      })
+      await shell.openExternal(MAC_RELEASE_URL)
+      return true
+    }
     if (isPortableBuild()) {
       event.sender.send('updater:status', { status: 'unsupported', message: '免安装版请手动下载并替换程序文件。' })
       return false
